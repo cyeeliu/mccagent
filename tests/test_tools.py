@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from mcc_core import ToolContext
 from mcc_tools import (
     EditFileTool,
