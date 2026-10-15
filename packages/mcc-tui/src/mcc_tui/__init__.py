@@ -105,6 +105,12 @@ def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
     if key == Key.end:
         app.cursor = len(app.input)
         return False
+    if key == Key.up:
+        app.scroll += 1
+        return False
+    if key == Key.down:
+        app.scroll = max(0, app.scroll - 1)
+        return False
     if key == Key.page_up:
         app.scroll += 5
         return False

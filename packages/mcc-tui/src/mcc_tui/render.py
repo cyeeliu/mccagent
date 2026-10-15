@@ -2,15 +2,21 @@
 
 消息区（items + 流式文本） / 输入框 / 状态栏，
 由 App 状态驱动，不持有可变状态。
+消息区高度受限，始终保留输入框与状态栏可见。
 """
 
 from __future__ import annotations
 
 from rich.console import Console, Group
+from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 
 from mcc_tui.app import App, CallStatus, RenderItem
+
+_INPUT_ROWS = 3
+_STATUS_ROWS = 1
+_PANEL_BORDERS = 2
 
 
 def _truncate(s: str, n: int) -> str:
@@ -50,24 +56,46 @@ def _render_item(item: RenderItem) -> Text:
     return text
 
 
-def build_renderable(app: App, console: Console) -> Group:
-    msg_lines: list[Text] = []
-    for item in app.items:
-        msg_lines.append(_render_item(item))
-    if app.streaming_text:
-        stream_item = RenderItem(kind="assistant", text=app.streaming_text)
-        msg_lines.append(_render_item(stream_item))
+def _count_lines(text: Text) -> int:
+    plain = text.plain
+    return plain.count("\n") + 1 if plain else 1
 
-    if not msg_lines:
-        msg_lines.append(Text(""))
+
+def _select_visible(items: list[Text], available: int, scroll: int) -> list[Text]:
+    """从末尾往前选取不超过 available 行的 items，支持向上滚动。"""
+    if not items:
+        return [Text("")]
+    end = len(items) - scroll if scroll > 0 else len(items)
+    end = max(0, min(end, len(items)))
+
+    visible: list[Text] = []
+    line_count = 0
+    for text in reversed(items[:end]):
+        n = _count_lines(text)
+        if line_count + n > available and visible:
+            break
+        visible.insert(0, text)
+        line_count += n
+    return visible or [Text("")]
+
+
+def build_renderable(app: App, console: Console) -> Layout:
+    all_items: list[Text] = [_render_item(it) for it in app.items]
+    if app.streaming_text:
+        all_items.append(_render_item(RenderItem(kind="assistant", text=app.streaming_text)))
+
+    available = max(
+        5,
+        console.height - _INPUT_ROWS - _STATUS_ROWS - _PANEL_BORDERS,
+    )
+    visible = _select_visible(all_items, available, app.scroll)
 
     thinking = " · thinking…" if app.agent_busy else ""
     title = (
         f" mini-claude-code — session {app.session_short_id}"
         f" (${app.cost_usd:.3f}){thinking} "
     )
-    msg_group = Group(*msg_lines)
-    msg_panel = Panel(msg_group, title=title, border_style="blue")
+    msg_panel = Panel(Group(*visible), title=title, border_style="blue")
 
     cursor_display = app.input[: app.cursor] + "▎" + app.input[app.cursor :]
     input_panel = Panel(Text(cursor_display), title=" input ", border_style="cyan")
@@ -77,6 +105,12 @@ def build_renderable(app: App, console: Console) -> Group:
         status.append("●", style="yellow")
         status.append(" thinking… (Esc cancel · Ctrl-C quit)")
     else:
-        status = Text(" Enter: send · PgUp/PgDn: scroll · Ctrl-C: quit ")
+        status = Text(" Enter: send · ↑/↓ scroll · Ctrl-C: quit ")
 
-    return Group(msg_panel, input_panel, status)
+    layout = Layout()
+    layout.split_column(
+        Layout(msg_panel, name="messages"),
+        Layout(input_panel, name="input", size=_INPUT_ROWS),
+        Layout(status, name="status", size=_STATUS_ROWS),
+    )
+    return layout
