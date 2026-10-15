@@ -48,7 +48,7 @@ class EchoEventSource:
         yield TurnEnd(cost_usd=0.0)
 
 
-class AgentEventSource:
+class AgentEventSource(EventSource):
     """将 AgentLoop 适配为 EventSource。
 
     通过 asyncio.Queue 桥接 AgentLoop.run_streaming 的 push 模型
