@@ -201,10 +201,10 @@ def test_config_load_from_settings_json(tmp_path: Path):
 
 def test_mcc_llm_imports():
     import mcc_llm
-    from mcc_llm import StreamEvent
+    from mcc_llm import TextDelta
 
     assert mcc_llm.__version__ == "0.1.0"
-    assert StreamEvent(kind="text", text="hi").text == "hi"
+    assert TextDelta(text="hi").text == "hi"
 
 
 def test_mcc_tools_imports():
@@ -225,11 +225,10 @@ def test_mcc_session_imports():
 
 def test_mcc_harness_imports():
     import mcc_harness
-    from mcc_harness import AgentLoopConfig
+    from mcc_harness import AgentLoopBuilder
 
     assert mcc_harness.__version__ == "0.1.0"
-    cfg = AgentLoopConfig(system="test")
-    assert cfg.max_iterations == 40
+    assert AgentLoopBuilder.__name__ == "AgentLoopBuilder"
 
 
 def test_mcc_tui_imports():
