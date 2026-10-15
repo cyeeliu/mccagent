@@ -7,6 +7,7 @@ license = "MIT"
 dependencies = [
     "mcc-core",
     "pydantic>=2.9",
+    "pathspec>=0.12",
 ]
 
 [build-system]
