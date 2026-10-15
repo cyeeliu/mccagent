@@ -1,4 +1,4 @@
-"""事件源抽象与模拟实现。
+"""事件源抽象与实现。
 
 EventSource 协议定义 Agent 事件流的统一接口，
 前端（TUI/headless）只消费事件，不直接调用 Agent。
@@ -46,3 +46,39 @@ class EchoEventSource:
             await asyncio.sleep(self._delay)
 
         yield TurnEnd(cost_usd=0.0)
+
+
+class AgentEventSource:
+    """将 AgentLoop 适配为 EventSource。
+
+    通过 asyncio.Queue 桥接 AgentLoop.run_streaming 的 push 模型
+    与 EventSource.run 的 pull 模型（async generator）。
+    """
+
+    def __init__(self, agent: object) -> None:
+        self._agent = agent
+
+    async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
+        queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+
+        async def worker() -> None:
+            try:
+                await self._agent.run_streaming(prompt, queue)
+            except Exception as exc:
+                from mcc_core import Error as ErrorEvent
+
+                await queue.put(ErrorEvent(text=str(exc)))
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(worker())
+        try:
+            while True:
+                ev = await queue.get()
+                if ev is None:
+                    break
+                yield ev
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import click
 
-from mcc_cli.events import EchoEventSource, EventSource
+from mcc_cli.events import AgentEventSource, EchoEventSource, EventSource
 from mcc_cli.headless import run_headless
 
 
@@ -53,6 +53,74 @@ def _system_prompt() -> str:
     )
 
 
+def _build_source(
+    work_dir: Path,
+    model: str | None,
+    mock: bool,
+    mock_script: str | None,
+) -> EventSource:
+    """构建事件源：mock 模式用 MockLlm，否则用真实 LLM。"""
+    from mcc_core import ToolContext
+    from mcc_harness import AgentLoopBuilder
+    from mcc_tools import default_registry
+
+    registry = default_registry()
+    ctx = ToolContext(cwd=work_dir, session_id=uuid.uuid4().hex[:8])
+
+    if mock or mock_script:
+        from mcc_llm.mock import MockLlm
+
+        if mock_script:
+            turns = _parse_mock_script(mock_script)
+        else:
+            from mcc_llm.mock import single_text_turn
+
+            turns = [single_text_turn("[mock] No --mock-script provided; echoing.")]
+        llm = MockLlm(turns)
+    else:
+        try:
+            from mcc_llm import auto_provider_from_env
+
+            llm = auto_provider_from_env()
+        except RuntimeError as e:
+            click.echo(f"Error: {e}\nUse --mock for testing without API keys.", err=True)
+            sys.exit(2)
+
+    builder = AgentLoopBuilder(llm, registry, ctx).system(_system_prompt())
+    if model:
+        builder = builder.model(model)
+    agent = builder.build()
+    return AgentEventSource(agent)
+
+
+def _parse_mock_script(path: str) -> list:
+    """从 JSON 文件加载 MockLlm 脚本。"""
+    from mcc_core import Usage
+    from mcc_llm import MessageStop, TextDelta, ToolUseInputDelta, ToolUseStart
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    turns = []
+    for turn in data:
+        events = []
+        for ev in turn:
+            kind = ev["kind"]
+            if kind == "text":
+                events.append(TextDelta(text=ev.get("text", "")))
+            elif kind == "tool_use_start":
+                events.append(ToolUseStart(id=ev["id"], name=ev["name"]))
+            elif kind == "tool_use_input":
+                events.append(ToolUseInputDelta(partial_json=json.dumps(ev["input"])))
+            elif kind == "message_stop":
+                events.append(
+                    MessageStop(
+                        stop_reason=ev.get("stop_reason", "end_turn"),
+                        usage=Usage(**ev.get("usage", {})),
+                    )
+                )
+        turns.append(events)
+    return turns
+
+
 async def _run_tui_mode(source: EventSource) -> int:
     from mcc_tui import TuiHandles, run_tui
 
@@ -87,6 +155,13 @@ async def _run_tui_mode(source: EventSource) -> int:
 @click.option("--cwd", "cwd", default=None, envvar="MCC_PROJECT", help="工作目录")
 @click.option("--model", "model", default=None, envvar="MODEL", help="覆盖模型")
 @click.option("--quiet", "quiet", is_flag=True, help="只输出最终答案")
+@click.option("--mock", "mock", is_flag=True, help="使用 Mock LLM（无需 API key）")
+@click.option(
+    "--mock-script",
+    "mock_script",
+    default=None,
+    help="MockLlm 脚本 JSON 文件路径",
+)
 @click.argument(
     "cmd", required=False, type=click.Choice(["tui", "config", "version"])
 )
@@ -96,6 +171,8 @@ def main(
     cwd: str | None,
     model: str | None,
     quiet: bool,
+    mock: bool,
+    mock_script: str | None,
 ) -> None:
     """mini-claude-code — 企业级 AI 编码助手。"""
     _load_dotenv()
@@ -112,7 +189,12 @@ def main(
         click.echo(json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False))
         return
 
-    source = EchoEventSource()
+    if mock or mock_script:
+        source = _build_source(work_dir, model, mock, mock_script)
+    elif os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"):
+        source = _build_source(work_dir, model, False, None)
+    else:
+        source = EchoEventSource()
 
     try:
         if cmd == "tui" or (cmd is None and prompt is None):
