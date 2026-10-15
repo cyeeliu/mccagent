@@ -31,17 +31,30 @@ async def run_tui(handles: TuiHandles, console: Console | None = None) -> None:
     console = console or Console()
     app = App(session_short_id=handles.session_short_id)
 
+    key_queue: asyncio.Queue = asyncio.Queue()
+
     with KeyReader() as reader:
+        reader_task = asyncio.create_task(_key_reader_loop(reader, key_queue))
         renderable = build_renderable(app, console)
         with Live(renderable, auto_refresh=False, console=console, screen=False) as live:
-            while True:
-                live.update(build_renderable(app, console), refresh=True)
-                if await _step(app, handles, reader):
-                    break
+            try:
+                while True:
+                    live.update(build_renderable(app, console), refresh=True)
+                    if await _step(app, handles, key_queue):
+                        break
+            finally:
+                reader_task.cancel()
 
 
-async def _step(app: App, handles: TuiHandles, reader: KeyReader) -> bool:
-    key_task = asyncio.create_task(reader.read_key())
+async def _key_reader_loop(reader: KeyReader, queue: asyncio.Queue) -> None:
+    """持续读取按键放入队列，避免 read_key 被 cancel 后丢失字符。"""
+    while True:
+        key, _ = await reader.read_key()
+        await queue.put(key)
+
+
+async def _step(app: App, handles: TuiHandles, key_queue: asyncio.Queue) -> bool:
+    key_task = asyncio.create_task(key_queue.get())
     ev_task = asyncio.create_task(handles.events.get())
     done, _pending = await asyncio.wait(
         {key_task, ev_task}, return_when=asyncio.FIRST_COMPLETED
@@ -49,7 +62,7 @@ async def _step(app: App, handles: TuiHandles, reader: KeyReader) -> bool:
     should_quit = False
     if key_task in done:
         ev_task.cancel()
-        key, _ = key_task.result()
+        key = key_task.result()
         should_quit = _handle_key(app, handles, key)
     if ev_task in done:
         key_task.cancel()

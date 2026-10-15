@@ -114,10 +114,13 @@ def main(
 
     source = EchoEventSource()
 
-    if cmd == "tui" or (cmd is None and prompt is None):
-        sys.exit(asyncio.run(_run_tui_mode(source)))
-    elif prompt is not None:
-        sys.exit(asyncio.run(run_headless(source, prompt, quiet)))
+    try:
+        if cmd == "tui" or (cmd is None and prompt is None):
+            sys.exit(asyncio.run(_run_tui_mode(source)))
+        elif prompt is not None:
+            sys.exit(asyncio.run(run_headless(source, prompt, quiet)))
+    except KeyboardInterrupt:
+        sys.exit(0)
 
 
 __all__ = ["main"]

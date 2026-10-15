@@ -43,6 +43,9 @@ class KeyReader:
             self._fd = self._stream.fileno()
             self._old_settings = termios.tcgetattr(self._fd)
             tty.setcbreak(self._fd)
+            attrs = termios.tcgetattr(self._fd)
+            attrs[3] &= ~termios.ISIG
+            termios.tcsetattr(self._fd, termios.TCSANOW, attrs)
         return self
 
     def __exit__(self, *exc: object) -> None:
