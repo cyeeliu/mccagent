@@ -62,21 +62,34 @@ def _count_lines(text: Text) -> int:
 
 
 def _select_visible(items: list[Text], available: int, scroll: int) -> list[Text]:
-    """从末尾往前选取不超过 available 行的 items，支持向上滚动。"""
+    """行级滑动窗口：scroll 为从底部往上的行偏移，始终显示 available 行内容。"""
     if not items:
         return [Text("")]
-    end = len(items) - scroll if scroll > 0 else len(items)
-    end = max(0, min(end, len(items)))
+
+    item_lines = [(text, _count_lines(text)) for text in items]
+    total_lines = sum(n for _, n in item_lines)
+
+    max_scroll = max(0, total_lines - available)
+    scroll = min(max(0, scroll), max_scroll)
+
+    bottom_line = total_lines - scroll
+    top_line = max(0, bottom_line - available)
 
     visible: list[Text] = []
-    line_count = 0
-    for text in reversed(items[:end]):
-        n = _count_lines(text)
-        if line_count + n > available and visible:
-            break
-        visible.insert(0, text)
-        line_count += n
+    current = 0
+    for text, n in item_lines:
+        if current + n > top_line and current < bottom_line:
+            visible.append(text)
+        current += n
+
     return visible or [Text("")]
+
+
+def _max_scroll(items: list[Text], available: int) -> int:
+    if not items:
+        return 0
+    total = sum(_count_lines(t) for t in items)
+    return max(0, total - available)
 
 
 def build_renderable(app: App, console: Console) -> Layout:
@@ -88,6 +101,7 @@ def build_renderable(app: App, console: Console) -> Layout:
         5,
         console.height - _INPUT_ROWS - _STATUS_ROWS - _PANEL_BORDERS,
     )
+    app.scroll = min(app.scroll, _max_scroll(all_items, available))
     visible = _select_visible(all_items, available, app.scroll)
 
     thinking = " · thinking…" if app.agent_busy else ""
