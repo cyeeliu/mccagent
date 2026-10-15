@@ -1,0 +1,14 @@
+[project]
+name = "mcc-tools"
+version = "0.1.0"
+description = "内建工具集合 (read/write/edit/bash/grep/glob/list)"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "mcc-core",
+    "pydantic>=2.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

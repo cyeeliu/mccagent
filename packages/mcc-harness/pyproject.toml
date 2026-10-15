@@ -1,0 +1,18 @@
+[project]
+name = "mcc-harness"
+version = "0.1.0"
+description = "agent loop、permissions、hooks、skills、subagent"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "mcc-core",
+    "mcc-llm",
+    "mcc-tools",
+    "mcc-session",
+    "mcc-config",
+    "pydantic>=2.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

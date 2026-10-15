@@ -1,0 +1,40 @@
+[project]
+name = "mccagent"
+version = "0.1.0"
+description = "mini-claude-code: 类 Claude Code 编码助手 (Python 版)"
+requires-python = ">=3.12"
+license = "MIT"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+mcc-core = { workspace = true }
+mcc-config = { workspace = true }
+mcc-llm = { workspace = true }
+mcc-tools = { workspace = true }
+mcc-session = { workspace = true }
+mcc-harness = { workspace = true }
+mcc-tui = { workspace = true }
+mcc-cli = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "packages"]

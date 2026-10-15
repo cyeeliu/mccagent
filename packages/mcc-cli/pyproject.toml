@@ -1,0 +1,23 @@
+[project]
+name = "mcc-cli"
+version = "0.1.0"
+description = "mcc 命令行入口"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "mcc-core",
+    "mcc-llm",
+    "mcc-tools",
+    "mcc-harness",
+    "mcc-session",
+    "mcc-config",
+    "mcc-tui",
+    "click>=8.1",
+]
+
+[project.scripts]
+mcc = "mcc_cli.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,13 @@
+[project]
+name = "mcc-config"
+version = "0.1.0"
+description = "配置加载：home (~/.mcc) + project (.mcc) 合并"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "pydantic>=2.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
