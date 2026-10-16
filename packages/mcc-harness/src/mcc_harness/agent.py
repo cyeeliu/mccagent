@@ -182,7 +182,7 @@ class AgentLoop:
 
             if stop_reason == "tool_use":
                 tool_results = await self._execute_tools(blocks, tx)
-                messages.append(Message(role=Role.user, content=tool_results))
+                messages.append(Message(role=Role.tool, content=tool_results))
             else:
                 raise AgentError(f"unexpected stop_reason: {stop_reason}")
 

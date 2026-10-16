@@ -18,6 +18,7 @@ class Role(StrEnum):
     user = "user"
     assistant = "assistant"
     system = "system"
+    tool = "tool"
 
 
 class CacheControl(BaseModel):

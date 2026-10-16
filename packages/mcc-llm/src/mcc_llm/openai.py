@@ -11,7 +11,7 @@ import os
 from collections.abc import AsyncIterator
 
 import httpx
-from mcc_core import ContentBlock, Message, TextBlock, ToolUseBlock, Usage
+from mcc_core import ContentBlock, Message, Role, TextBlock, ToolResultBlock, ToolUseBlock, Usage
 
 from mcc_llm import (
     CompleteRequest,
@@ -63,7 +63,11 @@ class OpenAiClient:
         if req.system:
             messages.append({"role": "system", "content": req.system})
         for m in req.messages:
-            messages.append({"role": m.role.value, "content": _msg_to_text(m)})
+            converted = _message_to_oai(m)
+            if isinstance(converted, list):
+                messages.extend(converted)
+            else:
+                messages.append(converted)
 
         body: dict = {
             "model": req.model,
@@ -163,6 +167,48 @@ class OpenAiClient:
 
     async def close(self) -> None:
         await self._http.aclose()
+
+
+def _message_to_oai(m: Message) -> dict | list[dict]:
+    """把 Message 转为 OpenAI Chat Completions 消息格式。
+
+    - assistant 中的 ToolUseBlock 转为 tool_calls 字段
+    - tool 角色的 ToolResultBlock 转为 role=tool 消息
+    - 纯文本保持 content 字段
+    """
+    if m.role == Role.assistant:
+        text_parts = [b.text for b in m.content if isinstance(b, TextBlock)]
+        tool_calls = [
+            {
+                "id": b.id,
+                "type": "function",
+                "function": {
+                    "name": b.name,
+                    "arguments": json.dumps(b.input),
+                },
+            }
+            for b in m.content
+            if isinstance(b, ToolUseBlock)
+        ]
+        msg: dict = {"role": "assistant"}
+        if text_parts:
+            msg["content"] = "\n".join(text_parts)
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+        return msg
+
+    if m.role == Role.tool:
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": b.tool_use_id,
+                "content": b.content,
+            }
+            for b in m.content
+            if isinstance(b, ToolResultBlock)
+        ]
+
+    return {"role": m.role.value, "content": _msg_to_text(m)}
 
 
 def _msg_to_text(m: Message) -> str:
