@@ -13,6 +13,15 @@ from mcc_harness.agent import (
     permission_request_for,
     price_usd,
 )
+from mcc_harness.hooks import (
+    Hook,
+    HookContext,
+    HookRegistry,
+    HookResult,
+    HookType,
+    PythonHook,
+    ShellHook,
+)
 from mcc_harness.permission import (
     Action,
     Allow,
@@ -36,9 +45,16 @@ __all__ = [
     "BashAction",
     "Decision",
     "Deny",
+    "Hook",
+    "HookContext",
+    "HookRegistry",
+    "HookResult",
+    "HookType",
     "PathAction",
     "PermissionChecker",
     "PermissionRequest",
+    "PythonHook",
+    "ShellHook",
     "bash_word_match",
     "model_price_per_1m",
     "permission_request_for",

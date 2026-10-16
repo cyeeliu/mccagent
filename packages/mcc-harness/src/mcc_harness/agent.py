@@ -27,6 +27,9 @@ from mcc_core.event import (
     TurnEnd,
     UserEcho,
 )
+from mcc_core.event import (
+    PermissionRequest as PermissionRequestEvent,
+)
 from mcc_llm import (
     CompleteRequest,
     LlmProvider,
@@ -39,6 +42,7 @@ from mcc_llm import (
 )
 from mcc_tools import ToolRegistry
 
+from .hooks import HookContext, HookRegistry, HookType
 from .permission import (
     Allow,
     Ask,
@@ -125,6 +129,7 @@ class AgentLoop:
         temperature: float = 0.0,
         permission: PermissionChecker | None = None,
         max_cost_usd: float = 0.0,
+        hooks: HookRegistry | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -136,6 +141,7 @@ class AgentLoop:
         self.temperature = temperature
         self.permission = permission
         self.max_cost_usd = max_cost_usd
+        self.hooks = hooks
 
     async def run_streaming(
         self, user_input: str, tx: asyncio.Queue[AgentEvent]
@@ -158,6 +164,18 @@ class AgentLoop:
                     f"cost ${total_cost:.4} >= limit ${self.max_cost_usd:.4}"
                 )
 
+            if self.hooks:
+                ctx = HookContext(
+                    hook_type=HookType.ON_TURN_START,
+                    session_id=self.ctx.session_id,
+                    cost_usd=total_cost,
+                    iteration=iteration,
+                    cwd=self.ctx.cwd,
+                )
+                for hr in await self.hooks.run_hooks(HookType.ON_TURN_START, ctx):
+                    if hr.message:
+                        await tx.put(Notice(text=hr.message))
+
             req = CompleteRequest(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -177,13 +195,33 @@ class AgentLoop:
                 final_text = "\n".join(
                     b.text for b in blocks if isinstance(b, TextBlock)
                 )
+                if self.hooks:
+                    ctx = HookContext(
+                        hook_type=HookType.ON_TURN_END,
+                        session_id=self.ctx.session_id,
+                        cost_usd=total_cost,
+                        iteration=iteration,
+                        cwd=self.ctx.cwd,
+                    )
+                    for hr in await self.hooks.run_hooks(HookType.ON_TURN_END, ctx):
+                        if hr.message:
+                            await tx.put(Notice(text=hr.message))
                 await tx.put(TurnEnd(cost_usd=total_cost))
                 return AgentRun(final_text, iteration, total_usage, total_cost)
 
             if stop_reason == "tool_use":
-                tool_results = await self._execute_tools(blocks, tx)
+                tool_results = await self._execute_tools(blocks, tx, iteration)
                 messages.append(Message(role=Role.tool, content=tool_results))
             else:
+                if self.hooks:
+                    ctx = HookContext(
+                        hook_type=HookType.ON_ERROR,
+                        session_id=self.ctx.session_id,
+                        cost_usd=total_cost,
+                        iteration=iteration,
+                        cwd=self.ctx.cwd,
+                    )
+                    await self.hooks.run_hooks(HookType.ON_ERROR, ctx)
                 raise AgentError(f"unexpected stop_reason: {stop_reason}")
 
         raise AgentError(f"exceeded max_iterations={self.max_iterations}")
@@ -265,12 +303,15 @@ class AgentLoop:
         return blocks, stop_reason, usage
 
     async def _execute_tools(
-        self, blocks: list[ContentBlock], tx: asyncio.Queue[AgentEvent]
+        self,
+        blocks: list[ContentBlock],
+        tx: asyncio.Queue[AgentEvent],
+        iteration: int = 0,
     ) -> list[ContentBlock]:
         """并行执行工具调用。
 
-        使用 asyncio.gather(return_exceptions=True) 确保单个工具异常
-        不会中断其他工具，异常工具产生 error ToolResult 而非静默丢弃。
+        每次工具调用前走权限检查与 pre-tool hooks，
+        调用后走 post-tool hooks。
         """
         calls = [
             (b.id, b.name, b.input)
@@ -290,17 +331,62 @@ class AgentLoop:
                 case Deny(reason=reason):
                     return (tool_id, f"permission denied: {reason}", True)
                 case Ask(message=message):
+                    await tx.put(
+                        PermissionRequestEvent(
+                            id=hash(tool_id) % (10**8),
+                            message=f"{tool_name}: {message}",
+                        )
+                    )
                     return (
                         tool_id,
-                        f"interactive permission required (headless): {message}",
+                        f"interactive permission required: {message}",
                         True,
                     )
                 case Allow():
-                    tool = self.registry.get(tool_name)
-                    if tool is None:
-                        return (tool_id, f"unknown tool: {tool_name}", True)
-                    out = await tool.execute(tool_input, self.ctx)
-                    return (tool_id, out.content, out.is_error)
+                    pass
+
+            if self.hooks:
+                ctx = HookContext(
+                    hook_type=HookType.PRE_TOOL,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    session_id=self.ctx.session_id,
+                    iteration=iteration,
+                    cwd=self.ctx.cwd,
+                )
+                for hr in await self.hooks.run_hooks(HookType.PRE_TOOL, ctx):
+                    if hr.message:
+                        await tx.put(Notice(text=hr.message))
+                    if not hr.allow:
+                        return (tool_id, f"blocked by hook: {hr.message}", True)
+                    if hr.modified_input is not None:
+                        tool_input = hr.modified_input
+
+            tool = self.registry.get(tool_name)
+            if tool is None:
+                return (tool_id, f"unknown tool: {tool_name}", True)
+            out = await tool.execute(tool_input, self.ctx)
+            content = out.content
+            is_error = out.is_error
+
+            if self.hooks:
+                ctx = HookContext(
+                    hook_type=HookType.POST_TOOL,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    tool_output=content,
+                    is_error=is_error,
+                    session_id=self.ctx.session_id,
+                    iteration=iteration,
+                    cwd=self.ctx.cwd,
+                )
+                for hr in await self.hooks.run_hooks(HookType.POST_TOOL, ctx):
+                    if hr.message:
+                        await tx.put(Notice(text=hr.message))
+                    if hr.modified_output is not None:
+                        content = hr.modified_output
+
+            return (tool_id, content, is_error)
 
         tasks = [run_one(tid, tname, tinput) for tid, tname, tinput in calls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -334,6 +420,7 @@ class AgentLoopBuilder:
         self._temperature = 0.0
         self._permission: PermissionChecker | None = None
         self._max_cost_usd = 0.0
+        self._hooks: HookRegistry | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -363,6 +450,10 @@ class AgentLoopBuilder:
         self._max_cost_usd = usd
         return self
 
+    def hooks(self, h: HookRegistry) -> AgentLoopBuilder:
+        self._hooks = h
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -375,4 +466,5 @@ class AgentLoopBuilder:
             temperature=self._temperature,
             permission=self._permission,
             max_cost_usd=self._max_cost_usd,
+            hooks=self._hooks,
         )
