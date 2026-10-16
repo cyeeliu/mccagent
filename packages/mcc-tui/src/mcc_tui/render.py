@@ -17,6 +17,7 @@ from mcc_tui.app import App, CallStatus, RenderItem
 _INPUT_ROWS = 3
 _STATUS_ROWS = 1
 _PANEL_BORDERS = 2
+_TEXT_INDENT = 2
 
 
 def _truncate(s: str, n: int) -> str:
@@ -56,17 +57,24 @@ def _render_item(item: RenderItem) -> Text:
     return text
 
 
-def _count_lines(text: Text) -> int:
+def _count_lines(text: Text, width: int = 80) -> int:
     plain = text.plain
-    return plain.count("\n") + 1 if plain else 1
+    if not plain:
+        return 1
+    total = 0
+    for line in plain.split("\n") or [""]:
+        total += max(1, -(-len(line) // width))
+    return total
 
 
-def _select_visible(items: list[Text], available: int, scroll: int) -> list[Text]:
+def _select_visible(
+    items: list[Text], available: int, scroll: int, width: int = 80
+) -> list[Text]:
     """行级滑动窗口：scroll 为从底部往上的行偏移，始终显示 available 行内容。"""
     if not items:
         return [Text("")]
 
-    item_lines = [(text, _count_lines(text)) for text in items]
+    item_lines = [(text, _count_lines(text, width)) for text in items]
     total_lines = sum(n for _, n in item_lines)
 
     max_scroll = max(0, total_lines - available)
@@ -85,10 +93,10 @@ def _select_visible(items: list[Text], available: int, scroll: int) -> list[Text
     return visible or [Text("")]
 
 
-def _max_scroll(items: list[Text], available: int) -> int:
+def _max_scroll(items: list[Text], available: int, width: int = 80) -> int:
     if not items:
         return 0
-    total = sum(_count_lines(t) for t in items)
+    total = sum(_count_lines(t, width) for t in items)
     return max(0, total - available)
 
 
@@ -101,8 +109,9 @@ def build_renderable(app: App, console: Console) -> Layout:
         5,
         console.height - _INPUT_ROWS - _STATUS_ROWS - _PANEL_BORDERS,
     )
-    app.scroll = min(app.scroll, _max_scroll(all_items, available))
-    visible = _select_visible(all_items, available, app.scroll)
+    text_width = max(20, console.width - _PANEL_BORDERS - _TEXT_INDENT)
+    app.scroll = min(app.scroll, _max_scroll(all_items, available, text_width))
+    visible = _select_visible(all_items, available, app.scroll, text_width)
 
     thinking = " · thinking…" if app.agent_busy else ""
     title = (
