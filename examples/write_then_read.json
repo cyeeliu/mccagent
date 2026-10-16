@@ -1,0 +1,16 @@
+[
+  [
+    {"kind": "tool_use_start", "id": "t1", "name": "write_file"},
+    {"kind": "tool_use_input", "input": {"path": "greeting.txt", "content": "hello world"}},
+    {"kind": "message_stop", "stop_reason": "tool_use", "usage": {"input_tokens": 20, "output_tokens": 10}}
+  ],
+  [
+    {"kind": "tool_use_start", "id": "t2", "name": "read_file"},
+    {"kind": "tool_use_input", "input": {"path": "greeting.txt"}},
+    {"kind": "message_stop", "stop_reason": "tool_use", "usage": {"input_tokens": 25, "output_tokens": 10}}
+  ],
+  [
+    {"kind": "text", "text": "I wrote \"hello world\" to greeting.txt and read it back. The content matches."},
+    {"kind": "message_stop", "stop_reason": "end_turn", "usage": {"input_tokens": 30, "output_tokens": 20}}
+  ]
+]

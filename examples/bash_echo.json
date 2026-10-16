@@ -1,0 +1,11 @@
+[
+  [
+    {"kind": "tool_use_start", "id": "t1", "name": "run_bash"},
+    {"kind": "tool_use_input", "input": {"command": "echo 'mock-test-ok' && date +%Y-%m-%d"}},
+    {"kind": "message_stop", "stop_reason": "tool_use", "usage": {"input_tokens": 15, "output_tokens": 10}}
+  ],
+  [
+    {"kind": "text", "text": "The command executed successfully. Output: mock-test-ok"},
+    {"kind": "message_stop", "stop_reason": "end_turn", "usage": {"input_tokens": 20, "output_tokens": 15}}
+  ]
+]

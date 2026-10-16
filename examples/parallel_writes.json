@@ -1,0 +1,15 @@
+[
+  [
+    {"kind": "tool_use_start", "id": "t1", "name": "write_file"},
+    {"kind": "tool_use_input", "input": {"path": "alpha.txt", "content": "AAA"}},
+    {"kind": "tool_use_start", "id": "t2", "name": "write_file"},
+    {"kind": "tool_use_input", "input": {"path": "beta.txt", "content": "BBB"}},
+    {"kind": "tool_use_start", "id": "t3", "name": "write_file"},
+    {"kind": "tool_use_input", "input": {"path": "gamma.txt", "content": "CCC"}},
+    {"kind": "message_stop", "stop_reason": "tool_use", "usage": {"input_tokens": 30, "output_tokens": 15}}
+  ],
+  [
+    {"kind": "text", "text": "All three files (alpha.txt, beta.txt, gamma.txt) written in parallel."},
+    {"kind": "message_stop", "stop_reason": "end_turn", "usage": {"input_tokens": 35, "output_tokens": 20}}
+  ]
+]

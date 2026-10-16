@@ -1,0 +1,6 @@
+[
+  [
+    {"kind": "text", "text": "Paris is the capital of France."},
+    {"kind": "message_stop", "stop_reason": "end_turn", "usage": {"input_tokens": 12, "output_tokens": 8}}
+  ]
+]
