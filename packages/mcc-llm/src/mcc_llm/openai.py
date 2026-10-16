@@ -24,6 +24,15 @@ from mcc_llm import (
 )
 
 
+def _map_stop_reason(sr: str | None) -> str | None:
+    """将 OpenAI finish_reason 映射为 Anthropic 兼容的 stop_reason。"""
+    return {
+        "stop": "end_turn",
+        "tool_calls": "tool_use",
+        "length": "max_tokens",
+    }.get(sr, sr)
+
+
 class OpenAiClient:
     """OpenAI Chat Completions 兼容客户端。"""
 
@@ -99,13 +108,13 @@ class OpenAiClient:
         )
         return MessageResponse(
             content=blocks,
-            stop_reason=choice.get("finish_reason"),
+            stop_reason=_map_stop_reason(choice.get("finish_reason")),
             usage=usage,
         )
 
     async def stream(self, req: CompleteRequest) -> AsyncIterator[StreamEvent]:
         body = self._build_body(req, stream=True)
-        stop_reason = "stop"
+        stop_reason = "end_turn"
         usage = Usage()
 
         async with self._http.stream(
@@ -142,7 +151,7 @@ class OpenAiClient:
                                 )
                             if "arguments" in fn and fn["arguments"]:
                                 yield ToolUseInputDelta(partial_json=fn["arguments"])
-                sr = choice.get("finish_reason")
+                sr = _map_stop_reason(choice.get("finish_reason"))
                 if sr:
                     stop_reason = sr
 
