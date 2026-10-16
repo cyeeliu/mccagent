@@ -33,6 +33,9 @@ def _load_dotenv(path: Path | None = None) -> None:
             os.environ[key] = value
 
 
+_load_dotenv()
+
+
 def _version() -> str:
     try:
         from importlib.metadata import version
@@ -175,7 +178,6 @@ def main(
     mock_script: str | None,
 ) -> None:
     """mini-claude-code — 企业级 AI 编码助手。"""
-    _load_dotenv()
     work_dir = Path(cwd) if cwd else Path.cwd()
 
     if cmd == "version":
