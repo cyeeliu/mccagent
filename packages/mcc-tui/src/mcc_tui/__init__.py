@@ -106,16 +106,16 @@ def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
         app.cursor = len(app.input)
         return False
     if key == Key.up:
-        app.scroll += 1
+        app.scroll += 2
         return False
     if key == Key.down:
-        app.scroll = max(0, app.scroll - 1)
+        app.scroll = max(0, app.scroll - 2)
         return False
     if key == Key.page_up:
-        app.scroll += 5
+        app.scroll += 10
         return False
     if key == Key.page_down:
-        app.scroll = max(0, app.scroll - 5)
+        app.scroll = max(0, app.scroll - 10)
         return False
     if isinstance(key, str):
         app.input = app.input[: app.cursor] + key + app.input[app.cursor :]

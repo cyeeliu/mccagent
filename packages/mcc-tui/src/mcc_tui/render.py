@@ -57,46 +57,74 @@ def _render_item(item: RenderItem) -> Text:
     return text
 
 
-def _count_lines(text: Text, width: int = 80) -> int:
+def _extract_line(text: Text, start: int, end: int) -> Text:
+    """提取 text.plain[start:end] 并复制落在该范围内的 spans，保留样式。"""
+    plain = text.plain[start:end]
+    line = Text(plain)
+    for span in text.spans:
+        if span.end <= start or span.start >= end:
+            continue
+        s = max(0, span.start - start)
+        e = min(end - start, span.end - start)
+        line.stylize(span.style, s, e)
+    return line
+
+
+def _wrap_line(text: Text, start: int, end: int, width: int) -> list[Text]:
+    """把 [start, end) 范围按 width 拆成多行 Text。"""
+    line_len = end - start
+    if line_len <= width:
+        return [_extract_line(text, start, end)]
+    result: list[Text] = []
+    pos = start
+    while pos < end:
+        chunk_end = min(pos + width, end)
+        result.append(_extract_line(text, pos, chunk_end))
+        pos = chunk_end
+    return result
+
+
+def _split_lines(text: Text, width: int = 80) -> list[Text]:
+    """把多行 Text 拆成单行 Text 列表，处理 word wrap，保留样式。"""
     plain = text.plain
     if not plain:
-        return 1
-    total = 0
-    for line in plain.split("\n") or [""]:
-        total += max(1, -(-len(line) // width))
-    return total
+        return [Text("")]
+    result: list[Text] = []
+    line_start = 0
+    for i, ch in enumerate(plain):
+        if ch == "\n":
+            result.extend(_wrap_line(text, line_start, i, width))
+            line_start = i + 1
+    if line_start < len(plain):
+        result.extend(_wrap_line(text, line_start, len(plain), width))
+    return result or [Text("")]
 
 
 def _select_visible(
     items: list[Text], available: int, scroll: int, width: int = 80
 ) -> list[Text]:
-    """行级滑动窗口：scroll 为从底部往上的行偏移，始终显示 available 行内容。"""
+    """行级滑动窗口：把所有 item 展开为行，按 scroll 裁取 available 行。"""
     if not items:
         return [Text("")]
 
-    item_lines = [(text, _count_lines(text, width)) for text in items]
-    total_lines = sum(n for _, n in item_lines)
+    all_lines: list[Text] = []
+    for item in items:
+        all_lines.extend(_split_lines(item, width))
 
-    max_scroll = max(0, total_lines - available)
+    total = len(all_lines)
+    max_scroll = max(0, total - available)
     scroll = min(max(0, scroll), max_scroll)
 
-    bottom_line = total_lines - scroll
-    top_line = max(0, bottom_line - available)
+    bottom = total - scroll
+    top = max(0, bottom - available)
 
-    visible: list[Text] = []
-    current = 0
-    for text, n in item_lines:
-        if current + n > top_line and current < bottom_line:
-            visible.append(text)
-        current += n
-
-    return visible or [Text("")]
+    return all_lines[top:bottom] or [Text("")]
 
 
 def _max_scroll(items: list[Text], available: int, width: int = 80) -> int:
     if not items:
         return 0
-    total = sum(_count_lines(t, width) for t in items)
+    total = sum(len(_split_lines(t, width)) for t in items)
     return max(0, total - available)
 
 
