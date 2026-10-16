@@ -116,6 +116,7 @@ class OpenAiClient:
         body = self._build_body(req, stream=True)
         stop_reason = "end_turn"
         usage = Usage()
+        tool_call_started: set[int] = set()
 
         async with self._http.stream(
             "POST",
@@ -142,15 +143,18 @@ class OpenAiClient:
                     yield TextDelta(text=delta["content"])
                 if "tool_calls" in delta:
                     for tc in delta["tool_calls"]:
-                        if "function" in tc:
-                            fn = tc["function"]
-                            if "name" in fn:
-                                yield ToolUseStart(
-                                    id=tc.get("id", ""),
-                                    name=fn.get("name", ""),
-                                )
-                            if "arguments" in fn and fn["arguments"]:
-                                yield ToolUseInputDelta(partial_json=fn["arguments"])
+                        idx = tc.get("index", 0)
+                        fn = tc.get("function", {})
+                        name = fn.get("name", "")
+                        if name and idx not in tool_call_started:
+                            tool_call_started.add(idx)
+                            yield ToolUseStart(
+                                id=tc.get("id", ""),
+                                name=name,
+                            )
+                        args = fn.get("arguments", "")
+                        if args:
+                            yield ToolUseInputDelta(partial_json=args)
                 sr = _map_stop_reason(choice.get("finish_reason"))
                 if sr:
                     stop_reason = sr
