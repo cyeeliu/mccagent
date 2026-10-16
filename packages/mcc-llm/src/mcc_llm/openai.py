@@ -88,7 +88,8 @@ class OpenAiClient:
         )
         resp.raise_for_status()
         data = resp.json()
-        choice = data.get("choices", [{}])[0]
+        choices = data.get("choices", [])
+        choice = choices[0] if choices else {}
         msg = choice.get("message", {})
         blocks = _parse_oai_content(msg)
         usage_raw = data.get("usage", {})
@@ -122,7 +123,10 @@ class OpenAiClient:
                 if payload == "[DONE]":
                     break
                 chunk = json.loads(payload)
-                choice = chunk.get("choices", [{}])[0]
+                choices = chunk.get("choices", [])
+                if not choices:
+                    continue
+                choice = choices[0]
                 delta = choice.get("delta", {})
 
                 if "content" in delta and delta["content"]:
