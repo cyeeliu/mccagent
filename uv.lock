@@ -226,12 +226,14 @@ version = "0.1.0"
 source = { editable = "packages/mcc-session" }
 dependencies = [
     { name = "mcc-core" },
+    { name = "mcc-llm" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "mcc-core", editable = "packages/mcc-core" },
+    { name = "mcc-llm", editable = "packages/mcc-llm" },
     { name = "pydantic", specifier = ">=2.9" },
 ]
 

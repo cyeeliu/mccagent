@@ -1,37 +1,47 @@
 """会话持久化与记忆。
 
-定义会话元数据与轮次快照类型，支持 JSONL 落盘与回放。
+JSONL 会话流水（录制、恢复、列表、清理）与
+Markdown 长期记忆存储及 Agent 工具。
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
+from .memory import (
+    MarkdownMemoryStore,
+    ReadMemoryTool,
+    SaveMemoryTool,
+    default_memory_base,
+    memory_tools,
+)
+from .models import SessionMeta, TurnSnapshot
+from .recorder import (
+    TITLE_MODEL,
+    SessionNotFoundError,
+    SessionRecorder,
+    build_turn_snapshot,
+    default_sessions_base,
+    list_sessions,
+    load_session,
+    maybe_generate_title,
+    purge_sessions,
+)
 
-from mcc_core import Usage
-from pydantic import BaseModel, Field
-
-
-class SessionMeta(BaseModel):
-    id: str
-    started_at: datetime
-    cwd: str
-    turns: int = 0
-    cost_usd: float = 0.0
-    status: str = "active"
-    title: str | None = None
-
-
-class TurnSnapshot(BaseModel):
-    ts: datetime
-    iteration: int
-    request_messages: list[dict[str, Any]] = Field(default_factory=list)
-    assistant_blocks: list[dict[str, Any]] = Field(default_factory=list)
-    tool_outputs: list[dict[str, Any]] = Field(default_factory=list)
-    usage: Usage = Field(default_factory=Usage)
-    model: str = ""
-    cost_usd: float = 0.0
-
-
-__all__ = ["SessionMeta", "TurnSnapshot"]
+__all__ = [
+    "MarkdownMemoryStore",
+    "ReadMemoryTool",
+    "SaveMemoryTool",
+    "SessionMeta",
+    "SessionNotFoundError",
+    "SessionRecorder",
+    "TITLE_MODEL",
+    "TurnSnapshot",
+    "build_turn_snapshot",
+    "default_memory_base",
+    "default_sessions_base",
+    "list_sessions",
+    "load_session",
+    "maybe_generate_title",
+    "memory_tools",
+    "purge_sessions",
+]
 __version__ = "0.1.0"

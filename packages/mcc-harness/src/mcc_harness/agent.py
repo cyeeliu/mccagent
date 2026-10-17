@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -40,6 +41,11 @@ from mcc_llm import (
 )
 from mcc_llm import (
     TextDelta as LlmTextDelta,
+)
+from mcc_session import (
+    SessionRecorder,
+    build_turn_snapshot,
+    maybe_generate_title,
 )
 from mcc_tools import ToolRegistry
 
@@ -109,6 +115,13 @@ def permission_request_for(tool_name: str, input: dict[str, Any]) -> PermissionR
                 category="Bash",
                 action=BashAction(cmd=str(input.get("command", ""))),
             )
+        case "save_memory" | "read_memory":
+            return PermissionRequest(
+                category="Memory",
+                action=PathAction(
+                    path=str(input.get("name", "")),
+                ),
+            )
         case _:
             return PermissionRequest(
                 category="Bash", action=BashAction(cmd=tool_name)
@@ -133,6 +146,8 @@ class AgentLoop:
         hooks: HookRegistry | None = None,
         permission_responses: asyncio.Queue[PermissionDecision] | None = None,
         permission_timeout_secs: float = 120.0,
+        recorder: SessionRecorder | None = None,
+        history: list[Message] | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -147,89 +162,165 @@ class AgentLoop:
         self.hooks = hooks
         self.permission_responses = permission_responses
         self.permission_timeout_secs = permission_timeout_secs
+        self.recorder = recorder
+        self.history: list[Message] = list(history) if history else []
 
     async def run_streaming(
         self, user_input: str, tx: asyncio.Queue[AgentEvent]
     ) -> AgentRun:
-        """流式运行，实时发送 AgentEvent 到队列，返回最终统计。"""
+        """流式运行，实时发送 AgentEvent 到队列，返回最终统计。
+
+        以 self.history 为前缀继续对话；正常结束后把本轮完整
+        消息序列累积回 history，使下一次调用具备上下文延续。
+        """
         await tx.put(UserEcho(text=user_input))
-        messages: list[Message] = [Message.user(user_input)]
+        messages: list[Message] = [*self.history, Message.user(user_input)]
         total_usage = Usage()
         total_cost = 0.0
 
-        for iteration in range(1, self.max_iterations + 1):
-            if self.max_cost_usd > 0 and total_cost >= self.max_cost_usd:
-                await tx.put(
-                    Notice(
-                        text=f"Budget limit ${self.max_cost_usd:.4} reached "
-                        f"after {iteration - 1} iteration(s)"
+        try:
+            for iteration in range(1, self.max_iterations + 1):
+                if self.max_cost_usd > 0 and total_cost >= self.max_cost_usd:
+                    await tx.put(
+                        Notice(
+                            text=f"Budget limit ${self.max_cost_usd:.4} reached "
+                            f"after {iteration - 1} iteration(s)"
+                        )
                     )
-                )
-                raise AgentError(
-                    f"cost ${total_cost:.4} >= limit ${self.max_cost_usd:.4}"
-                )
+                    raise AgentError(
+                        f"cost ${total_cost:.4} >= limit ${self.max_cost_usd:.4}"
+                    )
 
-            if self.hooks:
-                ctx = HookContext(
-                    hook_type=HookType.ON_TURN_START,
-                    session_id=self.ctx.session_id,
-                    cost_usd=total_cost,
-                    iteration=iteration,
-                    cwd=self.ctx.cwd,
-                )
-                for hr in await self.hooks.run_hooks(HookType.ON_TURN_START, ctx):
-                    if hr.message:
-                        await tx.put(Notice(text=hr.message))
-
-            req = CompleteRequest(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                messages=messages,
-                system=self.system or None,
-                temperature=self.temperature,
-                tools=self.registry.as_api_schema(),
-            )
-
-            blocks, stop_reason, turn_usage = await self._call_with_retry(req, tx)
-            turn_cost = price_usd(self.model, turn_usage)
-            total_cost += turn_cost
-            total_usage = total_usage + turn_usage
-            messages.append(Message(role=Role.assistant, content=blocks))
-
-            if stop_reason in ("end_turn", "stop_sequence", None):
-                final_text = "\n".join(
-                    b.text for b in blocks if isinstance(b, TextBlock)
-                )
                 if self.hooks:
                     ctx = HookContext(
-                        hook_type=HookType.ON_TURN_END,
+                        hook_type=HookType.ON_TURN_START,
                         session_id=self.ctx.session_id,
                         cost_usd=total_cost,
                         iteration=iteration,
                         cwd=self.ctx.cwd,
                     )
-                    for hr in await self.hooks.run_hooks(HookType.ON_TURN_END, ctx):
+                    for hr in await self.hooks.run_hooks(
+                        HookType.ON_TURN_START, ctx
+                    ):
                         if hr.message:
                             await tx.put(Notice(text=hr.message))
-                await tx.put(TurnEnd(cost_usd=total_cost))
-                return AgentRun(final_text, iteration, total_usage, total_cost)
 
-            if stop_reason == "tool_use":
-                tool_results = await self._execute_tools(blocks, tx, iteration)
-                messages.append(Message(role=Role.tool, content=tool_results))
-            else:
-                if self.hooks:
-                    ctx = HookContext(
-                        hook_type=HookType.ON_ERROR,
-                        session_id=self.ctx.session_id,
-                        cost_usd=total_cost,
-                        iteration=iteration,
-                        cwd=self.ctx.cwd,
+                request_snapshot = list(messages)
+                req = CompleteRequest(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    messages=request_snapshot,
+                    system=self.system or None,
+                    temperature=self.temperature,
+                    tools=self.registry.as_api_schema(),
+                )
+
+                blocks, stop_reason, turn_usage = await self._call_with_retry(
+                    req, tx
+                )
+                turn_cost = price_usd(self.model, turn_usage)
+                total_cost += turn_cost
+                total_usage = total_usage + turn_usage
+                messages.append(Message(role=Role.assistant, content=blocks))
+
+                if stop_reason in ("end_turn", "stop_sequence", None):
+                    final_text = "\n".join(
+                        b.text for b in blocks if isinstance(b, TextBlock)
                     )
-                    await self.hooks.run_hooks(HookType.ON_ERROR, ctx)
-                raise AgentError(f"unexpected stop_reason: {stop_reason}")
+                    await self._record_turn(
+                        tx,
+                        iteration,
+                        request_snapshot,
+                        blocks,
+                        [],
+                        turn_usage,
+                        turn_cost,
+                    )
+                    if self.hooks:
+                        ctx = HookContext(
+                            hook_type=HookType.ON_TURN_END,
+                            session_id=self.ctx.session_id,
+                            cost_usd=total_cost,
+                            iteration=iteration,
+                            cwd=self.ctx.cwd,
+                        )
+                        for hr in await self.hooks.run_hooks(
+                            HookType.ON_TURN_END, ctx
+                        ):
+                            if hr.message:
+                                await tx.put(Notice(text=hr.message))
+                    await tx.put(TurnEnd(cost_usd=total_cost))
+                    self.history = list(messages)
+                    if self.recorder:
+                        await self.recorder.finalize("ended")
+                    return AgentRun(final_text, iteration, total_usage, total_cost)
 
-        raise AgentError(f"exceeded max_iterations={self.max_iterations}")
+                if stop_reason == "tool_use":
+                    tool_results = await self._execute_tools(blocks, tx, iteration)
+                    messages.append(Message(role=Role.tool, content=tool_results))
+                    await self._record_turn(
+                        tx,
+                        iteration,
+                        request_snapshot,
+                        blocks,
+                        [
+                            (b.tool_use_id, b.content, b.is_error)
+                            for b in tool_results
+                        ],
+                        turn_usage,
+                        turn_cost,
+                    )
+                else:
+                    if self.hooks:
+                        ctx = HookContext(
+                            hook_type=HookType.ON_ERROR,
+                            session_id=self.ctx.session_id,
+                            cost_usd=total_cost,
+                            iteration=iteration,
+                            cwd=self.ctx.cwd,
+                        )
+                        await self.hooks.run_hooks(HookType.ON_ERROR, ctx)
+                    raise AgentError(f"unexpected stop_reason: {stop_reason}")
+
+            raise AgentError(f"exceeded max_iterations={self.max_iterations}")
+        except BaseException:
+            if self.recorder:
+                with contextlib.suppress(Exception):
+                    await self.recorder.finalize("errored")
+            raise
+
+    async def _record_turn(
+        self,
+        tx: asyncio.Queue[AgentEvent],
+        iteration: int,
+        request_messages: list[Message],
+        assistant_blocks: list[ContentBlock],
+        tool_outputs: list[tuple[str, str, bool]],
+        usage: Usage,
+        turn_cost: float,
+    ) -> None:
+        """录制一轮快照；录制是尽力而为，失败不中断主循环。"""
+        if self.recorder is None:
+            return
+        try:
+            snap = build_turn_snapshot(
+                iteration=iteration,
+                request_messages=request_messages,
+                assistant_blocks=assistant_blocks,
+                tool_outputs=tool_outputs,
+                usage=usage,
+                model=self.model,
+                cost_usd=turn_cost,
+            )
+            await self.recorder.record(snap)
+            if self.recorder.meta.title is None:
+                title = await maybe_generate_title(
+                    self.recorder.meta, self.llm, snap
+                )
+                if title:
+                    await self.recorder.save_meta()
+        except Exception as e:
+            await tx.put(Notice(text=f"session record failed: {e}"))
 
     async def run(self, user_input: str) -> AgentRun:
         """非流式批量运行，丢弃事件。"""
@@ -461,6 +552,8 @@ class AgentLoopBuilder:
         self._hooks: HookRegistry | None = None
         self._permission_responses: asyncio.Queue[PermissionDecision] | None = None
         self._permission_timeout_secs = 120.0
+        self._recorder: SessionRecorder | None = None
+        self._history: list[Message] | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -504,6 +597,14 @@ class AgentLoopBuilder:
         self._permission_timeout_secs = secs
         return self
 
+    def recorder(self, r: SessionRecorder) -> AgentLoopBuilder:
+        self._recorder = r
+        return self
+
+    def history(self, messages: list[Message]) -> AgentLoopBuilder:
+        self._history = list(messages)
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -519,4 +620,6 @@ class AgentLoopBuilder:
             hooks=self._hooks,
             permission_responses=self._permission_responses,
             permission_timeout_secs=self._permission_timeout_secs,
+            recorder=self._recorder,
+            history=self._history,
         )

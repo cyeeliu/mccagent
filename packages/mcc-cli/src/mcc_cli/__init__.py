@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -86,16 +87,32 @@ def _build_source(
     model: str | None,
     mock: bool,
     mock_script: str | None,
+    history: list | None = None,
+    session_id: str | None = None,
 ) -> EventSource:
-    """构建事件源：mock 模式用 MockLlm，否则用真实 LLM。"""
+    """构建事件源：mock 模式用 MockLlm，否则用真实 LLM。
+
+    同时接线会话录制（JSONL 落盘）与长期记忆
+    （save_memory / read_memory 工具 + system prompt 索引注入）。
+    """
     from mcc_config import ensure_default_config
     from mcc_core import ToolContext
     from mcc_harness import AgentLoopBuilder, PermissionChecker
+    from mcc_session import MarkdownMemoryStore, SessionRecorder, memory_tools
     from mcc_tools import default_registry
 
     config = ensure_default_config(work_dir)
+    sid = session_id or uuid.uuid4().hex[:8]
+    ctx = ToolContext(cwd=work_dir, session_id=sid)
     registry = default_registry()
-    ctx = ToolContext(cwd=work_dir, session_id=uuid.uuid4().hex[:8])
+
+    system = _system_prompt()
+    store = MarkdownMemoryStore()
+    for tool in memory_tools(store):
+        registry.register(tool)
+    index = store.index_text()
+    if index:
+        system = f"{system}\n\n# Memory Index\n{index}"
 
     if mock or mock_script:
         from mcc_llm.mock import MockLlm
@@ -116,7 +133,8 @@ def _build_source(
             click.echo(f"Error: {e}\nUse --mock for testing without API keys.", err=True)
             sys.exit(2)
 
-    builder = AgentLoopBuilder(llm, registry, ctx).system(_system_prompt())
+    recorder = SessionRecorder.open_sync(sid, work_dir)
+    builder = AgentLoopBuilder(llm, registry, ctx).system(system).recorder(recorder)
 
     resolved_model = model or os.environ.get("MODEL") or config.model.main
     builder = builder.model(resolved_model)
@@ -126,6 +144,9 @@ def _build_source(
 
     builder = builder.max_cost_usd(config.budget.max_usd_per_session)
     builder = builder.max_iterations(config.budget.max_iterations)
+
+    if history:
+        builder = builder.history(history)
 
     hook_registry = _build_hooks(config, work_dir)
     if hook_registry is not None:
@@ -200,6 +221,83 @@ async def _run_tui_mode(source: EventSource) -> int:
     return 0
 
 
+def _parse_days(value: str | None) -> int | None:
+    """解析 Nd 形式的天数，非法返回 None。"""
+    if value is None:
+        return None
+    m = re.fullmatch(r"(\d+)d", value)
+    return int(m.group(1)) if m else None
+
+
+def _run_sessions_cmd(args: tuple[str, ...], older_than: str | None) -> None:
+    """sessions 子命令：list / purge。"""
+    from mcc_session import list_sessions, purge_sessions
+
+    sub = args[0] if args else "list"
+
+    if sub == "list":
+        metas = list_sessions()
+        if not metas:
+            click.echo("No sessions found.")
+            return
+        click.echo(f"{'ID':<10} {'STARTED':<17} {'TURNS':>5} {'COST':>9}  TITLE")
+        for m in metas:
+            started = m.started_at.strftime("%Y-%m-%d %H:%M")
+            cost = f"${m.cost_usd:.4f}"
+            title = m.title or ""
+            click.echo(f"{m.id:<10} {started:<17} {m.turns:>5} {cost:>9}  {title}".rstrip())
+        return
+
+    if sub == "purge":
+        days = _parse_days(older_than)
+        if days is None:
+            click.echo("Usage: mcc sessions purge --older-than <Nd>", err=True)
+            sys.exit(2)
+        removed = purge_sessions(days)
+        click.echo(f"purged {removed} session(s)")
+        return
+
+    click.echo(f"Unknown sessions subcommand: {sub}", err=True)
+    sys.exit(2)
+
+
+def _run_resume_cmd(
+    args: tuple[str, ...],
+    work_dir: Path,
+    model: str | None,
+    mock: bool,
+    mock_script: str | None,
+) -> None:
+    """resume 子命令：加载历史会话并继续对话。"""
+    from mcc_session import SessionNotFoundError, load_session
+
+    if not args:
+        click.echo("Usage: mcc resume <session-id>", err=True)
+        sys.exit(2)
+
+    try:
+        meta, history = load_session(args[0])
+    except SessionNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    if not (mock or mock_script or os.environ.get("ANTHROPIC_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")):
+        click.echo(
+            "Error: no LLM API key found. Use --mock for testing without API keys.",
+            err=True,
+        )
+        sys.exit(2)
+
+    click.echo(f"Resuming session {meta.id} ({meta.turns} turn(s), "
+               f"${meta.cost_usd:.4f})" + (f" — {meta.title}" if meta.title else ""),
+               err=True)
+    source = _build_source(
+        work_dir, model, mock, mock_script, history=history, session_id=meta.id
+    )
+    sys.exit(asyncio.run(_run_tui_mode(source)))
+
+
 @click.command()
 @click.option("-p", "--prompt", "prompt", default=None, help="单次 headless 模式")
 @click.option("--cwd", "cwd", default=None, envvar="MCC_PROJECT", help="工作目录")
@@ -212,9 +310,19 @@ async def _run_tui_mode(source: EventSource) -> int:
     default=None,
     help="MockLlm 脚本 JSON 文件路径",
 )
-@click.argument(
-    "cmd", required=False, type=click.Choice(["tui", "config", "version"])
+@click.option(
+    "--older-than",
+    "older_than",
+    default=None,
+    hidden=True,
+    help="sessions purge：清理 N 天前的会话（如 30d）",
 )
+@click.argument(
+    "cmd",
+    required=False,
+    type=click.Choice(["tui", "config", "version", "resume", "sessions"]),
+)
+@click.argument("args", nargs=-1)
 def main(
     cmd: str | None,
     prompt: str | None,
@@ -223,6 +331,8 @@ def main(
     quiet: bool,
     mock: bool,
     mock_script: str | None,
+    older_than: str | None,
+    args: tuple[str, ...],
 ) -> None:
     """mini-claude-code — 企业级 AI 编码助手。"""
     work_dir = Path(cwd) if cwd else Path.cwd()
@@ -236,6 +346,14 @@ def main(
 
         config = asyncio.run(load(work_dir))
         click.echo(json.dumps(config.model_dump(mode="json"), indent=2, ensure_ascii=False))
+        return
+
+    if cmd == "sessions":
+        _run_sessions_cmd(args, older_than)
+        return
+
+    if cmd == "resume":
+        _run_resume_cmd(args, work_dir, model, mock, mock_script)
         return
 
     if mock or mock_script:

@@ -99,6 +99,8 @@ class PermissionChecker:
         match (req.action, req.category):
             case (PathAction(), "Read"):
                 return Allow()
+            case (PathAction(), "Memory"):
+                return Allow()
             case (PathAction(), "Write" | "Edit") if self._mode == "acceptEdits":
                 return Allow()
             case _:

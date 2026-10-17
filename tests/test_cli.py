@@ -1,15 +1,17 @@
-"""CLI 入口测试：version / config / headless 模式。"""
+"""CLI 入口测试：version / config / headless / sessions / resume。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from click.testing import CliRunner
 from mcc_cli import main
 from mcc_cli.events import EchoEventSource
 from mcc_cli.headless import run_headless
+from mcc_session import SessionMeta
 
 
 def test_version():
@@ -51,3 +53,109 @@ def test_headless_stderr_shows_tool_progress(capsys):
     asyncio.run(run_headless(source, "list files", quiet=False))
     captured = capsys.readouterr()
     assert "⚙" in captured.err
+
+
+def _make_session(base: Path, sid: str, started: datetime, turns: int = 3,
+                  cost: float = 0.25, title: str | None = None) -> None:
+    day = base / started.strftime("%Y-%m-%d")
+    day.mkdir(parents=True, exist_ok=True)
+    meta = SessionMeta(
+        id=sid, started_at=started, cwd="/tmp", turns=turns,
+        cost_usd=cost, status="ended", title=title,
+    )
+    (day / f"{sid}.meta.json").write_text(
+        meta.model_dump_json(), encoding="utf-8"
+    )
+
+
+class TestSessionsCmd:
+    def test_list_empty(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        runner = CliRunner()
+        result = runner.invoke(main, ["sessions", "list"])
+        assert result.exit_code == 0
+        assert "No sessions found." in result.output
+
+    def test_list_shows_sessions(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        _make_session(
+            home / ".mcc" / "sessions", "abc123",
+            datetime(2026, 10, 1, 14, 32, tzinfo=UTC),
+            turns=8, cost=0.34, title="修复 rpc client 超时",
+        )
+        runner = CliRunner()
+        result = runner.invoke(main, ["sessions", "list"])
+        assert result.exit_code == 0
+        assert "abc123" in result.output
+        assert "2026-10-01 14:32" in result.output
+        assert "8" in result.output
+        assert "$0.3400" in result.output
+        assert "修复 rpc client 超时" in result.output
+
+    def test_list_sorted_desc(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        base = home / ".mcc" / "sessions"
+        _make_session(base, "older", datetime(2026, 9, 1, tzinfo=UTC))
+        _make_session(base, "newer", datetime(2026, 10, 1, tzinfo=UTC))
+        runner = CliRunner()
+        result = runner.invoke(main, ["sessions"])
+        assert result.exit_code == 0
+        assert result.output.index("newer") < result.output.index("older")
+
+    def test_purge_removes_old(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        base = home / ".mcc" / "sessions"
+        _make_session(base, "ancient", datetime(2026, 1, 1, tzinfo=UTC))
+        _make_session(base, "recent", datetime.now(UTC))
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["sessions", "purge", "--older-than", "30d"]
+        )
+        assert result.exit_code == 0
+        assert "purged 1 session(s)" in result.output
+        assert "recent" in runner.invoke(main, ["sessions", "list"]).output
+        assert "ancient" not in runner.invoke(main, ["sessions", "list"]).output
+
+    def test_purge_requires_valid_spec(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        runner = CliRunner()
+        result = runner.invoke(main, ["sessions", "purge"])
+        assert result.exit_code == 2
+        result = runner.invoke(main, ["sessions", "purge", "--older-than", "xx"])
+        assert result.exit_code == 2
+
+    def test_unknown_subcommand(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        runner = CliRunner()
+        result = runner.invoke(main, ["sessions", "bogus"])
+        assert result.exit_code == 2
+
+
+class TestResumeCmd:
+    def test_resume_requires_id(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        runner = CliRunner()
+        result = runner.invoke(main, ["resume"])
+        assert result.exit_code == 2
+        assert "Usage" in result.output
+
+    def test_resume_unknown_session(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        runner = CliRunner()
+        result = runner.invoke(main, ["resume", "ghost"])
+        assert result.exit_code == 1
+        assert "session not found" in result.output
+
+    def test_resume_without_llm_key_errors(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        _make_session(home / ".mcc" / "sessions", "r1", datetime.now(UTC))
+        runner = CliRunner()
+        result = runner.invoke(main, ["resume", "r1"])
+        assert result.exit_code == 2
+        assert "API key" in result.output
