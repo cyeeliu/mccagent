@@ -104,6 +104,21 @@ class PermissionChecker:
             case _:
                 return Ask("confirmation required")
 
+    def allow_always(self, category: str, action: Action) -> None:
+        """运行时追加 allow 规则（用户选择"总是允许"后调用）。
+
+        Bash 以完整命令作为前缀（精确匹配该命令），
+        Path 以完整路径作为 glob（精确匹配该路径）。
+        """
+        match action:
+            case BashAction(cmd=cmd):
+                prefix = cmd.strip()
+                if prefix and prefix not in self._allow_bash:
+                    self._allow_bash.append(prefix)
+            case PathAction(path=path):
+                if path and path not in self._allow_paths:
+                    self._allow_paths.append(path)
+
 
 def bash_word_match(cmd: str, prefix: str) -> bool:
     """在词边界处匹配 bash 命令前缀。

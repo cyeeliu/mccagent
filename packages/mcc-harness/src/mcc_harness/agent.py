@@ -11,6 +11,7 @@ from mcc_core import (
     AgentError,
     ContentBlock,
     Message,
+    PermissionDecision,
     Role,
     TextBlock,
     ToolContext,
@@ -130,6 +131,8 @@ class AgentLoop:
         permission: PermissionChecker | None = None,
         max_cost_usd: float = 0.0,
         hooks: HookRegistry | None = None,
+        permission_responses: asyncio.Queue[PermissionDecision] | None = None,
+        permission_timeout_secs: float = 120.0,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -142,6 +145,8 @@ class AgentLoop:
         self.permission = permission
         self.max_cost_usd = max_cost_usd
         self.hooks = hooks
+        self.permission_responses = permission_responses
+        self.permission_timeout_secs = permission_timeout_secs
 
     async def run_streaming(
         self, user_input: str, tx: asyncio.Queue[AgentEvent]
@@ -331,17 +336,27 @@ class AgentLoop:
                 case Deny(reason=reason):
                     return (tool_id, f"permission denied: {reason}", True)
                 case Ask(message=message):
+                    req_id = abs(hash(tool_id)) % (10**8)
                     await tx.put(
                         PermissionRequestEvent(
-                            id=hash(tool_id) % (10**8),
+                            id=req_id,
                             message=f"{tool_name}: {message}",
+                            tool_name=tool_name,
+                            tool_input=tool_input,
                         )
                     )
-                    return (
-                        tool_id,
-                        f"interactive permission required: {message}",
-                        True,
-                    )
+                    user_decision = await self._await_permission_decision(req_id)
+                    if user_decision.action == "feedback":
+                        return (
+                            tool_id,
+                            f"permission denied by user: {user_decision.feedback}",
+                            True,
+                        )
+                    if user_decision.action == "deny":
+                        return (tool_id, "permission denied by user", True)
+                    if user_decision.action == "allow_always" and self.permission:
+                        preq = permission_request_for(tool_name, tool_input)
+                        self.permission.allow_always(preq.category, preq.action)
                 case Allow():
                     pass
 
@@ -403,6 +418,29 @@ class AgentLoop:
             )
         return result_blocks
 
+    async def _await_permission_decision(self, req_id: int) -> PermissionDecision:
+        """等待用户权限决策。
+
+        - 无响应通道（headless）或超时：默认拒绝
+        - request_id 不匹配的过期决策放回队列，继续等待
+        """
+        deny = PermissionDecision(request_id=req_id, action="deny")
+        if self.permission_responses is None:
+            return deny
+
+        while True:
+            try:
+                candidate = await asyncio.wait_for(
+                    self.permission_responses.get(),
+                    timeout=self.permission_timeout_secs,
+                )
+            except TimeoutError:
+                return deny
+            if candidate.request_id == req_id:
+                return candidate
+            await self.permission_responses.put(candidate)
+            await asyncio.sleep(0)
+
 
 class AgentLoopBuilder:
     """AgentLoop 构建器。"""
@@ -421,6 +459,8 @@ class AgentLoopBuilder:
         self._permission: PermissionChecker | None = None
         self._max_cost_usd = 0.0
         self._hooks: HookRegistry | None = None
+        self._permission_responses: asyncio.Queue[PermissionDecision] | None = None
+        self._permission_timeout_secs = 120.0
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -454,6 +494,16 @@ class AgentLoopBuilder:
         self._hooks = h
         return self
 
+    def permission_responses(
+        self, q: asyncio.Queue[PermissionDecision]
+    ) -> AgentLoopBuilder:
+        self._permission_responses = q
+        return self
+
+    def permission_timeout_secs(self, secs: float) -> AgentLoopBuilder:
+        self._permission_timeout_secs = secs
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -467,4 +517,6 @@ class AgentLoopBuilder:
             permission=self._permission,
             max_cost_usd=self._max_cost_usd,
             hooks=self._hooks,
+            permission_responses=self._permission_responses,
+            permission_timeout_secs=self._permission_timeout_secs,
         )

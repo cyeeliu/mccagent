@@ -64,11 +64,30 @@ def test_error_sets_not_busy():
     assert app.items[-1].kind == "error"
 
 
-def test_permission_request_adds_notice():
+def test_permission_request_sets_pending():
     app = App(session_short_id="test")
     app.apply_event(PermissionRequest(id=1, message="allow bash?"))
-    assert app.items[-1].kind == "notice"
-    assert "permission" in app.items[-1].text
+    assert app.pending_permission is not None
+    assert app.pending_permission.id == 1
+
+
+def test_permission_requests_queued():
+    app = App(session_short_id="test")
+    app.apply_event(PermissionRequest(id=1, message="first?"))
+    app.apply_event(PermissionRequest(id=2, message="second?"))
+    assert app.pending_permission.id == 1
+    assert [p.id for p in app.permission_queue] == [2]
+
+
+def test_resolve_permission_pops_next():
+    app = App(session_short_id="test")
+    app.apply_event(PermissionRequest(id=1, message="first?"))
+    app.apply_event(PermissionRequest(id=2, message="second?"))
+    resolved = app.resolve_permission()
+    assert resolved is not None and resolved.id == 1
+    assert app.pending_permission is not None
+    assert app.pending_permission.id == 2
+    assert app.permission_queue == []
 
 
 def test_notice_added():

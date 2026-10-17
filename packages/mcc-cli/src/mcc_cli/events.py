@@ -56,14 +56,14 @@ class AgentEventSource(EventSource):
     """
 
     def __init__(self, agent: object) -> None:
-        self._agent = agent
+        self.agent = agent
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
         queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
 
         async def worker() -> None:
             try:
-                await self._agent.run_streaming(prompt, queue)
+                await self.agent.run_streaming(prompt, queue)
             except Exception as exc:
                 from mcc_core import Error as ErrorEvent
 

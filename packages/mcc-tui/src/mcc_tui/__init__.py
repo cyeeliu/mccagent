@@ -10,7 +10,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from mcc_core import AgentEvent
+from mcc_core import AgentEvent, PermissionDecision
 from rich.console import Console
 from rich.live import Live
 
@@ -24,6 +24,7 @@ class TuiHandles:
     events: asyncio.Queue[AgentEvent]
     input_tx: asyncio.Queue[str]
     session_short_id: str
+    permission_tx: asyncio.Queue[PermissionDecision] | None = None
 
 
 async def run_tui(handles: TuiHandles, console: Console | None = None) -> None:
@@ -77,6 +78,10 @@ async def _step(app: App, handles: TuiHandles, key_queue: asyncio.Queue) -> bool
 def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
     if key in (Key.ctrl_c, Key.ctrl_d):
         return True
+    if app.permission_feedback_mode:
+        return _handle_feedback_key(app, handles, key)
+    if app.pending_permission is not None:
+        return _handle_permission_key(app, handles, key)
     if key == Key.escape and app.agent_busy:
         app.push(_notice_item("(cancel requested)"))
         return False
@@ -120,6 +125,53 @@ def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
     if isinstance(key, str):
         app.input = app.input[: app.cursor] + key + app.input[app.cursor :]
         app.cursor += 1
+    return False
+
+
+def _send_decision(
+    app: App, handles: TuiHandles, action: str, feedback: str = ""
+) -> None:
+    """向 agent 回传当前权限请求的决策，并弹出下一个排队请求。"""
+    req = app.resolve_permission()
+    if req is not None and handles.permission_tx is not None:
+        handles.permission_tx.put_nowait(
+            PermissionDecision(
+                request_id=req.id, action=action, feedback=feedback
+            )
+        )
+    app.push(
+        _notice_item(
+            f"⚠ permission {'allowed' if action in ('allow', 'allow_always') else 'denied'}"
+            + (" (always)" if action == "allow_always" else "")
+            + (f": {feedback}" if feedback else "")
+        )
+    )
+
+
+def _handle_permission_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
+    if key == "y":
+        _send_decision(app, handles, "allow")
+    elif key == "a":
+        _send_decision(app, handles, "allow_always")
+    elif key == "n" or key == Key.escape:
+        _send_decision(app, handles, "deny")
+    elif key == "e":
+        app.permission_feedback_mode = True
+        app.permission_feedback = ""
+    return False
+
+
+def _handle_feedback_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
+    if key == Key.enter:
+        feedback = app.permission_feedback.strip()
+        _send_decision(app, handles, "feedback", feedback)
+    elif key == Key.escape:
+        app.permission_feedback_mode = False
+        app.permission_feedback = ""
+    elif key == Key.backspace:
+        app.permission_feedback = app.permission_feedback[:-1]
+    elif isinstance(key, str):
+        app.permission_feedback += key
     return False
 
 

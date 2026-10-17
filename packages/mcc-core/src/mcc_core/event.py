@@ -6,7 +6,8 @@ TUI / headless printer 消费它们做流式渲染。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -52,6 +53,17 @@ class Error:
 class PermissionRequest:
     id: int
     message: str
+    tool_name: str = ""
+    tool_input: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PermissionDecision:
+    """用户对权限请求的决策（TUI → AgentLoop 回传）。"""
+
+    request_id: int
+    action: str  # "allow" | "allow_always" | "deny" | "feedback"
+    feedback: str = ""
 
 
 AgentEvent = (

@@ -53,6 +53,10 @@ class App:
     agent_busy: bool = False
     cost_usd: float = 0.0
     scroll: int = 0
+    pending_permission: PermissionRequest | None = None
+    permission_queue: list[PermissionRequest] = field(default_factory=list)
+    permission_feedback: str = ""
+    permission_feedback_mode: bool = False
 
     def push(self, item: RenderItem) -> None:
         self.items.append(item)
@@ -62,6 +66,16 @@ class App:
             text = self.streaming_text
             self.streaming_text = ""
             self.push(RenderItem(kind="assistant", text=text))
+
+    def resolve_permission(self) -> PermissionRequest | None:
+        """结束当前确认（无论用户选了什么），弹出下一个排队的请求。"""
+        resolved = self.pending_permission
+        self.pending_permission = (
+            self.permission_queue.pop(0) if self.permission_queue else None
+        )
+        self.permission_feedback = ""
+        self.permission_feedback_mode = False
+        return resolved
 
     def apply_event(self, ev: AgentEvent) -> None:
         if isinstance(ev, UserEcho):
@@ -104,4 +118,7 @@ class App:
             self.push(RenderItem(kind="error", text=ev.text))
             self.agent_busy = False
         elif isinstance(ev, PermissionRequest):
-            self.push(RenderItem(kind="notice", text=f"⚠ permission: {ev.message}"))
+            if self.pending_permission is None:
+                self.pending_permission = ev
+            else:
+                self.permission_queue.append(ev)

@@ -168,7 +168,12 @@ async def _run_tui_mode(source: EventSource) -> int:
 
     event_queue: asyncio.Queue = asyncio.Queue()
     input_queue: asyncio.Queue = asyncio.Queue()
+    permission_queue: asyncio.Queue = asyncio.Queue()
     session_id = uuid.uuid4().hex[:8]
+
+    agent = getattr(source, "agent", None)
+    if agent is not None:
+        agent.permission_responses = permission_queue
 
     async def agent_worker() -> None:
         while True:
@@ -184,7 +189,10 @@ async def _run_tui_mode(source: EventSource) -> int:
     worker = asyncio.create_task(agent_worker())
     try:
         handles = TuiHandles(
-            events=event_queue, input_tx=input_queue, session_short_id=session_id
+            events=event_queue,
+            input_tx=input_queue,
+            session_short_id=session_id,
+            permission_tx=permission_queue,
         )
         await run_tui(handles)
     finally:

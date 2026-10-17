@@ -382,10 +382,12 @@ async def test_ask_sends_permission_request_event(ctx, registry):
     perm_events = [e for e in events if isinstance(e, PermissionRequest)]
     assert len(perm_events) == 1
     assert "run_bash" in perm_events[0].message
+    assert perm_events[0].tool_name == "run_bash"
+    assert perm_events[0].tool_input == {"command": "echo hi"}
 
     tool_end = [e for e in events if isinstance(e, ToolCallEnd)][0]
     assert tool_end.is_error is True
-    assert "interactive permission required" in tool_end.output
+    assert "permission denied by user" in tool_end.output
 
 
 # ---------- Shell hook integration ----------

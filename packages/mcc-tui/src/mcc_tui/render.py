@@ -148,10 +148,41 @@ def build_renderable(app: App, console: Console) -> Layout:
     )
     msg_panel = Panel(Group(*visible), title=title, border_style="blue")
 
-    cursor_display = app.input[: app.cursor] + "▎" + app.input[app.cursor :]
-    input_panel = Panel(Text(cursor_display), title=" input ", border_style="cyan")
+    if app.permission_feedback_mode:
+        cursor_display = app.permission_feedback + "▎"
+        input_panel = Panel(
+            Text(cursor_display),
+            title=" feedback — denied + attach your comment ",
+            border_style="yellow",
+        )
+    elif app.pending_permission is not None:
+        p = app.pending_permission
+        prompt = Text()
+        prompt.append("⚠ ", style="bold yellow")
+        prompt.append(p.message, style="bold")
+        prompt.append("   ")
+        prompt.append("[y]", style="bold green")
+        prompt.append(" allow  ")
+        prompt.append("[a]", style="bold green")
+        prompt.append(" always  ")
+        prompt.append("[n]", style="bold red")
+        prompt.append(" deny  ")
+        prompt.append("[e]", style="bold cyan")
+        prompt.append(" deny+comment")
+        input_panel = Panel(
+            prompt, title=" permission required ", border_style="yellow"
+        )
+    else:
+        cursor_display = app.input[: app.cursor] + "▎" + app.input[app.cursor :]
+        input_panel = Panel(Text(cursor_display), title=" input ", border_style="cyan")
 
-    if app.agent_busy:
+    if app.permission_feedback_mode:
+        status = Text(" Enter: submit · Esc: back to choice ")
+    elif app.pending_permission is not None:
+        status = Text()
+        status.append("⚠ ", style="bold yellow")
+        status.append("y: allow · a: always · n: deny · e: deny with comment")
+    elif app.agent_busy:
         status = Text()
         status.append("●", style="yellow")
         status.append(" thinking… (Esc cancel · Ctrl-C quit)")
