@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import os
 from collections import defaultdict
@@ -85,6 +86,9 @@ class ShellHook:
     通过环境变量传递上下文，脚本退出码决定 allow/deny：
     - exit 0 → allow
     - exit non-zero → deny（stderr 作为 message）
+
+    matcher 按工具名过滤（glob 语法，"*" 或空匹配全部），
+    仅对 pre/post-tool 钩子生效，生命周期钩子不经过过滤。
     """
 
     def __init__(
@@ -92,12 +96,22 @@ class ShellHook:
         hook_type: HookType,
         script_path: str | Path,
         timeout: float = 10.0,
+        matcher: str = "*",
     ) -> None:
         self.hook_type = hook_type
         self._script = str(script_path)
         self._timeout = timeout
+        self._matcher = matcher or "*"
+
+    def matches(self, tool_name: str) -> bool:
+        if self._matcher in ("*", ""):
+            return True
+        return fnmatch.fnmatch(tool_name, self._matcher)
 
     async def run(self, ctx: HookContext) -> HookResult:
+        if ctx.tool_name and not self.matches(ctx.tool_name):
+            return HookResult()
+
         env = {
             **os.environ,
             "MCC_HOOK_TYPE": ctx.hook_type.value,
@@ -154,8 +168,9 @@ class HookRegistry:
         hook_type: HookType,
         script_path: str | Path,
         timeout: float = 10.0,
+        matcher: str = "*",
     ) -> None:
-        self.register(ShellHook(hook_type, script_path, timeout))
+        self.register(ShellHook(hook_type, script_path, timeout, matcher))
 
     def get(self, hook_type: HookType) -> list[Hook]:
         return self._hooks.get(hook_type, [])

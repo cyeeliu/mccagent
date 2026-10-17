@@ -418,3 +418,180 @@ async def test_shell_hook_integration_pre_tool(ctx, registry, tmp_path):
     log_content = log_file.read_text()
     assert "pre_tool" in log_content
     assert "write_file" in log_content
+
+
+# ---------- ShellHook matcher ----------
+
+
+@pytest.mark.asyncio
+async def test_shell_hook_matcher_wildcard_runs_for_any_tool(tmp_path: Path):
+    script = tmp_path / "hook.sh"
+    script.write_text("#!/usr/bin/env bash\nexit 0\n")
+    os.chmod(script, 0o755)
+
+    hook = ShellHook(HookType.PRE_TOOL, script, matcher="*")
+    ctx = HookContext(hook_type=HookType.PRE_TOOL, tool_name="write_file", cwd=tmp_path)
+    result = await hook.run(ctx)
+    assert result.allow is True
+    assert result.message == ""
+
+
+@pytest.mark.asyncio
+async def test_shell_hook_matcher_specific_tool(tmp_path: Path):
+    script = tmp_path / "hook.sh"
+    script.write_text("#!/usr/bin/env bash\nexit 1\n")
+    os.chmod(script, 0o755)
+
+    hook = ShellHook(HookType.PRE_TOOL, script, matcher="run_bash")
+
+    matched = HookContext(hook_type=HookType.PRE_TOOL, tool_name="run_bash", cwd=tmp_path)
+    result = await hook.run(matched)
+    assert result.allow is False
+
+    skipped = HookContext(hook_type=HookType.PRE_TOOL, tool_name="write_file", cwd=tmp_path)
+    result = await hook.run(skipped)
+    assert result.allow is True
+    assert result.message == ""
+
+
+@pytest.mark.asyncio
+async def test_shell_hook_matcher_glob_pattern(tmp_path: Path):
+    script = tmp_path / "hook.sh"
+    script.write_text("#!/usr/bin/env bash\nexit 1\n")
+    os.chmod(script, 0o755)
+
+    hook = ShellHook(HookType.PRE_TOOL, script, matcher="*_file")
+
+    assert hook.matches("write_file") is True
+    assert hook.matches("read_file") is True
+    assert hook.matches("run_bash") is False
+
+
+@pytest.mark.asyncio
+async def test_shell_hook_matcher_empty_matches_all():
+    hook = ShellHook(HookType.PRE_TOOL, "/dev/null", matcher="")
+    assert hook.matches("anything") is True
+
+
+@pytest.mark.asyncio
+async def test_shell_hook_matcher_skips_in_agent_loop(ctx, registry, tmp_path):
+    log_file = tmp_path / "hook.log"
+    script = tmp_path / "log_hook.sh"
+    script.write_text(f'#!/usr/bin/env bash\necho "$MCC_TOOL_NAME" >> "{log_file}"\nexit 0\n')
+    os.chmod(script, 0o755)
+
+    hooks = HookRegistry()
+    hooks.add_shell(HookType.PRE_TOOL, script, matcher="run_bash")
+
+    llm = MockLlm([
+        _tool_turn("t1", "write_file", {"path": "out.txt", "content": "x"}),
+        single_text_turn("done"),
+    ])
+    agent = AgentLoopBuilder(llm, registry, ctx).hooks(hooks).build()
+
+    queue: asyncio.Queue = asyncio.Queue()
+    await agent.run_streaming("test", queue)
+
+    assert not log_file.exists()
+
+
+# ---------- Config-driven hook registration ----------
+
+
+class TestBuildHooks:
+    def test_empty_config_returns_none(self, tmp_path: Path):
+        from mcc_cli import _build_hooks
+        from mcc_config import Config
+
+        assert _build_hooks(Config(), tmp_path) is None
+
+    def test_registers_pre_and_post_hooks(self, tmp_path: Path):
+        from mcc_cli import _build_hooks
+        from mcc_config import Config, HookEntry, HooksConfig
+        from mcc_harness import HookType
+
+        config = Config(
+            hooks=HooksConfig(
+                pre_tool_use=[HookEntry(matcher="run_bash", command="hooks/audit.sh")],
+                post_tool_use=[HookEntry(matcher="*", command="/abs/post.sh")],
+            )
+        )
+        hook_registry = _build_hooks(config, tmp_path)
+        assert hook_registry is not None
+        assert len(hook_registry.get(HookType.PRE_TOOL)) == 1
+        assert len(hook_registry.get(HookType.POST_TOOL)) == 1
+
+    def test_relative_script_resolved_against_work_dir(self, tmp_path: Path):
+        from mcc_cli import _build_hooks
+        from mcc_config import Config, HookEntry, HooksConfig
+        from mcc_harness import HookType
+
+        config = Config(
+            hooks=HooksConfig(
+                pre_tool_use=[HookEntry(matcher="*", command="hooks/audit.sh")],
+            )
+        )
+        hook_registry = _build_hooks(config, tmp_path)
+        hook = hook_registry.get(HookType.PRE_TOOL)[0]
+        assert hook._script == str(tmp_path / "hooks" / "audit.sh")
+
+    def test_absolute_script_kept_as_is(self, tmp_path: Path):
+        from mcc_cli import _build_hooks
+        from mcc_config import Config, HookEntry, HooksConfig
+        from mcc_harness import HookType
+
+        config = Config(
+            hooks=HooksConfig(
+                pre_tool_use=[HookEntry(matcher="*", command="/usr/local/bin/audit.sh")],
+            )
+        )
+        hook_registry = _build_hooks(config, tmp_path)
+        hook = hook_registry.get(HookType.PRE_TOOL)[0]
+        assert hook._script == "/usr/local/bin/audit.sh"
+
+    def test_matcher_passed_through(self, tmp_path: Path):
+        from mcc_cli import _build_hooks
+        from mcc_config import Config, HookEntry, HooksConfig
+        from mcc_harness import HookType
+
+        config = Config(
+            hooks=HooksConfig(
+                pre_tool_use=[HookEntry(matcher="run_bash", command="/x.sh")],
+            )
+        )
+        hook_registry = _build_hooks(config, tmp_path)
+        hook = hook_registry.get(HookType.PRE_TOOL)[0]
+        assert hook.matches("run_bash") is True
+        assert hook.matches("write_file") is False
+
+
+@pytest.mark.asyncio
+async def test_config_hooks_end_to_end(ctx, registry, tmp_path, monkeypatch):
+    log_file = tmp_path / "audit.log"
+    script = tmp_path / "audit.sh"
+    script.write_text(f'#!/usr/bin/env bash\necho "$MCC_TOOL_NAME" >> "{log_file}"\nexit 0\n')
+    os.chmod(script, 0o755)
+
+    from mcc_cli import _build_hooks
+    from mcc_config import Config, HookEntry, HooksConfig
+
+    config = Config(
+        hooks=HooksConfig(
+            pre_tool_use=[HookEntry(matcher="write_*", command=str(script))],
+        )
+    )
+    hook_registry = _build_hooks(config, tmp_path)
+    assert hook_registry is not None
+
+    llm = MockLlm([
+        _tool_turn("t1", "write_file", {"path": "out.txt", "content": "x"}),
+        _tool_turn("t2", "read_file", {"path": "out.txt"}),
+        single_text_turn("done"),
+    ])
+    agent = AgentLoopBuilder(llm, registry, ctx).hooks(hook_registry).build()
+
+    queue: asyncio.Queue = asyncio.Queue()
+    await agent.run_streaming("test", queue)
+
+    logged = log_file.read_text().splitlines()
+    assert logged == ["write_file"]

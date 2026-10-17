@@ -56,6 +56,31 @@ def _system_prompt() -> str:
     )
 
 
+def _build_hooks(config, work_dir: Path):
+    """从配置构建钩子注册表：pre/post_tool_use 条目 → ShellHook。
+
+    command 为脚本路径，相对路径基于工作目录解析。
+    无钩子配置时返回 None。
+    """
+    from mcc_harness import HookRegistry, HookType
+
+    entries = [
+        (HookType.PRE_TOOL, e) for e in config.hooks.pre_tool_use
+    ] + [
+        (HookType.POST_TOOL, e) for e in config.hooks.post_tool_use
+    ]
+    if not entries:
+        return None
+
+    hook_registry = HookRegistry()
+    for hook_type, entry in entries:
+        script = Path(entry.command)
+        if not script.is_absolute():
+            script = work_dir / script
+        hook_registry.add_shell(hook_type, script, matcher=entry.matcher)
+    return hook_registry
+
+
 def _build_source(
     work_dir: Path,
     model: str | None,
@@ -101,6 +126,10 @@ def _build_source(
 
     builder = builder.max_cost_usd(config.budget.max_usd_per_session)
     builder = builder.max_iterations(config.budget.max_iterations)
+
+    hook_registry = _build_hooks(config, work_dir)
+    if hook_registry is not None:
+        builder = builder.hooks(hook_registry)
 
     agent = builder.build()
     return AgentEventSource(agent)
