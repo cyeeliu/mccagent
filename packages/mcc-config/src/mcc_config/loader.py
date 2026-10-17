@@ -15,7 +15,47 @@ from mcc_config.models import (
     BudgetConfig,
     Config,
     ModelConfig,
+    PermissionConfig,
 )
+
+_DEFAULT_CONFIG = Config(
+    model=ModelConfig(main="claude-sonnet-4-6"),
+    permissions=PermissionConfig(
+        mode="default",
+        allow=[],
+        deny=[],
+    ),
+    budget=BudgetConfig(max_usd_per_session=2.0, max_iterations=40),
+)
+
+
+def _default_json() -> str:
+    return json.dumps(_DEFAULT_CONFIG.model_dump(), indent=2, ensure_ascii=False)
+
+
+def ensure_default_config(cwd: Path) -> Config:
+    """确保配置目录与文件存在，返回合并后的配置。
+
+    首次运行时在 ~/.mcc/ 和 cwd/.mcc/ 下创建默认 settings.json。
+    """
+    home_dir = Path.home()
+    home_path = home_dir / ".mcc" / "settings.json"
+    project_path = cwd / ".mcc" / "settings.json"
+
+    if not home_path.exists():
+        home_path.parent.mkdir(parents=True, exist_ok=True)
+        home_path.write_text(_default_json(), encoding="utf-8")
+    if not project_path.exists():
+        project_path.parent.mkdir(parents=True, exist_ok=True)
+        project_path.write_text(_default_json(), encoding="utf-8")
+
+    return _read_and_merge(home_path, project_path)
+
+
+def _read_and_merge(home_path: Path, project_path: Path) -> Config:
+    home = _read_config(home_path)
+    project = _read_config(project_path)
+    return merge(home, project)
 
 
 def _read_config(path: Path) -> Config | None:
@@ -48,9 +88,7 @@ def merge(home: Config | None, project: Config | None) -> Config:
 
 
 async def load(cwd: Path) -> Config:
-    from pathlib import Path as _P
-
-    home_dir = _P.home()
-    home = _read_config(home_dir / ".mcc" / "settings.json")
-    project = _read_config(cwd / ".mcc" / "settings.json")
-    return merge(home, project)
+    home_dir = Path.home()
+    home_path = home_dir / ".mcc" / "settings.json"
+    project_path = cwd / ".mcc" / "settings.json"
+    return _read_and_merge(home_path, project_path)

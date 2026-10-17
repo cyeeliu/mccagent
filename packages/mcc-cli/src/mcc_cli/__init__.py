@@ -63,10 +63,12 @@ def _build_source(
     mock_script: str | None,
 ) -> EventSource:
     """构建事件源：mock 模式用 MockLlm，否则用真实 LLM。"""
+    from mcc_config import ensure_default_config
     from mcc_core import ToolContext
-    from mcc_harness import AgentLoopBuilder
+    from mcc_harness import AgentLoopBuilder, PermissionChecker
     from mcc_tools import default_registry
 
+    config = ensure_default_config(work_dir)
     registry = default_registry()
     ctx = ToolContext(cwd=work_dir, session_id=uuid.uuid4().hex[:8])
 
@@ -90,8 +92,16 @@ def _build_source(
             sys.exit(2)
 
     builder = AgentLoopBuilder(llm, registry, ctx).system(_system_prompt())
-    if model:
-        builder = builder.model(model)
+
+    resolved_model = model or os.environ.get("MODEL") or config.model.main
+    builder = builder.model(resolved_model)
+
+    checker = PermissionChecker(config.permissions)
+    builder = builder.permission(checker)
+
+    builder = builder.max_cost_usd(config.budget.max_usd_per_session)
+    builder = builder.max_iterations(config.budget.max_iterations)
+
     agent = builder.build()
     return AgentEventSource(agent)
 
