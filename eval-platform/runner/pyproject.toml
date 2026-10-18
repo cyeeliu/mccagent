@@ -9,6 +9,14 @@ dependencies = [
     "pydantic>=2.9",
 ]
 
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+langgraph = [
+    "langgraph>=0.2",
+    "langchain-anthropic>=0.2",
+    "langchain-openai>=0.2",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

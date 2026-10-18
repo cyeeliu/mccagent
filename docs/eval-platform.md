@@ -57,7 +57,28 @@ uv run --all-packages pytest
 ## 路线图
 
 1. 事件契约与 server 骨架（本页所述，已完成）
-2. server 完整实现：REST 路由、SSE 广播、租约调度、轨迹存储、指标暴露
-3. runner 完整实现：执行主循环、心跳续租、mock 与 mcc 适配器、评分
+2. server 完整实现：REST 路由、SSE 广播、租约调度、轨迹存储、指标暴露（已完成）
+3. runner 完整实现：执行主循环、心跳续租、mock / anthropic / langgraph 适配器、评分（已完成）
 4. web 功能页面：批次看板、轨迹查看器、对比报告、仪表盘
 5. 部署与运维：docker compose 全栈、Prometheus/Grafana、K8s 配置
+
+## server 与 runner 内部结构
+
+```
+server/src/eval_server/
+├── api.py        三组路由（/api 公开、/internal Runner、系统端点）+ 端点契约清单
+├── scheduler.py  租约领取 / 心跳续租 / reaper 自愈（FOR UPDATE SKIP LOCKED）
+├── store.py      轨迹存储门面：本地目录与 S3/MinIO 两个后端
+├── stream.py     SSE 广播中心：按 run / batch 主题分发，慢消费者丢帧计 lagged
+├── metrics.py    Prometheus 指标（每实例独立 registry）
+├── db.py         DbLike/ConnLike 协议 + 迁移执行（幂等）
+└── app.py        组装：依赖注入、异常处理、CORS、HTTP 指标中间件
+
+runner/src/runner/
+├── main.py       主循环：lease → 执行 → 批量上报 JSONL → complete；心跳后台任务
+├── scoring.py    expectations 评分：四类断言加权叠加，阈值判定
+└── adapters/     适配器：mock（零依赖演示）、anthropic、langgraph（惰性导入）
+```
+
+测试基线：server 走 FastAPI TestClient + 内存数据库替身全链路验证；
+runner 用 httpx MockTransport 模拟内部接口契约；真 PG 集成测试按需开启。
