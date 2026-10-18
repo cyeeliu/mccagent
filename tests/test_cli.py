@@ -159,3 +159,101 @@ class TestResumeCmd:
         result = runner.invoke(main, ["resume", "r1"])
         assert result.exit_code == 2
         assert "API key" in result.output
+
+
+def _config(main="claude-opus-4-8", subagent=None, summarize=None):
+    from mcc_config import Config, ModelConfig
+
+    return Config(
+        model=ModelConfig(main=main, subagent=subagent, summarize=summarize)
+    )
+
+
+class TestResolveModel:
+    def test_explicit_beats_env_and_json(self, monkeypatch):
+        from mcc_cli import _resolve_model
+
+        monkeypatch.setenv("MODEL", "env-model")
+        cfg = _config(summarize="json-sum")
+        assert _resolve_model(cfg, "summarize", "cli-model") == "cli-model"
+
+    def test_env_beats_json(self, monkeypatch):
+        from mcc_cli import _resolve_model
+
+        monkeypatch.setenv("MODEL", "env-model")
+        cfg = _config(main="json-main", summarize="json-sum")
+        assert _resolve_model(cfg, "main") == "env-model"
+        assert _resolve_model(cfg, "summarize") == "env-model"
+        assert _resolve_model(cfg, "subagent") == "env-model"
+
+    def test_json_kind_when_env_unset(self, monkeypatch):
+        from mcc_cli import _resolve_model
+
+        monkeypatch.delenv("MODEL", raising=False)
+        cfg = _config(main="json-main", summarize="json-sum")
+        assert _resolve_model(cfg, "summarize") == "json-sum"
+        assert _resolve_model(cfg, "main") == "json-main"
+
+    def test_unconfigured_kind_falls_back_to_main(self, monkeypatch):
+        from mcc_cli import _resolve_model
+
+        monkeypatch.delenv("MODEL", raising=False)
+        cfg = _config(main="the-main")
+        assert _resolve_model(cfg, "summarize") == "the-main"
+        assert _resolve_model(cfg, "subagent") == "the-main"
+
+    def test_default_when_nothing_configured(self, monkeypatch):
+        from mcc_cli import _resolve_model
+
+        monkeypatch.delenv("MODEL", raising=False)
+        assert _resolve_model(_config(), "main") == "claude-opus-4-8"
+
+
+class TestBuildSourceModelResolution:
+    def test_both_models_fall_back_to_main(self, tmp_path: Path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.delenv("MODEL", raising=False)
+        source = _build_source(tmp_path, None, True, None)
+        assert source.agent.model == "claude-opus-4-8"
+        assert source.agent.summarize_model == "claude-opus-4-8"
+
+    def test_env_model_overrides_both(self, tmp_path: Path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("MODEL", "env-model")
+        source = _build_source(tmp_path, None, True, None)
+        assert source.agent.model == "env-model"
+        assert source.agent.summarize_model == "env-model"
+
+    def test_cli_model_only_overrides_main(self, tmp_path: Path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.delenv("MODEL", raising=False)
+        source = _build_source(tmp_path, "cli-main", True, None)
+        assert source.agent.model == "cli-main"
+        assert source.agent.summarize_model == "claude-opus-4-8"
+
+    def test_json_summarize_respected(self, tmp_path: Path, monkeypatch):
+        from mcc_cli import _build_source
+
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("MODEL", raising=False)
+        _build_source(tmp_path, None, True, None)
+
+        settings = tmp_path / ".mcc" / "settings.json"
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        data["model"] = {
+            "main": "proj-main",
+            "subagent": None,
+            "summarize": "proj-sum",
+        }
+        settings.write_text(json.dumps(data), encoding="utf-8")
+
+        source = _build_source(tmp_path, None, True, None)
+        assert source.agent.model == "proj-main"
+        assert source.agent.summarize_model == "proj-sum"

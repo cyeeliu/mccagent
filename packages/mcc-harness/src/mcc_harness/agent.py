@@ -43,6 +43,7 @@ from mcc_llm import (
     TextDelta as LlmTextDelta,
 )
 from mcc_session import (
+    TITLE_MODEL,
     SessionRecorder,
     build_turn_snapshot,
     maybe_generate_title,
@@ -148,6 +149,7 @@ class AgentLoop:
         permission_timeout_secs: float = 120.0,
         recorder: SessionRecorder | None = None,
         history: list[Message] | None = None,
+        summarize_model: str | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -163,6 +165,7 @@ class AgentLoop:
         self.permission_responses = permission_responses
         self.permission_timeout_secs = permission_timeout_secs
         self.recorder = recorder
+        self.summarize_model = summarize_model
         self.history: list[Message] = list(history) if history else []
 
     async def run_streaming(
@@ -315,7 +318,10 @@ class AgentLoop:
             await self.recorder.record(snap)
             if self.recorder.meta.title is None:
                 title = await maybe_generate_title(
-                    self.recorder.meta, self.llm, snap
+                    self.recorder.meta,
+                    self.llm,
+                    snap,
+                    model=self.summarize_model or TITLE_MODEL,
                 )
                 if title:
                     await self.recorder.save_meta()
@@ -554,6 +560,7 @@ class AgentLoopBuilder:
         self._permission_timeout_secs = 120.0
         self._recorder: SessionRecorder | None = None
         self._history: list[Message] | None = None
+        self._summarize_model: str | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -605,6 +612,10 @@ class AgentLoopBuilder:
         self._history = list(messages)
         return self
 
+    def summarize_model(self, m: str) -> AgentLoopBuilder:
+        self._summarize_model = m
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -622,4 +633,5 @@ class AgentLoopBuilder:
             permission_timeout_secs=self._permission_timeout_secs,
             recorder=self._recorder,
             history=self._history,
+            summarize_model=self._summarize_model,
         )

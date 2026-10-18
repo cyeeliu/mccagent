@@ -9,9 +9,11 @@ from pydantic import BaseModel, Field
 
 
 class ModelConfig(BaseModel):
+    """模型配置：main 为主模型，其余类型未配置时回落 main。"""
+
     main: str = "claude-opus-4-8"
-    subagent: str = "claude-sonnet-4-6"
-    summarize: str = "claude-haiku-4-5-20251001"
+    subagent: str | None = None
+    summarize: str | None = None
 
 
 class PermissionConfig(BaseModel):

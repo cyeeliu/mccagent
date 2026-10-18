@@ -17,6 +17,11 @@ def default_sessions_base() -> Path:
     return Path.home() / ".mcc" / "sessions"
 
 TITLE_MODEL = "claude-haiku-4-5"
+"""标题生成模型的最终兜底值。
+
+调用方（CLI 层）应按"环境变量 MODEL > 配置 summarize > 配置 main"
+解析后显式传入；仅当未传时使用此默认。
+"""
 
 
 def _utcnow() -> datetime:

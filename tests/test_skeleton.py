@@ -139,7 +139,8 @@ def test_config_defaults():
 
     c = Config()
     assert c.model.main == "claude-opus-4-8"
-    assert c.model.subagent == "claude-sonnet-4-6"
+    assert c.model.subagent is None
+    assert c.model.summarize is None
     assert c.budget.max_usd_per_session == 2.0
     assert c.budget.max_iterations == 40
     assert c.permissions.mode is None
@@ -195,6 +196,50 @@ def test_config_load_from_settings_json(tmp_path: Path):
     cfg = asyncio.run(load(tmp_path))
     assert cfg.model.main == "gpt-4o"
     assert cfg.budget.max_usd_per_session == 5.0
+
+
+def test_config_model_defaults_none():
+    from mcc_config import Config
+
+    c = Config()
+    assert c.model.main == "claude-opus-4-8"
+    assert c.model.subagent is None
+    assert c.model.summarize is None
+
+
+def test_config_merge_model_fieldwise():
+    from mcc_config import Config, ModelConfig, merge
+
+    home = Config(model=ModelConfig(main="home-main", summarize="home-sum"))
+    proj = Config(model=ModelConfig(main="proj-main"))
+    merged = merge(home, proj)
+    assert merged.model.main == "proj-main"
+    assert merged.model.summarize == "home-sum"
+
+
+def test_config_merge_model_subagent_only():
+    from mcc_config import Config, ModelConfig, merge
+
+    home = Config(model=ModelConfig(main="home-main", subagent="home-sub"))
+    proj = Config(model=ModelConfig(subagent="proj-sub", summarize="proj-sum"))
+    merged = merge(home, proj)
+    assert merged.model.main == "home-main"
+    assert merged.model.subagent == "proj-sub"
+    assert merged.model.summarize == "proj-sum"
+
+
+def test_config_legacy_json_only_main(tmp_path: Path):
+    from mcc_config import load
+
+    settings = tmp_path / ".mcc" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"model": {"main": "old-main"}}))
+    import asyncio
+
+    cfg = asyncio.run(load(tmp_path))
+    assert cfg.model.main == "old-main"
+    assert cfg.model.subagent is None
+    assert cfg.model.summarize is None
 
 
 # ---------- 其余 package ----------

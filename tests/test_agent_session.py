@@ -175,6 +175,49 @@ class TestRecorderWiring:
         )
 
 
+class TestSummarizeModel:
+    async def test_title_uses_configured_summarize_model(
+        self, ctx, base, tmp_path
+    ):
+        llm = CapturingLlm([
+            single_text_turn("回答"),
+            single_text_turn("标题"),
+        ])
+        recorder = SessionRecorder.open_sync("sm1", tmp_path, base_dir=base)
+        agent = (
+            AgentLoopBuilder(llm, default_registry(), ctx)
+            .recorder(recorder)
+            .summarize_model("gpt-4o-mini")
+            .build()
+        )
+        await agent.run("问题")
+
+        complete_reqs = [r for kind, r in llm.requests if kind == "complete"]
+        assert len(complete_reqs) == 1
+        assert complete_reqs[0].model == "gpt-4o-mini"
+        assert recorder.meta.title == "标题"
+
+    async def test_title_falls_back_without_summarize_model(
+        self, ctx, base, tmp_path
+    ):
+        from mcc_session import TITLE_MODEL
+
+        llm = CapturingLlm([
+            single_text_turn("回答"),
+            single_text_turn("标题"),
+        ])
+        recorder = SessionRecorder.open_sync("sm2", tmp_path, base_dir=base)
+        agent = (
+            AgentLoopBuilder(llm, default_registry(), ctx)
+            .recorder(recorder)
+            .build()
+        )
+        await agent.run("问题")
+
+        complete_reqs = [r for kind, r in llm.requests if kind == "complete"]
+        assert complete_reqs[0].model == TITLE_MODEL
+
+
 class TestHistoryAccumulation:
     async def test_history_accumulates_across_runs(self, ctx):
         llm = CapturingLlm([

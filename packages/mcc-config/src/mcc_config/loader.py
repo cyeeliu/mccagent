@@ -3,7 +3,8 @@
 home (~/.mcc/settings.json) 与 project (cwd/.mcc/settings.json) 合并：
 - permissions.deny / allow 追加
 - permissions.mode project 覆盖（若设置）
-- budget / model 仅在 project 显式设置（非默认值）时覆盖
+- budget / model.main 仅在 project 显式设置（非默认值）时覆盖
+- model.subagent / model.summarize 在 project 显式设置（非 null）时覆盖
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from mcc_config.models import (
 )
 
 _DEFAULT_CONFIG = Config(
-    model=ModelConfig(main="claude-sonnet-4-6"),
+    model=ModelConfig(),
     permissions=PermissionConfig(
         mode="default",
         allow=[],
@@ -81,8 +82,12 @@ def merge(home: Config | None, project: Config | None) -> Config:
 
     if project.budget != BudgetConfig():
         base.budget = project.budget
-    if project.model != ModelConfig():
-        base.model = project.model
+    if project.model.main != ModelConfig().main:
+        base.model.main = project.model.main
+    if project.model.subagent is not None:
+        base.model.subagent = project.model.subagent
+    if project.model.summarize is not None:
+        base.model.summarize = project.model.summarize
 
     return base
 

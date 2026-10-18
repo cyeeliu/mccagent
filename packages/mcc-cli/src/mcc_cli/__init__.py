@@ -82,6 +82,25 @@ def _build_hooks(config, work_dir: Path):
     return hook_registry
 
 
+def _resolve_model(
+    config, kind: str = "main", explicit: str | None = None
+) -> str:
+    """按用途解析模型：显式参数 > 环境变量 MODEL > 配置该类型 > 配置 main。
+
+    main / subagent / summarize 等类型共用此逻辑；
+    配置只写了 main 时，其余类型一律回落 main。
+    """
+    if explicit:
+        return explicit
+    env = os.environ.get("MODEL")
+    if env:
+        return env
+    configured = getattr(config.model, kind)
+    if configured:
+        return configured
+    return config.model.main
+
+
 def _build_source(
     work_dir: Path,
     model: str | None,
@@ -136,8 +155,8 @@ def _build_source(
     recorder = SessionRecorder.open_sync(sid, work_dir)
     builder = AgentLoopBuilder(llm, registry, ctx).system(system).recorder(recorder)
 
-    resolved_model = model or os.environ.get("MODEL") or config.model.main
-    builder = builder.model(resolved_model)
+    builder = builder.model(_resolve_model(config, "main", model))
+    builder = builder.summarize_model(_resolve_model(config, "summarize"))
 
     checker = PermissionChecker(config.permissions)
     builder = builder.permission(checker)
