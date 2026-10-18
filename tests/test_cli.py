@@ -191,6 +191,95 @@ class TestResumeCmd:
         assert "API key" in result.output
 
 
+class TestHistoryEvents:
+    @staticmethod
+    def _history():
+        from mcc_core import (
+            Message,
+            Role,
+            TextBlock,
+            ToolResultBlock,
+            ToolUseBlock,
+        )
+
+        return [
+            Message.user("帮我修 bug"),
+            Message(
+                role=Role.assistant,
+                content=[
+                    TextBlock(text="先看文件"),
+                    ToolUseBlock(id="t1", name="read_file", input={"path": "a.py"}),
+                ],
+            ),
+            Message(
+                role=Role.tool,
+                content=[ToolResultBlock(tool_use_id="t1", content="x" * 600)],
+            ),
+            Message(role=Role.assistant, content=[TextBlock(text="修好了")]),
+        ]
+
+    def test_event_sequence(self):
+        from mcc_cli import _history_events
+
+        events = _history_events(self._history(), cost_usd=0.05)
+        kinds = [type(e).__name__ for e in events]
+        assert kinds == [
+            "UserEcho",
+            "TextDelta",
+            "ToolCallStart",
+            "ToolCallEnd",
+            "TextDelta",
+            "TurnEnd",
+        ]
+        assert events[-1].cost_usd == 0.05
+
+    def test_tool_output_truncated_to_500(self):
+        from mcc_cli import _history_events
+
+        events = _history_events(self._history())
+        end = [e for e in events if type(e).__name__ == "ToolCallEnd"][0]
+        assert len(end.output) == 500
+
+    def test_tool_error_flag_preserved(self):
+        from mcc_cli import _history_events
+        from mcc_core import Message, Role, ToolResultBlock
+
+        history = [
+            Message(
+                role=Role.tool,
+                content=[ToolResultBlock(tool_use_id="t9", content="boom", is_error=True)],
+            ),
+        ]
+        events = _history_events(history)
+        end = [e for e in events if type(e).__name__ == "ToolCallEnd"][0]
+        assert end.is_error
+
+    def test_empty_history_yields_only_turn_end(self):
+        from mcc_cli import _history_events
+
+        events = _history_events([])
+        assert [type(e).__name__ for e in events] == ["TurnEnd"]
+        assert events[0].cost_usd == 0.0
+
+    def test_replay_renders_full_trace_in_app(self):
+        from mcc_cli import _history_events
+        from mcc_tui.app import App
+
+        app = App(session_short_id="s")
+        for ev in _history_events(self._history(), cost_usd=0.05):
+            app.apply_event(ev)
+
+        kinds = [i.kind for i in app.items]
+        assert kinds == ["user", "assistant", "tool_call", "tool_result", "assistant"]
+        assert app.items[2].call_id == "t1"
+        assert app.items[2].status.value == "done"
+        assert app.items[3].output == "x" * 500
+        assert app.items[4].text == "修好了"
+        assert app.cost_usd == 0.05
+        assert app.streaming_text == ""
+        assert not app.agent_busy
+
+
 def _config(main="claude-opus-4-8", subagent=None, summarize=None):
     from mcc_config import Config, ModelConfig
 

@@ -222,17 +222,58 @@ def _parse_mock_script(path: str) -> list:
     return turns
 
 
-async def _run_tui_mode(source: EventSource) -> int:
+def _history_events(history: list, cost_usd: float = 0.0) -> list:
+    """把恢复的消息历史转换为 TUI 重放事件序列。
+
+    历史只传给 AgentLoop 时 LLM 具备上下文，但渲染层从未
+    收到事件，界面会是空白；此处按 user/assistant/tool 消息
+    逐条还原轨迹，末尾以 TurnEnd 收尾（携带会话累计成本）。
+    """
+    from mcc_core import Role, TextBlock, ToolResultBlock, ToolUseBlock
+    from mcc_core.event import TextDelta, ToolCallEnd, ToolCallStart, TurnEnd, UserEcho
+
+    events = []
+    for m in history:
+        if m.role == Role.user:
+            for b in m.content:
+                if isinstance(b, TextBlock) and b.text.strip():
+                    events.append(UserEcho(text=b.text))
+        elif m.role == Role.assistant:
+            for b in m.content:
+                if isinstance(b, TextBlock) and b.text.strip():
+                    events.append(TextDelta(text=b.text))
+                elif isinstance(b, ToolUseBlock):
+                    events.append(ToolCallStart(id=b.id, name=b.name, args_preview=""))
+        elif m.role == Role.tool:
+            for b in m.content:
+                if isinstance(b, ToolResultBlock):
+                    events.append(
+                        ToolCallEnd(
+                            id=b.tool_use_id,
+                            output=b.content[:500],
+                            is_error=b.is_error,
+                        )
+                    )
+    events.append(TurnEnd(cost_usd=cost_usd))
+    return events
+
+
+async def _run_tui_mode(
+    source: EventSource, replay: list | None = None, session_id: str | None = None
+) -> int:
     from mcc_tui import TuiHandles, run_tui
 
     event_queue: asyncio.Queue = asyncio.Queue()
     input_queue: asyncio.Queue = asyncio.Queue()
     permission_queue: asyncio.Queue = asyncio.Queue()
-    session_id = uuid.uuid4().hex[:8]
+    session_short_id = session_id or uuid.uuid4().hex[:8]
 
     agent = getattr(source, "agent", None)
     if agent is not None:
         agent.permission_responses = permission_queue
+
+    for ev in replay or []:
+        event_queue.put_nowait(ev)
 
     async def agent_worker() -> None:
         while True:
@@ -250,7 +291,7 @@ async def _run_tui_mode(source: EventSource) -> int:
         handles = TuiHandles(
             events=event_queue,
             input_tx=input_queue,
-            session_short_id=session_id,
+            session_short_id=session_short_id,
             permission_tx=permission_queue,
         )
         await run_tui(handles)
@@ -350,7 +391,10 @@ def _run_resume_cmd(
     source = _build_source(
         work_dir, model, mock, mock_script, history=history, session_id=meta.id
     )
-    sys.exit(asyncio.run(_run_tui_mode(source)))
+    replay = _history_events(history, cost_usd=meta.cost_usd)
+    sys.exit(
+        asyncio.run(_run_tui_mode(source, replay=replay, session_id=meta.id))
+    )
 
 
 @click.command()

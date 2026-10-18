@@ -55,6 +55,20 @@
 
 ## CLI 与工具链
 
+### resume 后 TUI 不显示历史轨迹
+
+**现象**：`mcc resume <id>` 恢复会话后，对话能正常延续（模型记得之前内容），但 TUI 界面空白，看不到任何历史消息。
+
+**根因**：恢复的 history 只传给了 `AgentLoop`（作为 LLM 请求上下文前缀），而 TUI 渲染层只消费事件队列——历史从未以事件形式下发，渲染层自然无内容可画。"上下文存在"与"轨迹可见"是两条独立通路。
+
+**修复**：`_history_events(history)` 把重放的消息序列转换为事件（user → `UserEcho`，assistant 文本 → `TextDelta`，tool_use → `ToolCallStart`，tool 结果 → `ToolCallEnd`，末尾 `TurnEnd` 携带会话累计成本收尾），在 TUI 启动前注入事件队列。工具输出重放时同样截断 500 字符，与实时渲染一致。
+
+### TUI 面板的 session id 与恢复的会话不一致
+
+**根因**：TUI 显示的短 id 在 `_run_tui_mode` 内部随机生成，resume 场景下与实际恢复的会话 id 脱节（用户无法据此再次 resume/delete）。
+
+**修复**：`_run_tui_mode` 接受 `session_id` 参数，resume 时传入 `meta.id`；新建会话仍随机生成。
+
 ### click `nargs=-1` 参数收不到未知选项
 
 **现象**：`mcc sessions purge --older-than 30d` 报"no such option"，因为 `args` 是 `nargs=-1` 的可变参数，click 不允许在可变参数后跟未注册的选项。
