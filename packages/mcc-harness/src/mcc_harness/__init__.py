@@ -34,6 +34,14 @@ from mcc_harness.permission import (
     PermissionRequest,
     bash_word_match,
 )
+from mcc_harness.subagent import (
+    SpawnSubagentTool,
+    SubagentResult,
+    SubagentRunner,
+    SubagentSpec,
+    default_presets,
+    token_budget_to_usd,
+)
 
 __all__ = [
     "Action",
@@ -55,9 +63,15 @@ __all__ = [
     "PermissionRequest",
     "PythonHook",
     "ShellHook",
+    "SpawnSubagentTool",
+    "SubagentResult",
+    "SubagentRunner",
+    "SubagentSpec",
     "bash_word_match",
+    "default_presets",
     "model_price_per_1m",
     "permission_request_for",
     "price_usd",
+    "token_budget_to_usd",
 ]
 __version__ = "0.1.0"

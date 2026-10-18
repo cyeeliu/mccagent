@@ -24,6 +24,7 @@ class HookType(Enum):
     ON_TURN_START = "on_turn_start"
     ON_TURN_END = "on_turn_end"
     ON_ERROR = "on_error"
+    ON_SUBAGENT_STOP = "on_subagent_stop"
 
 
 @dataclass
@@ -38,6 +39,7 @@ class HookContext:
     session_id: str = ""
     cost_usd: float = 0.0
     iteration: int = 0
+    depth: int = 0
     cwd: Path = field(default_factory=lambda: Path.cwd())
 
 

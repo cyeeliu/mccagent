@@ -257,3 +257,51 @@ class TestBuildSourceModelResolution:
         source = _build_source(tmp_path, None, True, None)
         assert source.agent.model == "proj-main"
         assert source.agent.summarize_model == "proj-sum"
+
+
+class TestBuildSourceSubagent:
+    def test_spawn_tool_registered(self, tmp_path: Path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.delenv("MODEL", raising=False)
+        source = _build_source(tmp_path, None, True, None)
+        tool = source.agent.registry.get("spawn_subagent")
+        assert tool is not None
+        assert set(tool.presets) == {
+            "code_explorer",
+            "test_runner",
+            "summarizer",
+        }
+
+    def test_preset_models_fall_back_to_main(self, tmp_path: Path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.delenv("MODEL", raising=False)
+        source = _build_source(tmp_path, None, True, None)
+        tool = source.agent.registry.get("spawn_subagent")
+        assert tool.presets["code_explorer"].model == "claude-opus-4-8"
+        assert tool.presets["summarizer"].model == "claude-opus-4-8"
+
+    def test_preset_models_from_json(self, tmp_path: Path, monkeypatch):
+        from mcc_cli import _build_source
+
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("MODEL", raising=False)
+        _build_source(tmp_path, None, True, None)
+
+        settings = tmp_path / ".mcc" / "settings.json"
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        data["model"] = {
+            "main": "proj-main",
+            "subagent": "proj-sub",
+            "summarize": "proj-sum",
+        }
+        settings.write_text(json.dumps(data), encoding="utf-8")
+
+        source = _build_source(tmp_path, None, True, None)
+        tool = source.agent.registry.get("spawn_subagent")
+        assert tool.presets["code_explorer"].model == "proj-sub"
+        assert tool.presets["summarizer"].model == "proj-sum"

@@ -123,6 +123,13 @@ def permission_request_for(tool_name: str, input: dict[str, Any]) -> PermissionR
                     path=str(input.get("name", "")),
                 ),
             )
+        case "spawn_subagent":
+            return PermissionRequest(
+                category="Subagent",
+                action=BashAction(
+                    cmd=f"spawn_subagent {input.get('preset', '')}".strip()
+                ),
+            )
         case _:
             return PermissionRequest(
                 category="Bash", action=BashAction(cmd=tool_name)
@@ -200,6 +207,7 @@ class AgentLoop:
                         session_id=self.ctx.session_id,
                         cost_usd=total_cost,
                         iteration=iteration,
+                        depth=self.ctx.depth,
                         cwd=self.ctx.cwd,
                     )
                     for hr in await self.hooks.run_hooks(
@@ -245,6 +253,7 @@ class AgentLoop:
                             session_id=self.ctx.session_id,
                             cost_usd=total_cost,
                             iteration=iteration,
+                            depth=self.ctx.depth,
                             cwd=self.ctx.cwd,
                         )
                         for hr in await self.hooks.run_hooks(
@@ -280,6 +289,7 @@ class AgentLoop:
                             session_id=self.ctx.session_id,
                             cost_usd=total_cost,
                             iteration=iteration,
+                            depth=self.ctx.depth,
                             cwd=self.ctx.cwd,
                         )
                         await self.hooks.run_hooks(HookType.ON_ERROR, ctx)
@@ -464,6 +474,7 @@ class AgentLoop:
                     tool_input=tool_input,
                     session_id=self.ctx.session_id,
                     iteration=iteration,
+                    depth=self.ctx.depth,
                     cwd=self.ctx.cwd,
                 )
                 for hr in await self.hooks.run_hooks(HookType.PRE_TOOL, ctx):
@@ -490,6 +501,7 @@ class AgentLoop:
                     is_error=is_error,
                     session_id=self.ctx.session_id,
                     iteration=iteration,
+                    depth=self.ctx.depth,
                     cwd=self.ctx.cwd,
                 )
                 for hr in await self.hooks.run_hooks(HookType.POST_TOOL, ctx):

@@ -116,7 +116,13 @@ def _build_source(
     """
     from mcc_config import ensure_default_config
     from mcc_core import ToolContext
-    from mcc_harness import AgentLoopBuilder, PermissionChecker
+    from mcc_harness import (
+        AgentLoopBuilder,
+        PermissionChecker,
+        SpawnSubagentTool,
+        SubagentRunner,
+        default_presets,
+    )
     from mcc_session import MarkdownMemoryStore, SessionRecorder, memory_tools
     from mcc_tools import default_registry
 
@@ -152,11 +158,25 @@ def _build_source(
             click.echo(f"Error: {e}\nUse --mock for testing without API keys.", err=True)
             sys.exit(2)
 
+    hook_registry = _build_hooks(config, work_dir)
+
+    subagent_model = _resolve_model(config, "subagent")
+    summarize_model = _resolve_model(config, "summarize")
+    runner = SubagentRunner(
+        llm=llm,
+        registry=registry,
+        concurrency=4,
+        hooks=hook_registry,
+    )
+    registry.register(
+        SpawnSubagentTool(runner, default_presets(subagent_model, summarize_model))
+    )
+
     recorder = SessionRecorder.open_sync(sid, work_dir)
     builder = AgentLoopBuilder(llm, registry, ctx).system(system).recorder(recorder)
 
     builder = builder.model(_resolve_model(config, "main", model))
-    builder = builder.summarize_model(_resolve_model(config, "summarize"))
+    builder = builder.summarize_model(summarize_model)
 
     checker = PermissionChecker(config.permissions)
     builder = builder.permission(checker)
@@ -167,7 +187,6 @@ def _build_source(
     if history:
         builder = builder.history(history)
 
-    hook_registry = _build_hooks(config, work_dir)
     if hook_registry is not None:
         builder = builder.hooks(hook_registry)
 
