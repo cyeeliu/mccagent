@@ -23,6 +23,20 @@ TITLE_MODEL = "claude-haiku-4-5"
 解析后显式传入；仅当未传时使用此默认。
 """
 
+TITLE_MAX_TOKENS = 512
+"""标题生成的输出 token 上限。
+
+推理模型的思考过程（reasoning）同样计入输出配额，
+正文开始前可能先消耗数百 token，上限必须为思考留足余量，
+否则正文尚未输出即被截断，标题提取恒为空。
+"""
+
+TITLE_MAX_CHARS = 30
+"""标题最大字符数。
+
+提示词中的长度约束对模型不具强制力，超出部分在代码层截断。
+"""
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -255,7 +269,7 @@ async def maybe_generate_title(
         resp = await llm.complete(
             CompleteRequest(
                 model=model,
-                max_tokens=32,
+                max_tokens=TITLE_MAX_TOKENS,
                 messages=[
                     Message.user(
                         f"用 10 个中文字以内概括这次对话主题，只输出标题：\n{first_user}"
@@ -273,8 +287,8 @@ async def maybe_generate_title(
             text = b.text.strip()
             break
     if text:
-        meta.title = text
-    return meta.title
+        meta.title = text.splitlines()[0].strip()[:TITLE_MAX_CHARS]
+    return meta.title or None
 
 
 def build_turn_snapshot(
@@ -303,6 +317,8 @@ __all__ = [
     "default_sessions_base",
     "SessionNotFoundError",
     "SessionRecorder",
+    "TITLE_MAX_CHARS",
+    "TITLE_MAX_TOKENS",
     "TITLE_MODEL",
     "build_turn_snapshot",
     "load_session",

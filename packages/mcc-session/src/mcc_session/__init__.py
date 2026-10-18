@@ -15,6 +15,8 @@ from .memory import (
 )
 from .models import SessionMeta, TurnSnapshot
 from .recorder import (
+    TITLE_MAX_CHARS,
+    TITLE_MAX_TOKENS,
     TITLE_MODEL,
     SessionNotFoundError,
     SessionRecorder,
@@ -33,6 +35,8 @@ __all__ = [
     "SessionMeta",
     "SessionNotFoundError",
     "SessionRecorder",
+    "TITLE_MAX_CHARS",
+    "TITLE_MAX_TOKENS",
     "TITLE_MODEL",
     "TurnSnapshot",
     "build_turn_snapshot",

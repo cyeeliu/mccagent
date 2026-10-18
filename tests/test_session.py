@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from mcc_core import Message, Role, TextBlock, ToolResultBlock, ToolUseBlock, Usage
+from mcc_llm import MessageResponse
 from mcc_llm.mock import MockLlm, single_text_turn
 from mcc_session import (
     SessionMeta,
@@ -284,3 +285,44 @@ class TestMaybeGenerateTitle:
         snap = _snap(request_messages=[Message.user("hello")])
         assert await maybe_generate_title(meta, llm, snap) is None
         assert meta.title is None
+
+    async def test_max_tokens_leaves_room_for_reasoning(self):
+        """推理模型的思考 token 计入输出配额，上限须为其留足余量。"""
+
+        class CapturingLlm:
+            def __init__(self) -> None:
+                self.request = None
+
+            async def complete(self, req):
+                self.request = req
+                return MessageResponse(
+                    content=[TextBlock(text="标题")],
+                    stop_reason="end_turn",
+                    usage=Usage(),
+                )
+
+        from mcc_session import TITLE_MAX_TOKENS
+
+        meta = SessionMeta(id="t", started_at=datetime.now(UTC), cwd=".", turns=1)
+        llm = CapturingLlm()
+        snap = _snap(request_messages=[Message.user("hello")])
+        await maybe_generate_title(meta, llm, snap)
+        assert llm.request.max_tokens == TITLE_MAX_TOKENS
+        assert TITLE_MAX_TOKENS >= 256
+
+    async def test_multiline_response_takes_first_line(self):
+        meta = SessionMeta(id="t", started_at=datetime.now(UTC), cwd=".", turns=1)
+        llm = MockLlm([single_text_turn("修复超时问题\n\n这是补充说明，不应进入标题")])
+        snap = _snap(request_messages=[Message.user("帮我修复 rpc client 超时")])
+        assert await maybe_generate_title(meta, llm, snap) == "修复超时问题"
+
+    async def test_long_title_truncated(self):
+        from mcc_session import TITLE_MAX_CHARS
+
+        meta = SessionMeta(id="t", started_at=datetime.now(UTC), cwd=".", turns=1)
+        long_title = "这是一个特别特别特别特别特别特别特别特别特别特别长的会话主题标题"
+        llm = MockLlm([single_text_turn(long_title)])
+        snap = _snap(request_messages=[Message.user("hello")])
+        title = await maybe_generate_title(meta, llm, snap)
+        assert title == long_title[:TITLE_MAX_CHARS]
+        assert len(title) == TITLE_MAX_CHARS
