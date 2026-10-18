@@ -26,15 +26,15 @@
         │         │
      mcc-tui   mcc-harness
                    │
-       ┌───────────┼───────────┐
-       │           │           │
-   mcc-tools   mcc-session   mcc-llm
-       │           │           │
-       └───────────┴─────┬─────┘
-                         │
-                     mcc-core
-                         │
-                     mcc-config
+        ┌───────────┼───────────┐
+        │           │           │
+    mcc-tools   mcc-session   mcc-llm
+        │           │           │
+        └───────────┴─────┬─────┘
+                          │
+                      mcc-core
+                          │
+                      mcc-config
 ```
 
 | package | 职责 |
@@ -49,6 +49,8 @@
 | `mcc-cli` | 最终入口 `mcc` |
 
 详见 [docs/architecture.md](docs/architecture.md)。
+
+仓库另含 [eval-platform/](eval-platform/README.md)：配套的 **Agent 评测平台**（独立 uv workspace）——批量跑 Agent、实时轨迹回放、版本对比与统计报表，mcc 可作为被测对象接入。见 [docs/eval-platform.md](docs/eval-platform.md)。
 
 ## 快速开始
 
@@ -118,6 +120,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [权限与 Hooks](docs/permissions.md) | 规则语法、决策顺序、外部脚本钩子 |
 | [会话与记忆](docs/sessions.md) | JSONL 快照、resume、Markdown 记忆库 |
 | [子代理](docs/subagents.md) | 预设角色、并发护栏、fan-out 用法 |
+| [评测平台](docs/eval-platform.md) | eval-platform 架构、事件契约、路线图 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |
 | [踩坑与排障](docs/troubleshooting.md) | 已修复的 bug 与已知陷阱记录 |
 
@@ -126,6 +129,12 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 ```bash
 uv run ruff check .                       # lint
 uv run --all-packages pytest tests/ -q    # 全量测试
+```
+
+评测平台是独立 workspace，单独验证：
+
+```bash
+cd eval-platform && uv run --all-packages pytest
 ```
 
 ## 隐私
