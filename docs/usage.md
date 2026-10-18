@@ -53,8 +53,10 @@ ID         STARTED           TURNS      COST  TITLE
 ## 其它命令
 
 ```bash
-uv run mcc config     # 打印合并后的有效配置（JSON）
-uv run mcc version
+mcc config     # 打印合并后的有效配置（JSON）
+mcc version
+mcc update     # 检查 PyPI 新版本并提示升级方式
+mcc completion bash   # 输出 shell 补全脚本（bash / zsh / fish）
 ```
 
 ## Mock 模式
@@ -106,6 +108,7 @@ JSON 数组，每个元素是一轮事件列表，按顺序被 `MockLlm` 消费�
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI 兼容端点 key |
 | `OPENAI_BASE_URL` | 兼容端点地址（默认 `https://api.openai.com/v1`） |
+| `MCC_LLM_BASE_URL` | 自托管网关地址（同 `--llm-base-url`，强制走 OpenAI 兼容协议） |
 | `MODEL` | 覆盖所有类型的模型选择 |
 | `MCC_PROJECT` | 工作目录（同 `--cwd`） |
 

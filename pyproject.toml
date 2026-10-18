@@ -2,8 +2,11 @@
 name = "mccagent"
 version = "0.1.0"
 description = "mini-claude-code: 类 Claude Code 编码助手 (Python 版)"
+readme = "README.md"
+repository = "https://github.com/cyeeliu/mccagent"
 requires-python = ">=3.12"
 license = "MIT"
+keywords = ["llm", "agent", "cli", "anthropic", "coding-assistant"]
 
 [tool.uv.workspace]
 members = ["packages/*"]

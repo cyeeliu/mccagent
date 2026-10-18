@@ -96,3 +96,15 @@
 ### 超时用 `asyncio.wait_for`，Python 3.12 抛内置 TimeoutError
 
 `asyncio.wait_for` 超时在 Python 3.12+ 抛内置 `TimeoutError`（不再是 `asyncio.TimeoutError`，后者已成别名）。子代理超时返回 `reason=timeout` 的结果对象而非异常，工具层据此标记错误。
+
+### click 8.5 的补全脚本 API 变化
+
+**现象**：`comp.get_completion_script()` 抛 `AttributeError`——click 8.1 的 `ShellComplete` 方法在 8.5 中不存在。
+
+**根因**：click 8.5 把补全脚本生成改为 `source()` 方法，且 `get_completion_class("powershell")` 返回的类没有脚本生成能力（bash/zsh/fish 才有）。
+
+**修复**：运行时探测 `getattr(comp, "get_completion_script", None)`，旧 API 存在则调用，否则用 `comp.source()`；shell 参数在白名单（`bash/zsh/fish`）内校验后才生成。
+
+### 版本号解析的 rc 段陷阱
+
+`"0.1.0rc1"` 的第三段若提取段内**所有**数字会得到 `1`（`rc1` 的 1），导致 `(0, 1, 1)` 与 `(0, 1, 0)` 误判为不同版本。每段只取**前导数字**（`re.match(r"\d+", seg)`），`rc` 后缀自然归零。

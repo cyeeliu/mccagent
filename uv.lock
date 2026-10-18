@@ -137,6 +137,7 @@ version = "0.1.0"
 source = { editable = "packages/mcc-cli" }
 dependencies = [
     { name = "click" },
+    { name = "httpx" },
     { name = "mcc-config" },
     { name = "mcc-core" },
     { name = "mcc-harness" },
@@ -149,6 +150,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "mcc-config", editable = "packages/mcc-config" },
     { name = "mcc-core", editable = "packages/mcc-core" },
     { name = "mcc-harness", editable = "packages/mcc-harness" },

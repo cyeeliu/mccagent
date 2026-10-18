@@ -11,8 +11,9 @@
 - **会话持久化** — JSONL 逐轮快照落盘，`resume` 恢复上下文继续对话，自动生成会话标题
 - **长期记忆** — Markdown 记忆库 + 记忆索引注入 system prompt
 - **子代理并行执行** — 预设角色（代码探索 / 测试运行 / 摘要），信号量并发上限 + 超时 + token 预算三重护栏
-- **多 provider** — Anthropic 原生 API + OpenAI 兼容端点（DeepSeek / Kimi / Qwen / Groq / vLLM / OpenRouter）
+- **多 provider** — Anthropic 原生 API + OpenAI 兼容端点（DeepSeek / Kimi / Qwen / Groq / vLLM / OpenRouter），`--llm-base-url` 一键接入企业自托管网关
 - **成本追踪** — 按模型定价表计算 USD 成本，会话级预算熔断
+- **开箱即用** — pipx/uv 一键安装、Docker 镜像、shell 补全、首次运行引导；无遥测
 
 ## 架构
 
@@ -51,10 +52,12 @@
 
 ## 快速开始
 
-要求 Python ≥ 3.12，使用 [uv](https://docs.astral.sh/uv/) 管理环境：
+安装（要求 Python ≥ 3.12；从源码运行：`uv sync` 后 `uv run mcc`）：
 
 ```bash
-uv sync
+pipx install mcc-cli
+# 或
+uv tool install mcc-cli
 ```
 
 配置 API key（也可写入项目根目录 `.env`，见 [.env.example](.env.example)）：
@@ -69,15 +72,21 @@ export OPENAI_BASE_URL=https://api.deepseek.com/v1
 启动：
 
 ```bash
-uv run mcc            # TUI 模式
-uv run mcc -p "..."   # headless 单次执行
+mcc            # TUI 模式
+mcc -p "..."   # headless 单次执行
 ```
 
-无 API key 时可用 mock 模式体验完整链路：
+自托管网关（vLLM / SGLang / Ollama 等 OpenAI 兼容端点，代码不出域）：
 
 ```bash
-uv run mcc --mock -p "hello"
-uv run mcc --mock-script examples/write_then_read.json -p "write and read"
+mcc --llm-base-url https://llm-gateway.internal.corp/v1 -p "hi"
+```
+
+无 API key 时 headless 模式打印首次运行引导；体验完整链路可用 mock 模式：
+
+```bash
+mcc --mock -p "hello"
+mcc --mock-script examples/write_then_read.json -p "write and read"
 ```
 
 ## CLI 速查
@@ -94,6 +103,8 @@ uv run mcc --mock-script examples/write_then_read.json -p "write and read"
 | `mcc sessions delete <id>` | 按 id 删除会话 |
 | `mcc sessions purge --older-than 30d` | 清理 N 天前的会话 |
 | `mcc resume <id>` | 恢复历史会话继续对话 |
+| `mcc completion <bash\|zsh\|fish>` | 输出 shell 补全脚本 |
+| `mcc update` | 检查 PyPI 新版本并提示升级 |
 | `mcc version` | 版本号 |
 
 ## 文档
@@ -107,14 +118,19 @@ uv run mcc --mock-script examples/write_then_read.json -p "write and read"
 | [权限与 Hooks](docs/permissions.md) | 规则语法、决策顺序、外部脚本钩子 |
 | [会话与记忆](docs/sessions.md) | JSONL 快照、resume、Markdown 记忆库 |
 | [子代理](docs/subagents.md) | 预设角色、并发护栏、fan-out 用法 |
+| [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |
 | [踩坑与排障](docs/troubleshooting.md) | 已修复的 bug 与已知陷阱记录 |
 
 ## 开发
 
 ```bash
-uv run ruff check .              # lint
-uv run --all-packages pytest tests/ -q   # 全量测试
+uv run ruff check .                       # lint
+uv run --all-packages pytest tests/ -q    # 全量测试
 ```
+
+## 隐私
+
+mcc 不收集任何遥测数据，不会上报 prompt、代码或使用统计。
 
 ## 许可证
 

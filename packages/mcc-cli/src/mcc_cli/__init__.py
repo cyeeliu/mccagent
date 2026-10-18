@@ -108,11 +108,13 @@ def _build_source(
     mock_script: str | None,
     history: list | None = None,
     session_id: str | None = None,
+    llm_base_url: str | None = None,
 ) -> EventSource:
     """构建事件源：mock 模式用 MockLlm，否则用真实 LLM。
 
     同时接线会话录制（JSONL 落盘）与长期记忆
     （save_memory / read_memory 工具 + system prompt 索引注入）。
+    llm_base_url 显式指定时走 OpenAI 兼容协议的自托管网关。
     """
     from mcc_config import ensure_default_config
     from mcc_core import ToolContext
@@ -149,6 +151,13 @@ def _build_source(
 
             turns = [single_text_turn("[mock] No --mock-script provided; echoing.")]
         llm = MockLlm(turns)
+    elif llm_base_url:
+        from mcc_llm.openai import OpenAiClient
+
+        llm = OpenAiClient(
+            api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
+            base_url=llm_base_url,
+        )
     else:
         try:
             from mcc_llm import auto_provider_from_env
@@ -357,12 +366,93 @@ def _run_sessions_cmd(args: tuple[str, ...], older_than: str | None) -> None:
     sys.exit(2)
 
 
+def _print_onboarding() -> None:
+    """无 API key 时的首次运行引导。"""
+    click.echo(
+        "欢迎使用 mini-claude-code！\n"
+        "\n"
+        "尚未配置 LLM API key，请先设置其一：\n"
+        "  export ANTHROPIC_API_KEY=sk-ant-...\n"
+        "  export OPENAI_API_KEY=sk-...          # OpenAI 兼容端点\n"
+        "\n"
+        "自托管网关（vLLM / SGLang / Ollama 等）无需外部 key：\n"
+        "  mcc --llm-base-url http://gateway:8000/v1 -p \"hi\"\n"
+        "\n"
+        "也可写入项目根目录 .env 文件（参考 .env.example）。\n"
+        "无 key 体验完整链路：mcc --mock\n"
+        "查阅文档：https://github.com/cyeeliu/mccagent",
+        err=True,
+    )
+
+
+_COMPLETION_SHELLS = ("bash", "zsh", "fish")
+
+
+def _run_completion_cmd(shell: str) -> None:
+    """completion 子命令：输出 shell 补全脚本。"""
+    from click.shell_completion import get_completion_class
+
+    if shell not in _COMPLETION_SHELLS:
+        click.echo(
+            f"Unsupported shell: {shell} ({'/'.join(_COMPLETION_SHELLS)})", err=True
+        )
+        sys.exit(2)
+    comp_cls = get_completion_class(shell)
+    assert comp_cls is not None
+    comp = comp_cls(main, {}, "mcc", "_MCC_COMPLETE")
+    script = getattr(comp, "get_completion_script", None)
+    click.echo(script() if script else comp.source())
+
+
+def _latest_pypi_version(package: str = "mcc-cli") -> str | None:
+    """查询 PyPI 上的最新发布版本，网络失败返回 None。"""
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"https://pypi.org/pypi/{package}/json", timeout=5.0
+        )
+        resp.raise_for_status()
+        return resp.json()["info"]["version"]
+    except Exception:
+        return None
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """把 'a.b.c' 解析为可比较的整数元组，每段只取前导数字。"""
+    parts = []
+    for seg in v.strip().lstrip("v").split("."):
+        m = re.match(r"\d+", seg)
+        parts.append(int(m.group()) if m else 0)
+    return tuple(parts)
+
+
+def _is_newer_version(latest: str, current: str) -> bool:
+    return _parse_version(latest) > _parse_version(current)
+
+
+def _run_update_cmd() -> None:
+    """update 子命令：比对 PyPI 最新版本并提示升级方式。"""
+    current = _version()
+    click.echo(f"mcc {current}")
+    latest = _latest_pypi_version()
+    if latest is None:
+        click.echo("Could not check for updates (network unreachable).", err=True)
+        return
+    if _is_newer_version(latest, current):
+        click.echo(f"New version available: {latest}")
+        click.echo("Upgrade with:\n  uv tool upgrade mcc-cli\n  # or: pipx upgrade mcc-cli")
+    else:
+        click.echo("You are on the latest version.")
+
+
 def _run_resume_cmd(
     args: tuple[str, ...],
     work_dir: Path,
     model: str | None,
     mock: bool,
     mock_script: str | None,
+    llm_base_url: str | None = None,
 ) -> None:
     """resume 子命令：加载历史会话并继续对话。"""
     from mcc_session import SessionNotFoundError, load_session
@@ -377,19 +467,23 @@ def _run_resume_cmd(
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    if not (mock or mock_script or os.environ.get("ANTHROPIC_API_KEY")
+    if not (mock or mock_script or llm_base_url
+            or os.environ.get("ANTHROPIC_API_KEY")
             or os.environ.get("OPENAI_API_KEY")):
-        click.echo(
-            "Error: no LLM API key found. Use --mock for testing without API keys.",
-            err=True,
-        )
+        _print_onboarding()
         sys.exit(2)
 
     click.echo(f"Resuming session {meta.id} ({meta.turns} turn(s), "
                f"${meta.cost_usd:.4f})" + (f" — {meta.title}" if meta.title else ""),
                err=True)
     source = _build_source(
-        work_dir, model, mock, mock_script, history=history, session_id=meta.id
+        work_dir,
+        model,
+        mock,
+        mock_script,
+        history=history,
+        session_id=meta.id,
+        llm_base_url=llm_base_url,
     )
     replay = _history_events(history, cost_usd=meta.cost_usd)
     sys.exit(
@@ -410,6 +504,13 @@ def _run_resume_cmd(
     help="MockLlm 脚本 JSON 文件路径",
 )
 @click.option(
+    "--llm-base-url",
+    "llm_base_url",
+    default=None,
+    envvar="MCC_LLM_BASE_URL",
+    help="OpenAI 兼容自托管网关地址（vLLM / SGLang / Ollama 等）",
+)
+@click.option(
     "--older-than",
     "older_than",
     default=None,
@@ -419,7 +520,9 @@ def _run_resume_cmd(
 @click.argument(
     "cmd",
     required=False,
-    type=click.Choice(["tui", "config", "version", "resume", "sessions"]),
+    type=click.Choice(
+        ["tui", "config", "version", "resume", "sessions", "completion", "update"]
+    ),
 )
 @click.argument("args", nargs=-1)
 def main(
@@ -430,6 +533,7 @@ def main(
     quiet: bool,
     mock: bool,
     mock_script: str | None,
+    llm_base_url: str | None,
     older_than: str | None,
     args: tuple[str, ...],
 ) -> None:
@@ -451,15 +555,34 @@ def main(
         _run_sessions_cmd(args, older_than)
         return
 
-    if cmd == "resume":
-        _run_resume_cmd(args, work_dir, model, mock, mock_script)
+    if cmd == "completion":
+        if not args:
+            click.echo("Usage: mcc completion <bash|zsh|fish>", err=True)
+            sys.exit(2)
+        _run_completion_cmd(args[0])
         return
 
-    if mock or mock_script:
-        source = _build_source(work_dir, model, mock, mock_script)
-    elif os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"):
-        source = _build_source(work_dir, model, False, None)
+    if cmd == "update":
+        _run_update_cmd()
+        return
+
+    if cmd == "resume":
+        _run_resume_cmd(args, work_dir, model, mock, mock_script, llm_base_url)
+        return
+
+    has_llm = bool(
+        mock or mock_script or llm_base_url
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+    )
+
+    if has_llm:
+        source = _build_source(work_dir, model, mock, mock_script, llm_base_url=llm_base_url)
+    elif prompt is not None:
+        _print_onboarding()
+        sys.exit(2)
     else:
+        _print_onboarding()
         source = EchoEventSource()
 
     try:
@@ -472,4 +595,9 @@ def main(
 
 
 __all__ = ["main"]
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("mcc-cli")
+except Exception:
+    __version__ = "0.1.0"

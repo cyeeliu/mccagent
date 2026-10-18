@@ -7,6 +7,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 from mcc_cli import main
 from mcc_cli.events import EchoEventSource
@@ -29,6 +30,188 @@ def test_config_default(tmp_path: Path):
     data = json.loads(result.output)
     assert data["model"]["main"] == "claude-opus-4-8"
     assert data["budget"]["max_usd_per_session"] == 2.0
+
+
+class TestOnboarding:
+    def test_headless_without_key_exits_with_guide(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("MCC_LLM_BASE_URL", raising=False)
+        runner = CliRunner()
+        result = runner.invoke(main, ["-p", "hi", "--cwd", str(tmp_path)])
+        assert result.exit_code == 2
+        assert "欢迎使用" in result.output
+        assert "ANTHROPIC_API_KEY" in result.output
+        assert "--mock" in result.output
+
+    def test_resume_without_key_shows_guide(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        _make_session(home / ".mcc" / "sessions", "r1", datetime.now(UTC))
+        runner = CliRunner()
+        result = runner.invoke(main, ["resume", "r1", "--cwd", str(tmp_path)])
+        assert result.exit_code == 2
+        assert "欢迎使用" in result.output
+
+    def test_base_url_counts_as_llm_source(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-p", "hi", "--cwd", str(tmp_path), "--llm-base-url", "http://gw:8000/v1"],
+        )
+        assert "欢迎使用" not in result.output
+
+
+class TestLlmBaseUrl:
+    def test_explicit_base_url_uses_openai_compatible_client(
+        self, tmp_path: Path, monkeypatch
+    ):
+        from mcc_cli import _build_source
+        from mcc_llm.openai import OpenAiClient
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        source = _build_source(
+            tmp_path, None, False, None, llm_base_url="http://gw.internal:8000/v1"
+        )
+        assert isinstance(source.agent.llm, OpenAiClient)
+        assert source.agent.llm._base_url == "http://gw.internal:8000/v1"
+
+    def test_base_url_env_var_wired(self, tmp_path: Path, monkeypatch):
+        """MCC_LLM_BASE_URL 环境变量经 click option 注入（声明性行为，验证元数据）。"""
+        import mcc_cli
+
+        opt = next(
+            p for p in main.params if p.name == "llm_base_url"
+        )
+        assert opt.envvar == "MCC_LLM_BASE_URL"
+        assert mcc_cli.__version__
+
+    def test_mock_still_wins_over_base_url(self, tmp_path: Path, monkeypatch):
+        from mcc_cli import _build_source
+        from mcc_llm.mock import MockLlm
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        source = _build_source(
+            tmp_path, None, True, None, llm_base_url="http://gw:8000/v1"
+        )
+        assert isinstance(source.agent.llm, MockLlm)
+
+
+class TestCompletionCmd:
+    @pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
+    def test_generates_script(self, shell):
+        runner = CliRunner()
+        result = runner.invoke(main, ["completion", shell])
+        assert result.exit_code == 0
+        assert "mcc" in result.output
+        assert len(result.output) > 50
+
+    def test_unsupported_shell(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["completion", "powershell"])
+        assert result.exit_code == 2
+        assert "Unsupported shell" in result.output
+
+    def test_requires_shell(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["completion"])
+        assert result.exit_code == 2
+        assert "Usage: mcc completion" in result.output
+
+
+class TestVersionCompare:
+    @pytest.mark.parametrize(
+        ("latest", "current", "expected"),
+        [
+            ("0.2.0", "0.1.0", True),
+            ("0.1.0", "0.1.0", False),
+            ("0.1.0", "0.2.0", False),
+            ("1.0.0", "0.9.9", True),
+            ("0.10.0", "0.9.0", True),
+            ("0.1.1", "0.1.0", True),
+        ],
+    )
+    def test_is_newer_version(self, latest, current, expected):
+        from mcc_cli import _is_newer_version
+
+        assert _is_newer_version(latest, current) is expected
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("1.2.3", (1, 2, 3)),
+            ("v0.1.0", (0, 1, 0)),
+            ("0.1.0rc1", (0, 1, 0)),
+        ],
+    )
+    def test_parse_version(self, raw, expected):
+        from mcc_cli import _parse_version
+
+        assert _parse_version(raw) == expected
+
+
+class TestUpdateCmd:
+    def test_newer_version_advertised(self, monkeypatch):
+        from mcc_cli import _latest_pypi_version
+
+        monkeypatch.setattr(
+            "mcc_cli._latest_pypi_version", lambda package="mcc-cli": "99.0.0"
+        )
+        runner = CliRunner()
+        result = runner.invoke(main, ["update"])
+        assert result.exit_code == 0
+        assert "New version available: 99.0.0" in result.output
+        assert "uv tool upgrade mcc-cli" in result.output
+
+    def test_latest_version(self, monkeypatch):
+        monkeypatch.setattr(
+            "mcc_cli._latest_pypi_version", lambda package="mcc-cli": "0.0.1"
+        )
+        runner = CliRunner()
+        result = runner.invoke(main, ["update"])
+        assert result.exit_code == 0
+        assert "You are on the latest version." in result.output
+
+    def test_network_failure_is_soft(self, monkeypatch):
+        monkeypatch.setattr(
+            "mcc_cli._latest_pypi_version", lambda package="mcc-cli": None
+        )
+        runner = CliRunner()
+        result = runner.invoke(main, ["update"])
+        assert result.exit_code == 0
+        assert "Could not check for updates" in result.output
+
+    def test_pypi_fetch_parses_version(self, monkeypatch):
+        import httpx
+        from mcc_cli import _latest_pypi_version
+
+        class FakeResp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"info": {"version": "1.2.3"}}
+
+        def fake_get(url, timeout=None):
+            assert url == "https://pypi.org/pypi/mcc-cli/json"
+            return FakeResp()
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+        assert _latest_pypi_version() == "1.2.3"
+
+    def test_pypi_fetch_error_returns_none(self, monkeypatch):
+        import httpx
+        from mcc_cli import _latest_pypi_version
+
+        def fake_get(url, timeout=None):
+            raise httpx.ConnectError("no network")
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+        assert _latest_pypi_version() is None
 
 
 def test_headless_outputs_response(capsys):
