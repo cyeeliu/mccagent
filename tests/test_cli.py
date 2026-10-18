@@ -119,6 +119,36 @@ class TestSessionsCmd:
         assert "recent" in runner.invoke(main, ["sessions", "list"]).output
         assert "ancient" not in runner.invoke(main, ["sessions", "list"]).output
 
+    def test_delete_removes_session(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        base = home / ".mcc" / "sessions"
+        _make_session(base, "victim", datetime.now(UTC), turns=3)
+        _make_session(base, "survivor", datetime.now(UTC))
+        runner = CliRunner()
+
+        result = runner.invoke(main, ["sessions", "delete", "victim"])
+
+        assert result.exit_code == 0
+        assert "deleted session victim (3 turn(s))" in result.output
+        listing = runner.invoke(main, ["sessions", "list"]).output
+        assert "victim" not in listing
+        assert "survivor" in listing
+
+    def test_delete_missing_session_fails(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        runner = CliRunner()
+        result = runner.invoke(main, ["sessions", "delete", "ghost"])
+        assert result.exit_code == 1
+        assert "session not found: ghost" in result.output
+
+    def test_delete_requires_id(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        runner = CliRunner()
+        result = runner.invoke(main, ["sessions", "delete"])
+        assert result.exit_code == 2
+        assert "Usage: mcc sessions delete <session-id>" in result.output
+
     def test_purge_requires_valid_spec(self, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         runner = CliRunner()

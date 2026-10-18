@@ -219,6 +219,29 @@ def list_sessions(base_dir: Path | None = None) -> list[SessionMeta]:
     return metas
 
 
+_SESSION_SUFFIXES = (".meta.json", ".jsonl", ".messages.json")
+
+
+def _delete_session_files(meta_path: Path, sid: str) -> None:
+    """删除一个会话的全部落盘文件（meta / JSONL / 消息缓存）。"""
+    for suffix in _SESSION_SUFFIXES:
+        meta_path.with_name(f"{sid}{suffix}").unlink(missing_ok=True)
+
+
+def delete_session(id: str, base_dir: Path | None = None) -> SessionMeta:
+    """按 id 删除会话，返回被删除会话的元数据。
+
+    不存在时抛出 SessionNotFoundError。
+    """
+    meta_path = _find_meta_path(id, base_dir)
+    if meta_path is None:
+        raise SessionNotFoundError(f"session not found: {id}")
+
+    meta = SessionMeta.model_validate_json(meta_path.read_text(encoding="utf-8"))
+    _delete_session_files(meta_path, id)
+    return meta
+
+
 def purge_sessions(older_than_days: int, base_dir: Path | None = None) -> int:
     """删除 started_at 早于指定天数的会话文件，返回删除的会话数。"""
     base = base_dir or default_sessions_base()
@@ -233,9 +256,7 @@ def purge_sessions(older_than_days: int, base_dir: Path | None = None) -> int:
         meta_path = _find_meta_path(meta.id, base)
         if meta_path is None:
             continue
-        for suffix in (".meta.json", ".jsonl", ".messages.json"):
-            p = meta_path.with_name(f"{meta.id}{suffix}")
-            p.unlink(missing_ok=True)
+        _delete_session_files(meta_path, meta.id)
         removed += 1
     return removed
 
@@ -321,6 +342,7 @@ __all__ = [
     "TITLE_MAX_TOKENS",
     "TITLE_MODEL",
     "build_turn_snapshot",
+    "delete_session",
     "load_session",
     "list_sessions",
     "maybe_generate_title",

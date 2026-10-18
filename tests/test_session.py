@@ -16,6 +16,7 @@ from mcc_session import (
     SessionRecorder,
     TurnSnapshot,
     build_turn_snapshot,
+    delete_session,
     list_sessions,
     load_session,
     maybe_generate_title,
@@ -244,6 +245,63 @@ class TestPurgeSessions:
 
     def test_missing_dir_returns_zero(self, base: Path):
         assert purge_sessions(30, base) == 0
+
+
+class TestDeleteSession:
+    def _day(self, base: Path) -> Path:
+        return base / datetime.now(UTC).strftime("%Y-%m-%d")
+
+    async def test_deletes_by_id_and_returns_meta(self, base: Path, tmp_path: Path):
+        r = SessionRecorder.open_sync("gone", tmp_path, base_dir=base)
+        await r.record(_snap())
+
+        meta = delete_session("gone", base)
+
+        assert meta.id == "gone"
+        assert meta.turns == 1
+        assert not (self._day(base) / "gone.meta.json").exists()
+
+    async def test_removes_jsonl_too(self, base: Path, tmp_path: Path):
+        r = SessionRecorder.open_sync("gone", tmp_path, base_dir=base)
+        await r.record(_snap())
+        jsonl = self._day(base) / "gone.jsonl"
+        assert jsonl.exists()
+
+        delete_session("gone", base)
+
+        assert not jsonl.exists()
+
+    async def test_keeps_other_sessions(self, base: Path, tmp_path: Path):
+        keep = SessionRecorder.open_sync("keep", tmp_path, base_dir=base)
+        await keep.record(_snap())
+        drop = SessionRecorder.open_sync("drop", tmp_path, base_dir=base)
+        await drop.record(_snap())
+
+        delete_session("drop", base)
+
+        remaining = [m.id for m in list_sessions(base)]
+        assert remaining == ["keep"]
+        day = self._day(base)
+        assert (day / "keep.meta.json").exists()
+        assert (day / "keep.jsonl").exists()
+        assert not (day / "drop.jsonl").exists()
+
+    def test_missing_id_raises(self, base: Path):
+        with pytest.raises(SessionNotFoundError):
+            delete_session("nope", base)
+
+    def test_missing_base_raises(self, tmp_path: Path):
+        with pytest.raises(SessionNotFoundError):
+            delete_session("nope", tmp_path / "empty")
+
+    async def test_deleted_session_not_loadable(self, base: Path, tmp_path: Path):
+        r = SessionRecorder.open_sync("gone", tmp_path, base_dir=base)
+        await r.record(_snap())
+
+        delete_session("gone", base)
+
+        with pytest.raises(SessionNotFoundError):
+            load_session("gone", base)
 
 
 class TestMaybeGenerateTitle:

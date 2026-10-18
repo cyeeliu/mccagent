@@ -268,8 +268,13 @@ def _parse_days(value: str | None) -> int | None:
 
 
 def _run_sessions_cmd(args: tuple[str, ...], older_than: str | None) -> None:
-    """sessions 子命令：list / purge。"""
-    from mcc_session import list_sessions, purge_sessions
+    """sessions 子命令：list / delete / purge。"""
+    from mcc_session import (
+        SessionNotFoundError,
+        delete_session,
+        list_sessions,
+        purge_sessions,
+    )
 
     sub = args[0] if args else "list"
 
@@ -284,6 +289,18 @@ def _run_sessions_cmd(args: tuple[str, ...], older_than: str | None) -> None:
             cost = f"${m.cost_usd:.4f}"
             title = m.title or ""
             click.echo(f"{m.id:<10} {started:<17} {m.turns:>5} {cost:>9}  {title}".rstrip())
+        return
+
+    if sub == "delete":
+        if len(args) < 2:
+            click.echo("Usage: mcc sessions delete <session-id>", err=True)
+            sys.exit(2)
+        try:
+            meta = delete_session(args[1])
+        except SessionNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        click.echo(f"deleted session {meta.id} ({meta.turns} turn(s))")
         return
 
     if sub == "purge":
