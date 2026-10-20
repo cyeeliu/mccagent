@@ -65,7 +65,7 @@ npm test        # vitest
 2. server 完整实现：REST 路由、SSE 广播、租约调度、轨迹存储、指标暴露（已完成）
 3. runner 完整实现：执行主循环、心跳续租、mock / anthropic / langgraph 适配器、评分（已完成）
 4. web 功能页面：批次看板、轨迹查看器、对比报告、仪表盘（已完成）
-5. 部署与运维：docker compose 全栈、Prometheus/Grafana、K8s 配置
+5. 部署与运维：docker compose 全栈、Prometheus/Grafana、K8s 配置（已完成）
 
 ## server 与 runner 内部结构
 
@@ -96,6 +96,26 @@ web/src/
 ├── features/trace/            轨迹查看器 + useTrace Hook（实时/历史按 seq 拼接去重）
 ├── features/dashboard/        仪表盘：统计卡 + 双 Y 轴趋势图（通过率左轴 / Run 数右轴）
 └── features/compare/          批次对比：URL 参数驱动，verdict 过滤 + 可比性警告
+```
+
+## 部署形态
+
+```
+eval-platform/
+├── docker-compose.yaml          六服务本地全栈（db/server/runner/web/prometheus/grafana，轨迹存卷）
+├── server/Dockerfile            uv workspace 多阶段构建（--extra s3）
+├── runner/Dockerfile            uv workspace 多阶段构建（mock 适配器零依赖）
+├── web/Dockerfile               node 构建 + nginx-unprivileged 托管（/api 反代 + SPA fallback）
+├── scripts/demo-batch.sh        幂等提交演示批次（mock agent）
+└── deploy/
+    ├── prometheus.yml           抓取 server /metrics
+    ├── alerts.yml               队列积压 / 通过率劣化两条告警
+    ├── grafana/provisioning/    数据源 + 五面板看板自动导入
+    └── k8s/
+        ├── base/                namespace/db/server/runner/web/ingress（Kustomize）
+        └── overlays/
+            ├── staging/         1 副本
+            └── prod/            3 副本 + NetworkPolicy（runner 断网）+ KEDA 队列扩缩
 ```
 
 测试基线：server 走 FastAPI TestClient + 内存数据库替身全链路验证；

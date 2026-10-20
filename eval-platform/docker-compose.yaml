@@ -2,13 +2,14 @@
 #
 # 服务清单：
 #   db         — PostgreSQL 17
-#   minio      — S3 兼容对象存储（轨迹文件）
-#   minio-init — 一次性任务：创建 traces bucket
 #   server     — API 服务（Python / FastAPI）
 #   runner     — 评测 runner（可横向扩展）
 #   web        — React 前端（nginx 托管 + /api 反代）
 #   prometheus — 指标采集
 #   grafana    — 指标可视化仪表盘
+#
+# 轨迹后端缺省为 local（存 traces 卷）；生产环境通过 TRACE_BACKEND=s3
+# 及 S3_* 环境变量接入真实对象存储（见 README「本地与生产的刻意不同」）。
 #
 # 快速启动：
 #   docker compose up --build
@@ -16,9 +17,8 @@
 # 扩展 runner（压力测试，验证 SKIP LOCKED 并发领取）：
 #   docker compose up --scale runner=4
 #
-# MinIO 控制台：http://localhost:9001  (admin/devpassword)
-# Grafana：      http://localhost:3000  (admin/admin)
-# Web：          http://localhost:5173
+# Grafana：http://localhost:3000  (admin/admin)
+# Web：    http://localhost:5173
 
 x-logging: &default-logging
   driver: json-file
@@ -42,38 +42,6 @@ services:
       retries: 15
     logging: *default-logging
 
-  # ── MinIO（S3 兼容对象存储）──────────────────────────────────────────────
-  minio:
-    # 本地开发跟随 latest；生产环境固定 RELEASE tag 或镜像 digest
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: devpassword
-    volumes:
-      - miniodata:/data
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # 管理控制台
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      retries: 10
-    logging: *default-logging
-
-  # MinIO 初始化：创建 traces bucket
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio: { condition: service_healthy }
-    entrypoint: >
-      /bin/sh -c "
-        mc alias set local http://minio:9000 admin devpassword &&
-        mc mb --ignore-existing local/traces &&
-        echo 'bucket ready'
-      "
-    restart: "no"
-
   # ── API 服务 ────────────────────────────────────────────────────────────
   server:
     build:
@@ -81,21 +49,17 @@ services:
       dockerfile: server/Dockerfile
     environment:
       DATABASE_URL: postgres://postgres:dev@db:5432/evalplatform
-      # 对象存储：使用 MinIO（纯本地开发可改 TRACE_BACKEND=local 去掉 minio 依赖）
-      TRACE_BACKEND: s3
-      S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: traces
-      S3_ACCESS_KEY: admin
-      S3_SECRET_KEY: devpassword
-      S3_REGION: us-east-1
+      # 轨迹存容器卷（local 后端）；生产接真实对象存储时改 TRACE_BACKEND=s3
+      TRACE_DIR: /traces
       # 内部路由鉴权（runner 需携带此 token；生产换成强密钥）
       RUNNER_SECRET: ${RUNNER_SECRET:-dev-runner-secret}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+    volumes:
+      - traces:/traces
     ports:
       - "8081:8081"
     depends_on:
       db: { condition: service_healthy }
-      minio-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "/healthcheck.py"]
       interval: 5s
@@ -160,6 +124,6 @@ services:
 
 volumes:
   pgdata:
-  miniodata:
+  traces:
   promdata:
   grafanadata:

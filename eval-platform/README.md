@@ -134,12 +134,11 @@ docker compose up --build
 | web | http://localhost:5173 | 前端（nginx 托管 + /api 反代，SSE 不缓冲） |
 | server | http://localhost:8081 | API 服务 |
 | db | 5432 | PostgreSQL 17 |
-| minio | http://localhost:9001 | S3 兼容对象存储（admin/devpassword） |
 | prometheus | http://localhost:9090 | 指标采集 |
 | grafana | http://localhost:3000 | 仪表盘（admin/admin，自动导入数据源与看板） |
 
-健康检查链保证任意顺序重启幂等：`minio-init` 等 minio 健康后建 bucket，
-server 等 db 健康 + bucket 就绪才起，runner 等 server 健康才连。
+轨迹文件存 `traces` 卷（`TRACE_BACKEND` 缺省为 `local`）。健康检查链保证任意顺序重启幂等：
+server 等 db 健康才起，runner 等 server 健康才连。
 
 提交演示批次（mock agent，无需 API key）：
 
@@ -157,9 +156,13 @@ docker compose up --scale runner=4
 
 | | 本地（图省事） | 生产（要安全） |
 |---|---|---|
-| 对象存储 | MinIO | 真 S3 + IAM Role（不用 Access Key） |
+| 轨迹存储 | 容器卷（local 后端） | S3 兼容对象存储 + IAM Role（不用 Access Key） |
 | 密钥 | `${RUNNER_SECRET:-dev-runner-secret}` | Kubernetes Secret + 外部 Vault 注入 |
 | Grafana 密码 | `admin` | 强密码 + SSO |
+
+生产切换 S3：给 server 服务设置 `TRACE_BACKEND=s3` 与 `S3_ENDPOINT` / `S3_BUCKET` /
+`S3_REGION` / `S3_PREFIX` 环境变量（凭证走 IAM Role，见上表），local 后端与 s3 后端
+写出的轨迹格式完全一致，切换只影响存储位置。
 
 ### Kubernetes（Kustomize 管理环境差异）
 
@@ -189,7 +192,7 @@ Prometheus 抓取 `server:8081/metrics`；Grafana provisioning 自动导入数�
 |---|---|---|
 | 任务全部卡在 queued | `eval_queue_depth` 飙高、`eval_active_runs` 为 0 | Runner 全挂 / 鉴权 token 不匹配 |
 | 通过率突然下降 | 看最近批次的 error message | 模型 API 限速 / 沙箱 OOM |
-| /healthz/ready 返回 500 | server 日志 | PostgreSQL 断连 / MinIO 不可达 |
+| /healthz/ready 返回 500 | server 日志 | PostgreSQL 断连 / 轨迹存储不可写 |
 | Prometheus 没数据 | `curl server:8081/metrics` 手动检查 | scrape 配错 / 路由未注册 |
 | Runner 领不到任务 | server 日志看 401 | RUNNER_SECRET 两边不一致 |
 

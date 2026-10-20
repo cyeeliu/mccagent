@@ -9,7 +9,7 @@ COPY server/pyproject.toml server/
 COPY runner/pyproject.toml runner/
 COPY server/src server/src
 COPY server/migrations server/migrations
-# s3 extra：容器栈轨迹后端默认走 S3/MinIO
+# s3 extra：镜像内置 S3 轨迹后端（TRACE_BACKEND=s3 时启用）
 RUN uv sync --locked --no-dev --package eval-server --extra s3
 
 FROM ghcr.io/astral-sh/uv:0.9.5-python3.12-trixie-slim AS runtime
