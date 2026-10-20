@@ -193,7 +193,14 @@ def apply_setup(work_dir: Path, setup: dict[str, str]) -> None:
 
 
 def _dump_event(fh: Any, ev: TraceEvent) -> None:
+    """逐事件落盘并即时 flush。
+
+    只写不 flush 的话事件停留在解释器缓冲区里，运行中 tail 不可见、
+    进程被杀时已产生的事件全部丢失——轨迹的完整性承诺就没了。
+    每条一次 flush 的开销在事件频率（远低于 token 速率）下可忽略。
+    """
     fh.write(json.dumps(ev.model_dump(mode="json"), ensure_ascii=False) + "\n")
+    fh.flush()
 
 
 async def run_case(

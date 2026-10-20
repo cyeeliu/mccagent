@@ -153,6 +153,34 @@ async def test_run_case_adapter_crash_reports_error(tmp_path: Path) -> None:
     assert result.score is None
 
 
+async def test_trace_file_flushed_per_event(tmp_path: Path) -> None:
+    """轨迹逐事件即时落盘：运行中（case 未结束时）外部读盘即可见。
+
+    利用 async generator 的挂起点：第二条事件 yield 前，第一条
+    必须已经写盘并 flush——不依赖 sleep 的确定性验证。
+    """
+    batch_dir = new_batch_dir(tmp_path, "unit", 0, 1)
+    trace_path = batch_dir / "runs" / "case-1-a1.jsonl"
+    on_disk: list[str] = []
+
+    class _GatedAdapter:
+        async def run(self, req: RunRequest) -> AsyncIterator[TraceEvent]:
+            from mcc_eval.events import LlmChunk, RunStarted
+
+            yield RunStarted(seq=0, run_id=req.run_id, case_id=req.case_id,
+                             task=req.task, model=req.model)
+            on_disk.append(trace_path.read_text(encoding="utf-8"))
+            yield LlmChunk(seq=1, turn=0, delta="working")
+            on_disk.append(trace_path.read_text(encoding="utf-8"))
+            yield RunFinished(seq=2, status="passed", turns=1)
+
+    result = await run_case(_case(), _GatedAdapter(), model="mock",
+                            batch_dir=batch_dir, timeout_s=5)
+    assert result.status == "passed"
+    assert '"type": "run_started"' in on_disk[0]  # 首条已实时可见
+    assert '"type": "llm_chunk"' in on_disk[1] and '"run_finished"' not in on_disk[1]
+
+
 # ─── run_batch 与统计 ────────────────────────────────────────────────────
 
 
