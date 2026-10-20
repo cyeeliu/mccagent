@@ -50,7 +50,7 @@
 
 详见 [docs/architecture.md](docs/architecture.md)。
 
-仓库另含 [eval-platform/](eval-platform/README.md)：配套的 **Agent 评测平台**（独立 uv workspace）——批量跑 Agent、实时轨迹回放、版本对比与统计报表，mcc 可作为被测对象接入。见 [docs/eval-platform.md](docs/eval-platform.md)。
+仓库另含 **mcc-eval** 评测包（`packages/mcc-eval`）：轻量 Agent 评测 harness——单进程 CLI 批量跑基准（HumanEval/MBPP/SWE-bench 采样）、逐 case 落 JSONL 轨迹、离线重评与 Markdown 报告。用法见 [packages/mcc-eval/README.md](packages/mcc-eval/README.md)。
 
 ## 快速开始
 
@@ -120,21 +120,23 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [权限与 Hooks](docs/permissions.md) | 规则语法、决策顺序、外部脚本钩子 |
 | [会话与记忆](docs/sessions.md) | JSONL 快照、resume、Markdown 记忆库 |
 | [子代理](docs/subagents.md) | 预设角色、并发护栏、fan-out 用法 |
-| [评测平台](docs/eval-platform.md) | eval-platform 架构、事件契约、路线图 |
+| [评测](packages/mcc-eval/README.md) | mcc-eval：基准评测、轨迹契约、报告 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |
 | [踩坑与排障](docs/troubleshooting.md) | 已修复的 bug 与已知陷阱记录 |
 
 ## 开发
 
 ```bash
-uv run ruff check .                       # lint
-uv run --all-packages pytest tests/ -q    # 全量测试
+uv run ruff check .                               # lint
+uv run --all-packages pytest tests/ packages/ -q  # 全量测试
 ```
 
-评测平台是独立 workspace，单独验证：
+评测冒烟（mock，无需 API key）：
 
 ```bash
-cd eval-platform && uv run --all-packages pytest
+uv run --package mcc-eval mcc-eval run \
+  --cases packages/mcc-eval/examples/mock-cases.json --mock
+uv run --package mcc-eval mcc-eval report eval-runs/<run-id>
 ```
 
 ## 隐私

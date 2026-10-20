@@ -9,3 +9,6 @@ build/
 .ruff_cache/
 .pytest_cache/
 node_modules/
+
+# mcc-eval 评测产物（轨迹/报告/结果缓存）
+eval-runs/
