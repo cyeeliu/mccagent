@@ -3,6 +3,7 @@
 import asyncio
 import importlib.util
 import json
+import time
 
 import httpx
 import pytest
@@ -410,3 +411,94 @@ async def test_finish_stage_crash_keeps_scored_result(monkeypatch) -> None:
     assert completes[0]["status"] == "passed"
     assert completes[0]["score"] == 1.0
     assert "finish error" in completes[0]["error"]
+    # 上报失败的批次回灌缓冲后由收尾路径重试：事件一个不丢
+    total = sum(len(b) for b in server.event_batches("run-1"))
+    assert total == 3 * 5 + 2
+
+
+class StalledAdapter:
+    """长时间无事件的 adapter：模拟工具执行/慢 LLM 期间的静默窗口。"""
+
+    async def run(self, req: RunRequest):
+        seq = Seq()
+        yield RunStarted(
+            seq=seq.next(), run_id=req.run_id, case_id=req.case_id,
+            task=req.task, model=req.model,
+        )
+        await asyncio.sleep(999)
+        yield RunFinished(seq=seq.next(), status="passed", score=1.0, turns=1)
+
+
+@pytest.mark.parametrize(
+    ("server_factory", "error_hint"),
+    [
+        pytest.param(
+            lambda: FakeServer(heartbeat_alive=False), "lease lost", id="alive_false"
+        ),
+        pytest.param(
+            lambda: FlakyHeartbeatServer(fail_times=99),
+            "heartbeat failed",
+            id="consecutive_failures",
+        ),
+    ],
+)
+async def test_heartbeat_death_cancels_stalled_body(
+    monkeypatch, server_factory, error_hint
+) -> None:
+    """心跳判死立即取消静默中的执行流，不再等下一个事件。
+
+    对应真实事故：轨迹已显示 run_finished=passed 但 run 状态
+    仍是 running（前端 LIVE 常亮）——租约在长时间无事件的窗口
+    里过期，reaper 把 run 重排回 queued（retries 未耗尽），
+    complete 打不中 WHERE status IN ('leased','running')，
+    run 被重新领走执行。旧逻辑的事件驱动检查点在静默窗口里
+    永远轮不到，执行流继续空跑烧 LLM 成本。
+    """
+    monkeypatch.setattr(main, "HEARTBEAT_INTERVAL_S", 0.01)
+    monkeypatch.setattr(main, "HEARTBEAT_RETRY_S", 0.01)
+    monkeypatch.setattr(main, "make_adapter", lambda scaffold: StalledAdapter())
+    server = server_factory()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(server.handler), base_url="http://test"
+    ) as http:
+        t0 = time.monotonic()
+        await asyncio.wait_for(main.execute(http, _lease(scaffold="stalled")), timeout=5)
+        elapsed = time.monotonic() - t0
+
+    # 止损：不等 StalledAdapter 的 999s，心跳判死即刻取消
+    assert elapsed < 3
+    completes = server.posts_to("/complete")
+    assert len(completes) == 1
+    assert completes[0]["status"] == "error"
+    assert error_hint in completes[0]["error"]
+    # 静默前已产出的事件仍被收尾路径保住
+    assert server.event_batches("run-1")
+
+
+class ConflictCompleteServer(FakeServer):
+    """complete 端点恒返回 409：reaper 已回收重排的替身。"""
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/complete"):
+            self.calls.append((request.method, request.url.path, request.content.decode("utf-8")))
+            return httpx.Response(
+                409,
+                json={"detail": "run not owned by this runner or already completed"},
+            )
+        return super().handler(request)
+
+
+async def test_complete_conflict_is_logged_not_swallowed(
+    fast_mock: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """complete 被拒（409）时打出可定位的诊断日志，不再静默吞掉。"""
+    server = ConflictCompleteServer()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(server.handler), base_url="http://test"
+    ) as http:
+        await main.execute(http, _lease())
+
+    assert len(server.posts_to("/complete")) == 2  # 正常路径 + 收尾重试各一次
+    err = capsys.readouterr().err
+    assert "reclaimed by reaper" in err
+    assert "run-1" in err

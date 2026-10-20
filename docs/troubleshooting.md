@@ -174,3 +174,11 @@
 **根因**：轨迹事件（JSONL buf 逐段上报）与 run 表状态（complete 端点 UPDATE）是**两条独立链路**，收尾阶段的异常会让二者矛盾。两个触发路径：① runner 的心跳循环对单次 HTTP 失败零容错——一次网络抖动即判死心跳任务，`ensure_heartbeat_alive()` 抛异常进入 except 收尾分支，把 buf 里完整的 `run_finished` 照常 flush 进轨迹（事件链路正常），却以 `complete(status="error")` 收尾（状态链路被覆盖）；② 心跳断供超过 `LEASE_TTL_S`（120s）后 server reaper 直接把 run 置 error，runner 随后的 complete 打在 `WHERE status IN ('leased','running')` 上不中，状态永远停在 error。
 
 **修复**：两层。① 心跳容错：单次失败改为短间隔（5s）重试计数，连续 3 次才判死心跳；server 主动宣告 `alive=false` 仍立即失败。② 评分保全：except 收尾分支里若已收到 `RunFinished`（`final is not None`），按正常评分逻辑取 status/score 上报，error 字段附「completed with finish error」说明；仅未产出 final 的 run 才报纯 error。教训：**基础设施故障不应覆盖已得出的业务结论**——收尾路径的容错（链路层）与结果的保全（业务层）要分开处理。
+
+### run 结束了前端 LIVE 常亮
+
+**现象**：轨迹页显示完整的 17 个事件、结尾 `run_finished=passed`，但头部 LIVE 徽标不灭；刷新页面依旧。
+
+**根因**：run 状态确实又回到了 running——**它正在被重跑**。链路：心跳任务死亡后，execute 的租约检查点是事件驱动的（`ensure_heartbeat_alive` 只在收到下一个事件时检查），而工具执行 / 慢 LLM 期间可能长时间没有事件——静默窗口超过 `LEASE_TTL_S`（120s）后 reaper 回收租约，`retries < 3` 时把 run **置回 queued 重排**（而非置 error）。执行流随后跑完：`run_finished` 照常落轨迹（前端显示「结束」），但 complete 打在 `WHERE status IN ('leased','running')` 上不中（状态已是 queued），409 被旧代码 `except Exception: pass` 静默吞掉；runner 主循环下一轮 poll 又 lease 到这个 run 重新执行——status 回到 running，LIVE 重新亮起。上次「error」表象是同一根因的另一半：retries 耗尽时 reaper 走的是置 error 分支。
+
+**修复**：三层。① **判死即止损**：heartbeat_loop 判死（连续 3 次失败或 alive=false）时持有执行任务引用，立即 `cancel()` 执行流——不再等下一个事件，静默窗口里也不再空跑烧 LLM 成本；execute 主体包成子任务，区分「心跳取消的 body」与「execute 自身被取消」（后者继续向上传播）。② **complete 409 可观测**：收尾路径的 complete 失败不再静默吞——409 特异性提示「lease already reclaimed by reaper, run will be retried」，其余异常同样打 stderr。③ **事件回灌**：flush 上报失败时把批次回灌缓冲由收尾路径重试，瞬时故障不再丢事件。教训：**检查点是事件驱动的设计，天然存在「无事件」盲区**——心跳这类独立监督任务发现异常后必须能主动打断被监督者，否则止损永远比故障晚一个事件（在静默窗口里就是晚到永远）。
