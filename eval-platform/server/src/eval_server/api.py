@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
+import uuid as uuid_module
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, Any
 
+import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -104,8 +107,24 @@ def runner_auth(request: Request, state: StateDep) -> None:
     if state.runner_secret is None:
         return
     provided = request.headers.get("authorization", "")
-    if provided != f"Bearer {state.runner_secret}":
+    expected = f"Bearer {state.runner_secret}"
+    if not secrets.compare_digest(provided, expected):
         raise UnauthorizedError()
+
+
+def _uuid_param(value: str, label: str = "id") -> str:
+    """校验 UUID 形参；非法输入立即 400，而非让数据库驱动抛 500。"""
+    try:
+        uuid_module.UUID(value)
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise BadRequestError(f"invalid {label}: {value!r} is not a UUID") from exc
+    return value
+
+
+def _is_unique_violation(exc: asyncpg.UniqueViolationError, name_part: str) -> bool:
+    """判断唯一约束冲突是否来自指定约束（按约束名片段匹配）。"""
+    constraint = getattr(exc, "constraint_name", None) or ""
+    return name_part in constraint
 
 
 # ─── 请求模型 ────────────────────────────────────────────────────────────
@@ -187,17 +206,26 @@ def build_public_router() -> APIRouter:
             raise BadRequestError(
                 f"scaffold must be one of: {', '.join(VALID_SCAFFOLDS)}"
             )
-        row = await state.db.fetchrow(
-            "INSERT INTO agent_profiles"
-            " (name, scaffold, model, harness_version, sandbox_image, config)"
-            " VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-            name,
-            scaffold,
-            model,
-            req.harness_version or "dev",
-            req.sandbox_image or "local",
-            json.dumps(req.config or {}),
+        existing = await state.db.fetchrow(
+            "SELECT id FROM agent_profiles WHERE name = $1", name
         )
+        if existing is not None:
+            raise ConflictError(f"profile {name!r} already exists")
+        try:
+            row = await state.db.fetchrow(
+                "INSERT INTO agent_profiles"
+                " (name, scaffold, model, harness_version, sandbox_image, config)"
+                " VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                name,
+                scaffold,
+                model,
+                req.harness_version or "dev",
+                req.sandbox_image or "local",
+                json.dumps(req.config or {}),
+            )
+        except asyncpg.UniqueViolationError as exc:
+            # 并发创建同名 profile 的竞态兜底（先查后插的窗口）
+            raise ConflictError(f"profile {name!r} already exists") from exc
         return {"id": str(row["id"])}
 
     @router.post("/batches")
@@ -240,25 +268,34 @@ def build_public_router() -> APIRouter:
         if profile_row is None:
             raise NotFoundError("profile")
 
-        async with state.db.acquire() as conn, conn.transaction():
-            batch_row = await conn.fetchrow(
-                "INSERT INTO batches"
-                " (name, profile_id, parallelism, priority, cases, idempotency_key)"
-                " VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-                name,
-                profile_row["id"],
-                req.parallelism,
-                req.priority,
-                json.dumps(req.cases),
-                req.idempotency_key,
-            )
-            batch_id = batch_row["id"]
-            for case in req.cases:
-                await conn.execute(
-                    "INSERT INTO runs (batch_id, case_id) VALUES ($1, $2)",
-                    batch_id,
-                    case["case_id"],
+        try:
+            async with state.db.acquire() as conn, conn.transaction():
+                batch_row = await conn.fetchrow(
+                    "INSERT INTO batches"
+                    " (name, profile_id, parallelism, priority, cases, idempotency_key)"
+                    " VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                    name,
+                    profile_row["id"],
+                    req.parallelism,
+                    req.priority,
+                    json.dumps(req.cases),
+                    req.idempotency_key,
                 )
+                batch_id = batch_row["id"]
+                await conn.executemany(
+                    "INSERT INTO runs (batch_id, case_id) VALUES ($1, $2)",
+                    [(batch_id, case["case_id"]) for case in req.cases],
+                )
+        except asyncpg.UniqueViolationError as exc:
+            # 并发提交同 idempotency_key 的竞态：重查返回已有批次（幂等语义）
+            if req.idempotency_key and _is_unique_violation(exc, "idempotency_key"):
+                existing = await state.db.fetchrow(
+                    "SELECT id FROM batches WHERE idempotency_key = $1",
+                    req.idempotency_key,
+                )
+                if existing is not None:
+                    return {"id": str(existing["id"]), "deduplicated": True}
+            raise ConflictError("batch conflict on unique constraint") from exc
         return {"id": str(batch_id)}
 
     @router.get("/batches")
@@ -291,6 +328,7 @@ def build_public_router() -> APIRouter:
 
     @router.get("/batches/{batch_id}")
     async def get_batch(batch_id: str, state: StateDep) -> dict[str, Any]:
+        batch_id = _uuid_param(batch_id, "batch id")
         row = await state.db.fetchrow(
             "SELECT name, status, parallelism, created_at FROM batches WHERE id = $1",
             batch_id,
@@ -312,6 +350,7 @@ def build_public_router() -> APIRouter:
 
     @router.post("/batches/{batch_id}/cancel")
     async def cancel_batch(batch_id: str, state: StateDep) -> dict[str, Any]:
+        batch_id = _uuid_param(batch_id, "batch id")
         async with state.db.acquire() as conn, conn.transaction():
             await conn.execute(
                 "UPDATE batches SET status = 'cancelled'"
@@ -335,6 +374,8 @@ def build_public_router() -> APIRouter:
     ) -> dict[str, Any]:
         if status is not None and status not in scheduler.RUN_STATUSES:
             raise BadRequestError(f"invalid status: {status}")
+        if batch is not None:
+            batch = _uuid_param(batch, "batch filter")
         rows = await state.db.fetch(
             "SELECT id, batch_id, case_id, status, score, cost_usd, turns"
             " FROM runs"
@@ -362,6 +403,7 @@ def build_public_router() -> APIRouter:
 
     @router.get("/runs/{run_id}")
     async def get_run(run_id: str, state: StateDep) -> dict[str, Any]:
+        run_id = _uuid_param(run_id, "run id")
         row = await state.db.fetchrow(
             "SELECT batch_id, case_id, status, score, cost_usd, turns, error,"
             " started_at, finished_at FROM runs WHERE id = $1",
@@ -389,6 +431,7 @@ def build_public_router() -> APIRouter:
         offset: int = 0,
         limit: int = 500,
     ) -> dict[str, Any]:
+        run_id = _uuid_param(run_id, "run id")
         if not 1 <= limit <= MAX_PAGE_LIMIT:
             raise BadRequestError(f"limit must be between 1 and {MAX_PAGE_LIMIT}")
         page = await state.traces.read_page(run_id, offset, limit)
@@ -400,6 +443,7 @@ def build_public_router() -> APIRouter:
 
     @router.get("/runs/{run_id}/stream")
     async def stream_run(run_id: str, state: StateDep) -> StreamingResponse:
+        _uuid_param(run_id, "run id")
         return StreamingResponse(
             _sse_events(state, run_id),
             media_type="text/event-stream",
@@ -408,6 +452,8 @@ def build_public_router() -> APIRouter:
 
     @router.get("/reports/compare")
     async def compare_batches(state: StateDep, a: str, b: str) -> dict[str, Any]:
+        a = _uuid_param(a, "batch a")
+        b = _uuid_param(b, "batch b")
         fingerprints = await state.db.fetch(
             "SELECT b.id, p.model, p.harness_version, p.sandbox_image"
             " FROM batches b JOIN agent_profiles p ON p.id = b.profile_id"
@@ -597,6 +643,7 @@ def build_internal_router() -> APIRouter:
 
     @router.post("/runs/{run_id}/heartbeat")
     async def heartbeat(run_id: str, req: HeartbeatReq, state: StateDep) -> dict[str, Any]:
+        run_id = _uuid_param(run_id, "run id")
         alive = await scheduler.heartbeat(
             state.db, run_id, req.runner_id, state.lease_ttl_s
         )
@@ -606,6 +653,7 @@ def build_internal_router() -> APIRouter:
     async def ingest_events(
         run_id: str, request: Request, state: StateDep
     ) -> dict[str, Any]:
+        run_id = _uuid_param(run_id, "run id")
         body = await request.body()
         lines = [ln for ln in body.decode("utf-8").splitlines() if ln.strip()]
         if not lines:
@@ -657,6 +705,7 @@ def build_internal_router() -> APIRouter:
     async def complete_run(
         run_id: str, req: CompleteReq, state: StateDep
     ) -> dict[str, Any]:
+        run_id = _uuid_param(run_id, "run id")
         if req.status not in VALID_COMPLETE_STATUSES:
             raise BadRequestError(f"invalid status: {req.status}")
         trace_path = state.traces.finalize(run_id)

@@ -342,6 +342,14 @@ def submit_batch(
             client.close()
 
 
+def _non_negative_int(raw: str) -> int:
+    """argparse 类型：非负整数（--limit 传负数会静默截断尾部记录）。"""
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m runner.benchmarks",
@@ -355,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--limit",
-        type=int,
+        type=_non_negative_int,
         default=10,
         help="截取前 N 条记录（0 = 全量，默认 10）",
     )

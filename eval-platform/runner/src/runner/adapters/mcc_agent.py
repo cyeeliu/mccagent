@@ -89,7 +89,9 @@ class _Translator:
                     turn=self._call - 1,
                     call_id=ev.id,
                     tool_name=ev.name,
-                    args=None,
+                    # mcc 事件只带参数预览；评分侧的 args_regex 在预览上匹配，
+                    # 置 None 会让所有参数断言恒假
+                    args=ev.args_preview,
                 )
             ]
         if isinstance(ev, ToolCallEnd):

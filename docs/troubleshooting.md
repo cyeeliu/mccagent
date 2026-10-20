@@ -182,3 +182,35 @@
 **根因**：run 状态确实又回到了 running——**它正在被重跑**。链路：心跳任务死亡后，execute 的租约检查点是事件驱动的（`ensure_heartbeat_alive` 只在收到下一个事件时检查），而工具执行 / 慢 LLM 期间可能长时间没有事件——静默窗口超过 `LEASE_TTL_S`（120s）后 reaper 回收租约，`retries < 3` 时把 run **置回 queued 重排**（而非置 error）。执行流随后跑完：`run_finished` 照常落轨迹（前端显示「结束」），但 complete 打在 `WHERE status IN ('leased','running')` 上不中（状态已是 queued），409 被旧代码 `except Exception: pass` 静默吞掉；runner 主循环下一轮 poll 又 lease 到这个 run 重新执行——status 回到 running，LIVE 重新亮起。上次「error」表象是同一根因的另一半：retries 耗尽时 reaper 走的是置 error 分支。
 
 **修复**：三层。① **判死即止损**：heartbeat_loop 判死（连续 3 次失败或 alive=false）时持有执行任务引用，立即 `cancel()` 执行流——不再等下一个事件，静默窗口里也不再空跑烧 LLM 成本；execute 主体包成子任务，区分「心跳取消的 body」与「execute 自身被取消」（后者继续向上传播）。② **complete 409 可观测**：收尾路径的 complete 失败不再静默吞——409 特异性提示「lease already reclaimed by reaper, run will be retried」，其余异常同样打 stderr。③ **事件回灌**：flush 上报失败时把批次回灌缓冲由收尾路径重试，瞬时故障不再丢事件。教训：**检查点是事件驱动的设计，天然存在「无事件」盲区**——心跳这类独立监督任务发现异常后必须能主动打断被监督者，否则止损永远比故障晚一个事件（在静默窗口里就是晚到永远）。
+
+### 评测 API 传非 UUID 直接 500
+
+**现象**：`GET /api/runs/not-a-uuid`（或 `POST /internal/runs/xxx/complete`、`?batch=xxx` 过滤等）返回 500，日志里是 asyncpg 的 `invalid input syntax for type uuid`；创建重名 profile 同样 500（`duplicate key value violates unique constraint`）。
+
+**根因**：路径参数与查询参数未校验直接进 SQL——UUID 列上的非法字面量由数据库驱动抛异常，FastAPI 兜底成 500。profile 创建是先查后插，两个并发请求都能通过「不存在」检查，随后 INSERT 撞 UNIQUE 约束，异常同样未被捕获。批次 `idempotency_key` 存在同样的并发窗口，且语义上应当幂等重放而非报错。
+
+**修复**：入口统一 `_uuid_param()` 校验（10 个端点），非法输入 400 并回显具体值；鉴权头改 `secrets.compare_digest` 常数时间比较。profile 重名先查返回 409，`UniqueViolationError` 捕获兜底同样 409；批次 `idempotency_key` 并发重放按约束名判定后重查返回已有批次（`deduplicated: true`）。教训：**先查后插永远存在竞态窗口，唯一约束是最后防线——捕获它做幂等或 409，而不是让它漏成 500**。
+
+### mcc 适配器的 ToolCall.args 恒为 None
+
+**现象**：SWE-bench / HumanEval / MBPP 批次里带 `args_regex` 的 `tool_called` 断言全部失败，理由是「args did not match」——但轨迹里工具明明以正确参数被调用。
+
+**根因**：mcc 事件流只携带 `args_preview`（参数预览字符串），适配器转译时 `ToolCall.args` 硬编码 None；评分侧 `pattern.search(str(tc.args or ""))` 对 None 得到空串，任何正则都不命中。
+
+**修复**：转译改为 `args=ev.args_preview`，评分正则在预览上匹配。教训：**跨层转译时「拿不到完整数据」不等于「传空值安全」**——下游存在针对该字段的断言时，空值会让断言静默恒假，比抛异常更难发现。
+
+### after_tool 断言把多次调用误判为顺序不符
+
+**现象**：Agent 先 bash、再 edit、又一次 bash（验证改动），`tool=bash after_tool=edit` 断言失败——但确实存在 edit 之后的 bash 调用。
+
+**根因**：旧实现只取「第一次匹配调用」的索引与 `after_tool` 的调用位置比较；工具被多次调用时，第一次在前的位置会掩盖后续在后的事实。
+
+**修复**：改为「任意一次匹配调用出现在 after_tool 的某次调用之后即满足」——对全部匹配索引与 after_tool 索引做笛卡尔比较。
+
+### run 流断线后事件永久缺失
+
+**现象**：浏览器 SSE 断线重连后，断线窗口内的轨迹事件在 web 上永久缺失，刷新页面也不出现。
+
+**根因**：web client 的 `onerror` 处理器注释声称「服务端按 Last-Event-ID 续发」，但 server 的 SSE 实现并无续发逻辑——断线窗口内的事件既不在重连补发范围内，也没有触发任何 REST 补齐，注释掩盖了真实缺口。
+
+**修复**：断线与「落后被踢」走同一条补偿路径——触发 REST 全量重读 trace 分页后幂等合并，不再依赖不存在的续发语义。

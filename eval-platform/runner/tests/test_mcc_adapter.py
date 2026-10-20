@@ -68,6 +68,16 @@ def test_translator_event_mapping() -> None:
     assert call[0].call_id == "t1"
     assert call[0].tool_name == "write_file"
 
+
+def test_translator_tool_call_args_carry_preview() -> None:
+    """ToolCall.args 取 args_preview：置 None 会让所有 args_regex 断言恒假。"""
+    t = _Translator(_req())
+    out = t.translate(ToolCallStart(id="t1", name="bash", args_preview="pytest -q"))
+    call = out[-1]
+    assert isinstance(call, ToolCall)
+    assert call.tool_name == "bash"
+    assert call.args == "pytest -q"
+
     result = t.translate(ToolCallEnd(id="t1", output="ok", is_error=False))
     assert isinstance(result[0], ToolResult)
     assert result[0].output == "ok"

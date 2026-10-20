@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 
 import httpx
@@ -293,3 +294,31 @@ class TestResolveModel:
             raise RuntimeError("no running event loop")
 
         assert resolve_model(None, settings_loader=broken_loader) == DEFAULT_MODEL
+
+
+class TestNonNegativeLimit:
+    """--limit 的 argparse 类型：负数应显式报错，而非被切片静默截断尾部。"""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"), [("0", 0), ("1", 1), ("100", 100)]
+    )
+    def test_accepts_non_negative(self, raw, expected):
+        from runner.benchmarks import _non_negative_int
+
+        assert _non_negative_int(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["-1", "-100"])
+    def test_rejects_negative(self, raw):
+        from runner.benchmarks import _non_negative_int
+
+        with pytest.raises(argparse.ArgumentTypeError, match=">= 0"):
+            _non_negative_int(raw)
+
+    def test_main_rejects_negative_limit_before_network(self, capsys):
+        """CLI 入口校验：--limit -1 在发起任何网络请求前退出。"""
+        from runner.benchmarks import main
+
+        with pytest.raises(SystemExit) as exc:
+            main(["--dataset", "humaneval", "--limit", "-1", "--out", "x.json"])
+        assert exc.value.code == 2
+        assert "must be >= 0" in capsys.readouterr().err

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -39,6 +40,10 @@ class ConnLike(Protocol):
     async def fetchval(self, query: str, *args: Any) -> Any: ...
 
     async def execute(self, query: str, *args: Any) -> str: ...
+
+    async def executemany(
+        self, query: str, args_seq: Iterable[Sequence[Any]]
+    ) -> None: ...
 
 
 class DbLike(Protocol):

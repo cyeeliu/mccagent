@@ -77,6 +77,41 @@ def test_tool_called_ordering_constraint() -> None:
     assert "not called after" in bad.reason
 
 
+def test_tool_called_ordering_with_repeated_calls() -> None:
+    """after_tool 只要求存在一次后置调用：工具被多次调用时不得误判顺序。"""
+    calls = [
+        _call("bash", {"command": "ls"}),
+        _call("edit", {"path": "a.rs"}),
+        _call("bash", {"command": "pytest"}),
+    ]
+    snap = _snap(tool_calls=calls)
+    result = score(snap, [{"type": "tool_called", "tool": "bash", "after_tool": "edit"}])
+    assert result.status == "passed"
+    assert result.score == 1.0
+
+
+def test_tool_called_ordering_all_before_still_fails() -> None:
+    calls = [
+        _call("bash", {"command": "ls"}),
+        _call("bash", {"command": "cat"}),
+        _call("edit", {"path": "a.rs"}),
+    ]
+    snap = _snap(tool_calls=calls)
+    result = score(snap, [{"type": "tool_called", "tool": "bash", "after_tool": "edit"}])
+    assert result.status == "failed"
+    assert "not called after" in result.reason
+
+
+def test_tool_called_args_regex_matches_string_args() -> None:
+    """args 为字符串（如 mcc 适配器的 args_preview）时 args_regex 同样可命中。"""
+    snap = _snap(tool_calls=[_call("bash", "pytest -q")])
+    ok = score(snap, [{"type": "tool_called", "tool": "bash", "args_regex": "pytest"}])
+    assert ok.status == "passed"
+    snap2 = _snap(tool_calls=[_call("bash", "cargo test")])
+    bad = score(snap2, [{"type": "tool_called", "tool": "bash", "args_regex": "pytest"}])
+    assert bad.status == "failed"
+
+
 @pytest.mark.parametrize(
     ("texts", "expectation", "should_pass"),
     [

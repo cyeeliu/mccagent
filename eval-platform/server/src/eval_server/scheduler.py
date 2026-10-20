@@ -121,6 +121,12 @@ async def lease_next(db: DbLike, runner_id: str, lease_ttl_s: int) -> LeasedRun 
             return None
         await conn.execute(LEASE_UPDATE_SQL, row["id"], runner_id, lease_ttl_s)
         task_row = await conn.fetchrow(LEASE_TASK_SQL, row["batch_id"], row["case_id"])
+        if task_row is None:
+            # runs 与 batches.cases 数据不一致（外部改库等）；事务回滚把
+            # 租约一并撤销，异常上抛让 Runner 记日志后继续轮询
+            raise RuntimeError(
+                f"case {row['case_id']!r} not found in batch {row['batch_id']}"
+            )
 
     return LeasedRun(
         run_id=str(row["id"]),

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterable, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import pytest
 from eval_server import scheduler
 from eval_server.store import LocalTraceStore
@@ -51,6 +53,19 @@ class FakeConn:
 
     async def execute(self, query: str, *args: Any) -> str:
         return await self._db.execute(query, *args)
+
+    async def executemany(
+        self, query: str, args_seq: Iterable[Sequence[Any]]
+    ) -> None:
+        for args in args_seq:
+            await self._db.execute(query, *args)
+
+
+def _unique_violation(constraint: str) -> asyncpg.UniqueViolationError:
+    """构造带约束名的唯一冲突（对齐真实 asyncpg 驱动的异常形态）。"""
+    exc = asyncpg.UniqueViolationError("duplicate key value violates unique constraint")
+    exc.constraint_name = constraint
+    return exc
 
 
 class FakeDb:
@@ -228,6 +243,8 @@ class FakeDb:
             }
         if "INSERT INTO agent_profiles" in query:
             name, scaffold, model, harness, sandbox, config = args
+            if any(p["name"] == name for p in self.profiles):
+                raise _unique_violation("agent_profiles_name_key")
             profile = {
                 "id": str(uuid.uuid4()),
                 "name": name,
@@ -251,6 +268,10 @@ class FakeDb:
             )
         if "INSERT INTO batches" in query:
             name, profile_id, parallelism, priority, cases, idem = args
+            if idem is not None and any(
+                b["idempotency_key"] == idem for b in self.batches
+            ):
+                raise _unique_violation("batches_idempotency_key")
             batch = {
                 "id": str(uuid.uuid4()),
                 "name": name,

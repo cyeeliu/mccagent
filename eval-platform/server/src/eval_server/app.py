@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -45,6 +46,8 @@ def create_app(
         finally:
             if reaper_task is not None:
                 reaper_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await reaper_task
 
     app = FastAPI(title="eval-server", lifespan=lifespan)
     app.state.state = state

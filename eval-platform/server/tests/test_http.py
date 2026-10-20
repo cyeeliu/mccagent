@@ -6,9 +6,10 @@ SSE 流因长连接特性以生成器单元测试的方式单独验证。
 
 import asyncio
 import json
+import uuid
 
 import pytest
-from conftest import FakeDb
+from conftest import FakeConn, FakeDb
 from eval_server import api as api_module
 from eval_server.api import _sse_events
 from eval_server.app import create_app
@@ -103,6 +104,31 @@ def test_create_profile_validation(client: TestClient, payload: dict) -> None:
     assert r.json()["error"]["code"] == "bad_request"
 
 
+def test_create_profile_duplicate_name_conflicts(client: TestClient) -> None:
+    _create_profile(client, "dup", model="m1")
+    r = client.post("/api/profiles", json={"name": "dup", "scaffold": "mock", "model": "m2"})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "conflict"
+
+
+def test_create_profile_unique_violation_race_conflicts(
+    client: TestClient, fake_db: FakeDb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """先查后插窗口内的并发创建：INSERT 撞唯一约束也应 409 而非 500。"""
+    _create_profile(client, "race", model="m1")
+    original = fake_db.fetchrow
+
+    async def racing_fetchrow(query: str, *args: object) -> dict | None:
+        if "SELECT id FROM agent_profiles WHERE name" in query:
+            return None  # 竞态窗口：检查时尚不可见
+        return await original(query, *args)
+
+    monkeypatch.setattr(fake_db, "fetchrow", racing_fetchrow)
+    r = client.post("/api/profiles", json={"name": "race", "scaffold": "mock", "model": "m"})
+    assert r.status_code == 409
+    assert "already exists" in r.json()["error"]["message"]
+
+
 # ─── batches ────────────────────────────────────────────────────────────
 
 
@@ -134,6 +160,30 @@ def test_create_batch_idempotency_key_deduplicates(client: TestClient) -> None:
     assert first["id"] == second["id"]
     assert second["deduplicated"] is True
     assert len(client.get("/api/runs").json()["items"]) == 1
+
+
+def test_create_batch_inserts_runs_via_executemany(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """批次内 runs 批量插入：走 executemany 而非逐条往返。"""
+    calls: list[tuple[str, list[tuple[object, ...]]]] = []
+    original = FakeConn.executemany
+
+    async def spy(self: FakeConn, query: str, args_seq: object) -> None:
+        materialized = [tuple(a) for a in args_seq]  # type: ignore[arg-type]
+        calls.append((query, materialized))
+        await original(self, query, materialized)
+
+    monkeypatch.setattr(FakeConn, "executemany", spy)
+
+    _create_profile(client)
+    batch_id = _create_batch(client, [_case("c1"), _case("c2")])
+
+    assert len(calls) == 1
+    query, arg_sets = calls[0]
+    assert "INSERT INTO runs" in query
+    assert {case_id for _, case_id in arg_sets} == {"c1", "c2"}
+    assert all(bid == batch_id for bid, _ in arg_sets)
 
 
 def test_create_batch_unknown_profile_404(client: TestClient) -> None:
@@ -168,6 +218,38 @@ def test_create_batch_validates_parallelism(client: TestClient, parallelism: int
 
 def test_batch_not_found(client: TestClient) -> None:
     assert client.get("/api/batches/00000000-0000-0000-0000-000000000000").status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "params", "json_body"),
+    [
+        pytest.param("GET", "/api/batches/zzz", None, None, id="get_batch"),
+        pytest.param("POST", "/api/batches/zzz/cancel", None, None, id="cancel_batch"),
+        pytest.param("GET", "/api/runs/zzz", None, None, id="get_run"),
+        pytest.param("GET", "/api/runs/zzz/trace", None, None, id="get_trace"),
+        pytest.param("GET", "/api/runs/zzz/stream", None, None, id="stream_run"),
+        pytest.param("GET", "/api/runs", {"batch": "zzz"}, None, id="list_runs_batch_filter"),
+        pytest.param("GET", "/api/reports/compare", {"a": "zzz", "b": "zzz"}, None, id="compare"),
+        pytest.param(
+            "POST", "/internal/runs/zzz/heartbeat", None, {"runner_id": "r1"}, id="heartbeat"
+        ),
+        pytest.param("POST", "/internal/runs/zzz/events", None, None, id="ingest_events"),
+        pytest.param(
+            "POST", "/internal/runs/zzz/complete", None,
+            {"runner_id": "r1", "status": "passed"}, id="complete",
+        ),
+    ],
+)
+def test_invalid_uuid_params_return_400(
+    client: TestClient, method: str, path: str, params: dict | None, json_body: dict | None
+) -> None:
+    """非 UUID 形参应在入口 400，而非透传到数据库驱动抛 500。"""
+    r = client.request(
+        method, path, params=params, json=json_body, headers={"X-Runner-Id": "runner-a"}
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "bad_request"
+    assert "not a UUID" in r.json()["error"]["message"]
 
 
 def test_cancel_batch_marks_runs_error(client: TestClient) -> None:
@@ -431,7 +513,8 @@ def test_runs_list_filters_and_pagination(client: TestClient, fake_db: FakeDb) -
 
 
 def test_run_not_found(client: TestClient) -> None:
-    assert client.get("/api/runs/does-not-exist").status_code == 404
+    missing = str(uuid.uuid4())
+    assert client.get(f"/api/runs/{missing}").status_code == 404
 
 
 async def test_trace_pagination(state: AppState, client: TestClient) -> None:
@@ -439,20 +522,21 @@ async def test_trace_pagination(state: AppState, client: TestClient) -> None:
         json.dumps({"schema_version": 1, "seq": i, "type": "llm_chunk", "turn": 0, "delta": "x"})
         for i in range(5)
     ]
-    await state.traces.append("run-x", lines)
+    run_id = str(uuid.uuid4())
+    await state.traces.append(run_id, lines)
 
-    page1 = client.get("/api/runs/run-x/trace", params={"offset": 0, "limit": 2}).json()
+    page1 = client.get(f"/api/runs/{run_id}/trace", params={"offset": 0, "limit": 2}).json()
     assert [e["seq"] for e in page1["events"]] == [0, 1]
     assert page1["total"] == 5
     assert page1["next_offset"] == 2
 
-    page3 = client.get("/api/runs/run-x/trace", params={"offset": 4, "limit": 2}).json()
+    page3 = client.get(f"/api/runs/{run_id}/trace", params={"offset": 4, "limit": 2}).json()
     assert page3["next_offset"] is None
 
 
 @pytest.mark.parametrize("limit", [0, 1001])
 def test_trace_validates_limit(client: TestClient, limit: int) -> None:
-    r = client.get("/api/runs/run-x/trace", params={"limit": limit})
+    r = client.get(f"/api/runs/{uuid.uuid4()}/trace", params={"limit": limit})
     assert r.status_code == 400
 
 

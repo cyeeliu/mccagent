@@ -97,23 +97,32 @@ def _check_tool_called(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bool, 
     args_regex = exp.get("args_regex")
     ordered_after = exp.get("after_tool")  # 要求在 after_tool 之后调用
 
-    matched: list[ToolCall] = [tc for tc in snap.tool_calls if tc.tool_name == tool_name]
-    if not matched:
+    matched_idx = [
+        i for i, tc in enumerate(snap.tool_calls) if tc.tool_name == tool_name
+    ]
+    if not matched_idx:
         return False, f"tool '{tool_name}' not called"
 
     if args_regex:
         pattern = re.compile(args_regex, re.IGNORECASE)
-        matched = [tc for tc in matched if pattern.search(str(tc.args or ""))]
-        if not matched:
+        matched_idx = [
+            i
+            for i in matched_idx
+            if pattern.search(str(snap.tool_calls[i].args or ""))
+        ]
+        if not matched_idx:
             return False, f"tool '{tool_name}' called but args did not match /{args_regex}/"
 
     if ordered_after:
-        after_idxs = [i for i, tc in enumerate(snap.tool_calls) if tc.tool_name == ordered_after]
-        first_match_idx = snap.tool_calls.index(matched[0])
-        if not any(i < first_match_idx for i in after_idxs):
+        after_idxs = [
+            i for i, tc in enumerate(snap.tool_calls) if tc.tool_name == ordered_after
+        ]
+        # 任意一次匹配调用出现在 after_tool 的某次调用之后即满足——工具
+        # 被多次调用时，只看第一次会把「后置调用」误判为顺序不符
+        if not any(i > j for i in matched_idx for j in after_idxs):
             return False, f"tool '{tool_name}' not called after '{ordered_after}'"
 
-    return True, f"tool '{tool_name}' called {len(matched)} time(s)"
+    return True, f"tool '{tool_name}' called {len(matched_idx)} time(s)"
 
 
 def _check_output_contains(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bool, str]:

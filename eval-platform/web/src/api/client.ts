@@ -59,7 +59,9 @@ export function subscribeRun(
   es.onmessage = (msg) => onEvent(parseEvent(JSON.parse(msg.data)));
   es.addEventListener("lagged", onLagged);
   es.onerror = () => {
-    // EventSource 自动重连并携带 Last-Event-ID（服务端按 seq 续发）
+    // EventSource 会自动重连，但服务端不支持按 Last-Event-ID 续发——
+    // 断线窗口内的事件永久丢失，须走 REST 全量补齐（与 lagged 同路径）
+    onLagged();
   };
   return () => es.close();
 }

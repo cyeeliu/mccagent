@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import tempfile
 import time
 import uuid
@@ -143,5 +144,6 @@ async def _run_bash(
         return out.decode(errors="replace"), proc.returncode != 0
     except TimeoutError:
         if proc is not None:
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
         return f"timeout after {timeout_s}s", True
