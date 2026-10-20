@@ -64,8 +64,9 @@ npm test        # vitest
 1. 事件契约与 server 骨架（本页所述，已完成）
 2. server 完整实现：REST 路由、SSE 广播、租约调度、轨迹存储、指标暴露（已完成）
 3. runner 完整实现：执行主循环、心跳续租、mock / anthropic / langgraph / mini-claude-code 适配器、评分（已完成）
-4. web 功能页面：批次看板、轨迹查看器、对比报告、仪表盘（已完成）
-5. 部署与运维：docker compose 全栈、Prometheus/Grafana、K8s 配置（已完成）
+4. 业界评测集接入：SWE-bench Lite / HumanEval / MBPP 拉取转换，runner 镜像内置 mcc（已完成）
+5. web 功能页面：批次看板、轨迹查看器、对比报告、仪表盘（已完成）
+6. 部署与运维：docker compose 全栈、Prometheus/Grafana、K8s 配置（已完成）
 
 ## server 与 runner 内部结构
 
@@ -82,6 +83,8 @@ server/src/eval_server/
 runner/src/runner/
 ├── main.py       主循环：lease → 执行 → 批量上报 JSONL → complete；心跳后台任务
 ├── scoring.py    expectations 评分：四类断言加权叠加，阈值判定
+├── benchmarks.py 业界评测集接入：SWE-bench Lite / HumanEval / MBPP 拉取与转换，
+│                 docker compose exec runner python -m runner.benchmarks --submit
 └── adapters/     适配器：mock（零依赖演示）、anthropic、langgraph（惰性导入）、
                   mini-claude-code（headless 包装 mcc AgentLoop，事件流逐条转译）
 ```
@@ -105,7 +108,8 @@ web/src/
 eval-platform/
 ├── docker-compose.yaml          六服务本地全栈（db/server/runner/web/prometheus/grafana，轨迹存卷）
 ├── server/Dockerfile            uv workspace 多阶段构建（--extra s3）
-├── runner/Dockerfile            uv workspace 多阶段构建（mock 适配器零依赖）
+├── runner/Dockerfile            构建上下文为仓库根：workspace 依赖 + mcc 六包源码，
+│                                镜像内置被测对象，compose up 即可评测 mini-claude-code
 ├── web/Dockerfile               node 构建 + nginx-unprivileged 托管（/api 反代 + SPA fallback）
 ├── scripts/demo-batch.sh        幂等提交演示批次（mock agent）
 └── deploy/

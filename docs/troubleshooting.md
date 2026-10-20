@@ -132,3 +132,19 @@
 **根因**：非 root 运行 + 命名卷属主的组合问题。server 镜像以 uid 10001 运行；Docker 命名卷挂载到镜像中**不存在**的路径时，卷根目录由 root 拥有（只有挂载到镜像中已存在的目录时，才按 copy-up 语义继承目录属主）。ready 探针会向轨迹目录写 `_healthcheck` 探测文件，root 拥有的卷上直接 `PermissionError`。
 
 **修复**：镜像 runtime 阶段预创建 `/traces` 并 `chown app:app`（`/workspace/mccagent/eval-platform/server/Dockerfile`），首次挂载的卷继承属主即可写。**注意：已经创建过的卷不会随镜像重建而重新初始化属主**——修复前已存在的 `traces` 卷仍是 root 拥有，须 `docker compose down -v` 删卷重建（本地开发数据可丢弃），或 `docker compose run --rm -u root server chown -R 10001:10001 /traces` 保留数据修复。
+
+### 评测平台 runner 镜像不含 mcc
+
+**现象**：compose 启动后提交 `mini-claude-code` 批次，run 立即报错 `ModuleNotFoundError: No module named 'mcc_core'`（或 mcc_config / mcc_harness 等）。
+
+**根因**：runner 镜像构建上下文曾为 `eval-platform/`，不含仓库根的 `packages/` 源码，mcc 系列包无法打进镜像；须在宿主机手动 editable 安装后本地 `uv run` 跑 runner，容器形态长期不可用。
+
+**修复**：runner 服务的构建上下文改为仓库根（compose 里 `context: ..` + `dockerfile: eval-platform/runner/Dockerfile`），Dockerfile 内追加 mcc 六包的 COPY 与 editable 安装；仓库根新增 `.dockerignore`（排除 .git/.venv/node_modules 等）控制上下文体积。**注意上下文变更不会自动触发重建**，须 `docker compose up --build` 强制重建 runner 镜像。
+
+### 评测集拉取失败：容器无法访问外网
+
+**现象**：`python -m runner.benchmarks --submit` 报 `httpx.ConnectError` 或长时间无响应后超时。
+
+**根因**：基准数据经 HuggingFace datasets-server 公开 API（`datasets-server.huggingface.co`）在线拉取，runner 容器无外网访问（公司代理、K8s prod overlay 的 NetworkPolicy 断网等场景）时必然失败。
+
+**修复**：本地 compose 栈容器默认可联网；受限网络环境先在有网机器上 `--out batch.json` 导出批次 JSON，再经 `POST /api/batches` 手工提交。另注意 LLM 凭证（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`）未设置时任务会在首次调用模型时报错——compose 已透传宿主机同名变量，启动前 export 即可。

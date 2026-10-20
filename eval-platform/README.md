@@ -97,31 +97,82 @@ cd runner && uv run python -m runner.main
 
 平台的原生被测对象是同仓库的 `mcc`（mini-claude-code）：runner 的
 `mini-claude-code` 适配器把 mcc 的 AgentLoop 以 headless 方式跑单任务，
-事件流逐条转译为标准轨迹（无需改 mcc 一行代码）。接入步骤：
+事件流逐条转译为标准轨迹（无需改 mcc 一行代码）。
+
+runner 容器镜像已内置 mcc 源码（构建上下文为仓库根），compose 栈启动后
+即可直接评测，无需手动安装任何依赖：
 
 ```bash
-# 1. 在 runner 环境安装 mcc 系列 包（不在 extras 中，须手动 editable 安装）
+# 1. 提供模型凭证（mcc 走环境变量自动探测，二选一）
+export ANTHROPIC_API_KEY=sk-ant-...    # 或 OPENAI_API_KEY
+
+# 2. 启动全栈（首次或代码变更后须 --build 重建 runner 镜像）
+docker compose up --build -d
+
+# 3. 在 runner 容器内拉取业界基准并提交批次（一条命令完成
+#    拉取 → 转换 → 创建 profile → 提交）
+docker compose exec runner python -m runner.benchmarks \
+    --dataset swebench-lite --limit 10 --submit
+```
+
+打开 `http://localhost:5173` 观看实时执行。
+
+### 业界评测集
+
+`runner.benchmarks` 模块内置三个高使用率公开编码基准的接入，数据经
+HuggingFace datasets-server 公开 API 拉取（容器内可联网即可，无需认证）：
+
+| 数据集 | 规模 | 说明 |
+|---|---|---|
+| `swebench-lite` | 300 例 | SWE-bench Lite：真实 GitHub issue 修复，编码 Agent 事实标准 |
+| `humaneval` | 164 例 | HumanEval：函数级 Python 代码生成经典基准 |
+| `mbpp` | 500 例 | MBPP（test split）：基础 Python 编程任务 |
+
+常用命令：
+
+```bash
+# SWE-bench Lite 前 10 例（默认 profile: mcc-main）
+docker compose exec runner python -m runner.benchmarks \
+    --dataset swebench-lite --limit 10 --submit
+
+# HumanEval 全量、批次命名、并发 4
+docker compose exec runner python -m runner.benchmarks \
+    --dataset humaneval --limit 0 --parallelism 4 \
+    --name humaneval-full --submit
+
+# 只导出批次 JSON 不提交（离线检视转换结果）
+docker compose exec runner python -m runner.benchmarks \
+    --dataset mbpp --limit 5 --out /tmp/mbpp.json
+```
+
+评分语义：转换后的 case 按行为断言评分——`tool_called`（是否按要求
+clone / 写文件 / 运行 python）、`no_tool_errors`（执行无错误）、
+`output_contains`（是否按指令汇报 PASSED / DONE）。这是平台评分模型
+的语义，**不等价于官方 pass@1**（后者需要独立的测试容器做执行式验证）。
+
+### 本地直跑 runner（不经容器）
+
+mcc 系列包不在 workspace 依赖中，本地环境需手动 editable 安装：
+
+```bash
 uv pip install -e ../packages/mcc-core -e ../packages/mcc-config \
     -e ../packages/mcc-llm -e ../packages/mcc-tools \
     -e ../packages/mcc-session -e ../packages/mcc-harness
 
-# 2. 给 runner 提供 LLM 凭证（mcc 走环境变量自动探测）
 export ANTHROPIC_API_KEY=sk-ant-...   # 或 OPENAI_API_KEY
-
-# 3. 创建 mcc profile 并提交批次（scaffold 必须是 mini-claude-code）
-curl -X POST $SERVER/api/profiles -H "Content-Type: application/json" -d '{
-  "name": "mcc-main", "scaffold": "mini-claude-code", "model": "claude-sonnet-4-5",
-  "harness_version": "0.1.0", "sandbox_image": "local"}'
+cd runner
+EVAL_SERVER_URL=http://localhost:8081 uv run --no-sync python -m runner.main
 ```
 
-适配器行为：每个 run 在独立临时工作目录执行（任务间互不污染），权限模式
-固定 `bypassPermissions`（沙箱内无人工确认通道）；`max_turns` 映射到
+评测集命令同理（`uv run --no-sync python -m runner.benchmarks ...`），
+`--no-sync` 防止 uv 剔除手动安装的 editable 包。
+
+### 适配器行为
+
+每个 run 在独立临时工作目录执行（任务间互不污染），权限模式固定
+`bypassPermissions`（沙箱内无人工确认通道）；`max_turns` 映射到
 AgentLoop 迭代上限；`expectations` 评分由 runner 统一完成（工具报错会被
 `no_tool_errors` 断言捕获）。
-
-注意：ch52 的 runner 容器镜像构建上下文是 `eval-platform/`，不含 mcc 源码——
-容器化跑 mini-claude-code 批次需把构建上下文扩到仓库根并调整 Dockerfile 的
-COPY 路径；本地 `uv run` 直接跑 runner 无此限制。
 
 ### web 前端
 
@@ -254,4 +305,4 @@ Prometheus 抓取 `server:8081/metrics`；Grafana provisioning 自动导入数�
 | `RUNNER_SECRET` | 未设置 | 内部接口 Bearer token；须与 server 一致 |
 | `POLL_IDLE_S` | `2.0` | 无任务时的轮询间隔（秒） |
 | `LG_MODEL_PROVIDER` | `anthropic` | langgraph 适配器的底层 LLM（anthropic / openai） |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | mini-claude-code 适配器的 LLM 凭证（mcc 环境变量自动探测） |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | mini-claude-code 适配器的 LLM 凭证（mcc 环境变量自动探测；compose 已透传宿主机同名变量） |

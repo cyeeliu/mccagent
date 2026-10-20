@@ -1,0 +1,12 @@
+# 根构建上下文瘦身：只保留 Dockerfile 实际 COPY 的内容（workspace 元数据、packages 源码、eval-platform 源码）
+.git
+.venv
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+**/dist
+**/*.egg-info
+.mcc

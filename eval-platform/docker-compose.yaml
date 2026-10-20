@@ -67,15 +67,19 @@ services:
     logging: *default-logging
 
   # ── Python Runner ───────────────────────────────────────────────────────
+  # 构建上下文为仓库根（镜像内置 mcc 源码，compose up 后即可直接评测
+  # mini-claude-code scaffold）；根 .dockerignore 负责上下文瘦身
   runner:
     build:
-      context: .
-      dockerfile: runner/Dockerfile
+      context: ..
+      dockerfile: eval-platform/runner/Dockerfile
     environment:
       EVAL_SERVER_URL: http://server:8081
       RUNNER_SECRET: ${RUNNER_SECRET:-dev-runner-secret}
-      # 真实 Agent 调用时打开：
-      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # mcc 的 LLM 凭证（环境变量自动探测，二选一即可）；
+      # 未设置时 mini-claude-code 任务会在调用模型时报错
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     depends_on:
       server: { condition: service_healthy }
     deploy:
