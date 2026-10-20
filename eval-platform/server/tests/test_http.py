@@ -7,10 +7,12 @@ SSE 流因长连接特性以生成器单元测试的方式单独验证。
 import asyncio
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from conftest import FakeConn, FakeDb
 from eval_server import api as api_module
+from eval_server import scheduler
 from eval_server.api import _sse_events
 from eval_server.app import create_app
 from eval_server.domain import LlmChunk, RunFinished, RunStarted
@@ -515,6 +517,36 @@ def test_runs_list_filters_and_pagination(client: TestClient, fake_db: FakeDb) -
 def test_run_not_found(client: TestClient) -> None:
     missing = str(uuid.uuid4())
     assert client.get(f"/api/runs/{missing}").status_code == 404
+
+
+async def test_run_exposes_retry_and_lease_observability(
+    client: TestClient, fake_db: FakeDb
+) -> None:
+    """重排可观测性：reaper 回队后 retries/lease_expires_at 经 API 暴露。"""
+    _create_profile(client)
+    _create_batch(client, [_case()])
+    run_id = _lease(client, "runner-a")["run_id"]
+
+    detail = client.get(f"/api/runs/{run_id}").json()
+    assert detail["retries"] == 0
+    assert detail["lease_expires_at"] is not None
+
+    run = next(r for r in fake_db.runs if r["id"] == run_id)
+    run["lease_expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
+    await scheduler.run_reaper_once(fake_db)
+
+    items = client.get("/api/runs").json()["items"]
+    assert items[0]["retries"] == 1
+    requeued = client.get(f"/api/runs/{run_id}").json()
+    assert requeued["status"] == "queued"
+    assert requeued["retries"] == 1
+    assert requeued["lease_expires_at"] is None
+
+    reassigned = _lease(client, "runner-b")
+    assert reassigned is not None and reassigned["run_id"] == run_id
+    requeued_detail = client.get(f"/api/runs/{run_id}").json()
+    assert requeued_detail["retries"] == 1
+    assert requeued_detail["lease_expires_at"] is not None
 
 
 async def test_trace_pagination(state: AppState, client: TestClient) -> None:

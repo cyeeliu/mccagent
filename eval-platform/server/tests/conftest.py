@@ -149,7 +149,9 @@ class FakeDb:
             for r in self.runs:
                 counts[r["status"]] = counts.get(r["status"], 0) + 1
             return [{"status": s, "n": n} for s, n in counts.items()]
-        if query.startswith("SELECT id, batch_id, case_id, status, score, cost_usd, turns"):
+        if query.startswith(
+            "SELECT id, batch_id, case_id, status, score, cost_usd, turns, retries"
+        ):
             batch, status, limit, offset = args
             rows = [
                 {
@@ -160,6 +162,7 @@ class FakeDb:
                     "score": r["score"],
                     "cost_usd": r["cost_usd"],
                     "turns": r["turns"],
+                    "retries": r["retries"],
                 }
                 for r in sorted(self.runs, key=lambda r: r["created_at"], reverse=True)
                 if (batch is None or r["batch_id"] == batch)
@@ -295,7 +298,9 @@ class FakeDb:
                 "parallelism": batch["parallelism"],
                 "created_at": batch["created_at"],
             }
-        if query.startswith("SELECT batch_id, case_id, status, score, cost_usd, turns"):
+        if query.startswith(
+            "SELECT batch_id, case_id, status, score, cost_usd, turns, retries"
+        ):
             run = self._run(args[0])
             if run is None:
                 return None
@@ -306,6 +311,8 @@ class FakeDb:
                 "score": run["score"],
                 "cost_usd": run["cost_usd"],
                 "turns": run["turns"],
+                "retries": run["retries"],
+                "lease_expires_at": run["lease_expires_at"],
                 "error": run["error"],
                 "started_at": run["started_at"],
                 "finished_at": run["finished_at"],

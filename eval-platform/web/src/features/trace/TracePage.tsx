@@ -41,6 +41,11 @@ export function TracePage() {
             {run?.case_id ?? runId}
             {isLive && <span className="badge live">LIVE</span>}
             {run && !isLive && <span className={`badge ${run.status}`}>{run.status}</span>}
+            {run && (run.retries ?? 0) > 0 && isLive && (
+              <span className="badge retry" title={`租约过期被重排，当前第 ${(run.retries ?? 0) + 1} 次尝试`}>
+                ↻ 重跑中
+              </span>
+            )}
           </h1>
           <label>
             <input type="checkbox" checked={onlyErrors}

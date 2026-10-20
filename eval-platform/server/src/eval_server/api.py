@@ -377,7 +377,7 @@ def build_public_router() -> APIRouter:
         if batch is not None:
             batch = _uuid_param(batch, "batch filter")
         rows = await state.db.fetch(
-            "SELECT id, batch_id, case_id, status, score, cost_usd, turns"
+            "SELECT id, batch_id, case_id, status, score, cost_usd, turns, retries"
             " FROM runs"
             " WHERE ($1::text IS NULL OR batch_id = $1::uuid)"
             "   AND ($2::text IS NULL OR status = $2)"
@@ -396,6 +396,7 @@ def build_public_router() -> APIRouter:
                 "score": r["score"],
                 "cost_usd": r["cost_usd"],
                 "turns": r["turns"],
+                "retries": r["retries"],
             }
             for r in rows
         ]
@@ -405,8 +406,9 @@ def build_public_router() -> APIRouter:
     async def get_run(run_id: str, state: StateDep) -> dict[str, Any]:
         run_id = _uuid_param(run_id, "run id")
         row = await state.db.fetchrow(
-            "SELECT batch_id, case_id, status, score, cost_usd, turns, error,"
-            " started_at, finished_at FROM runs WHERE id = $1",
+            "SELECT batch_id, case_id, status, score, cost_usd, turns, retries,"
+            " lease_expires_at, error, started_at, finished_at"
+            " FROM runs WHERE id = $1",
             run_id,
         )
         if row is None:
@@ -419,6 +421,8 @@ def build_public_router() -> APIRouter:
             "score": row["score"],
             "cost_usd": row["cost_usd"],
             "turns": row["turns"],
+            "retries": row["retries"],
+            "lease_expires_at": row["lease_expires_at"],
             "error": row["error"],
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],

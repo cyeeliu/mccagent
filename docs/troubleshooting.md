@@ -214,3 +214,11 @@
 **根因**：web client 的 `onerror` 处理器注释声称「服务端按 Last-Event-ID 续发」，但 server 的 SSE 实现并无续发逻辑——断线窗口内的事件既不在重连补发范围内，也没有触发任何 REST 补齐，注释掩盖了真实缺口。
 
 **修复**：断线与「落后被踢」走同一条补偿路径——触发 REST 全量重读 trace 分页后幂等合并，不再依赖不存在的续发语义。
+
+### run 卡 running 无评分（状态长时间不翻转）
+
+**现象**：demo 批次的 `fix-div-by-zero` run，轨迹 17 个事件完整（结尾 `run_finished=passed`、$0.0142、3 轮、grep/edit/bash 工具），但 run 状态长时间停在 running、LIVE 不灭、无 score。
+
+**根因**：沙箱端到端复现（真 uvicorn + FakeDb + runner 子进程 + mock adapter 全链路，当前版本与上一版均正常 passed/1.0）证明代码无回归；页面数据特征（三工具集、`1200+turn*800` tokens、`uniform(0.01,0.06)` 成本）全部命中 demo-batch.sh 的 mock adapter 输出，而 mock run 约 5 秒即完成，心跳/租约超时不成立——最可能是容器跑旧代码（源码 COPY 进镜像，普通 `up`/`restart` 不生效）。排查同时暴露两个观测缺口：run 被 reaper 重排重跑时完全静默（重跑事件 seq 与旧轨迹重复，前端 `mergeBySeq` 去重后 UI 无任何变化），且 `/api/runs/{id}` 不暴露 `retries` 与 `lease_expires_at`——「active 状态 + NULL 租约」是 reaper 永不回收的唯一持久卡死形态，缺这两个字段无法定位。
+
+**修复**：观测性增强——`/api/runs` 列表与详情暴露 `retries`，详情额外暴露 `lease_expires_at`；前端 RunSchema 同步新字段（全部可缺失，兼容旧后端），轨迹页在 LIVE 且 `retries > 0` 时显示「↻ 重跑中」徽标（悬停提示当前第几次尝试）。处置：容器环境务必 `docker compose up --build`（runner 与 server 都要）重建镜像；若 run 已卡死，`retries`/`lease_expires_at` 字段可直接区分「正在重跑」与「NULL 租约永久卡死」两种形态。

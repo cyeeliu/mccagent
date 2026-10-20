@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CompareReportSchema,
   DashboardSchema,
+  RunSchema,
   TraceEventSchema,
   parseEvent,
 } from "./schemas";
@@ -49,6 +50,35 @@ describe("parseEvent 未知事件降级", () => {
   it("字段缺失的已知类型同样降级而不是抛错", () => {
     const e = parseEvent({ ...base, type: "llm_chunk", turn: 0 });
     expect(e.type).toBe("unknown");
+  });
+});
+
+describe("RunSchema", () => {
+  const minimal = {
+    id: "r1", batch_id: "b1", case_id: "c1", status: "running",
+    score: null, cost_usd: null, turns: null,
+  };
+
+  it("兼容旧负载：观测字段缺失时校验仍通过", () => {
+    expect(RunSchema.safeParse(minimal).success).toBe(true);
+    expect(RunSchema.parse(minimal).retries).toBeUndefined();
+  });
+
+  it("匹配详情响应形状：暴露 retries 与 lease_expires_at", () => {
+    const r = RunSchema.parse({
+      ...minimal,
+      retries: 1,
+      lease_expires_at: "2026-10-20T11:00:00+00:00",
+      error: null,
+      started_at: "2026-10-20T10:59:00+00:00",
+      finished_at: null,
+    });
+    expect(r.retries).toBe(1);
+    expect(r.lease_expires_at).toBe("2026-10-20T11:00:00+00:00");
+  });
+
+  it("retries 非数字时拒绝", () => {
+    expect(RunSchema.safeParse({ ...minimal, retries: "1" }).success).toBe(false);
   });
 });
 

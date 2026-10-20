@@ -41,6 +41,11 @@ export const RunSchema = z.object({
   score: z.number().nullish(),
   cost_usd: z.number().nullish(),
   turns: z.number().nullish(),
+  retries: z.number().nullish(),
+  lease_expires_at: z.string().nullish(),
+  error: z.string().nullish(),
+  started_at: z.string().nullish(),
+  finished_at: z.string().nullish(),
 });
 export type Run = z.infer<typeof RunSchema>;
 
