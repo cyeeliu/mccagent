@@ -1,0 +1,32 @@
+[project]
+name = "mcc-eval"
+version = "0.1.0"
+description = "轻量评测 harness：业界基准数据集 + mcc Agent 轨迹与评分"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "mcc-core",
+    "mcc-llm",
+    "mcc-tools",
+    "mcc-session",
+    "mcc-config",
+    "mcc-harness",
+    "httpx>=0.27",
+    "pydantic>=2.9",
+]
+
+[project.scripts]
+mcc-eval = "mcc_eval.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+mcc-core = { workspace = true }
+mcc-llm = { workspace = true }
+mcc-tools = { workspace = true }
+mcc-session = { workspace = true }
+mcc-config = { workspace = true }
+mcc-harness = { workspace = true }

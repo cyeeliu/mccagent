@@ -1,0 +1,19 @@
+[
+  {
+    "case_id": "demo-pass",
+    "task": "修复除零缺陷并跑测试",
+    "expectations": [
+      {"type": "tool_called", "tool": "grep", "weight": 0.3},
+      {"type": "tool_called", "tool": "edit", "weight": 0.3},
+      {"type": "tool_called", "tool": "bash", "args_regex": "pytest", "weight": 0.2},
+      {"type": "output_contains", "pattern": "passed", "weight": 0.2}
+    ]
+  },
+  {
+    "case_id": "demo-fail",
+    "task": "这个任务会 fail：修复不存在的函数",
+    "expectations": [
+      {"type": "no_tool_errors", "weight": 1.0}
+    ]
+  }
+]

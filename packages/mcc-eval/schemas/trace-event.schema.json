@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cyeeliu/mccagent/packages/mcc-eval/schemas/trace-event.schema.json",
+  "title": "TraceEvent",
+  "description": "Agent 运行轨迹事件。mcc-eval 的单一事实来源，改动必须 bump schema_version。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "seq",
+    "ts",
+    "type"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "run 内单调递增序号，前端实时/历史合并的锚点"
+    },
+    "ts": {
+      "type": "number",
+      "description": "unix 秒（含小数）"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "run_started"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "case_id": {
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "run_id",
+        "case_id",
+        "task"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "llm_request"
+        },
+        "turn": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "turn"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "llm_chunk"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "turn",
+        "delta"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "tool_call"
+        },
+        "turn": {
+          "type": "integer"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "args": {}
+      },
+      "required": [
+        "type",
+        "turn",
+        "call_id",
+        "tool_name"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "tool_result"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "is_error": {
+          "type": "boolean",
+          "default": false
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "output"
+      ]
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "run_finished"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "error",
+            "timeout"
+          ]
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "turns": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "status"
+      ]
+    }
+  ]
+}

@@ -7,6 +7,7 @@ members = [
     "mcc-cli",
     "mcc-config",
     "mcc-core",
+    "mcc-eval",
     "mcc-harness",
     "mcc-llm",
     "mcc-session",
@@ -181,6 +182,33 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
+
+[[package]]
+name = "mcc-eval"
+version = "0.1.0"
+source = { editable = "packages/mcc-eval" }
+dependencies = [
+    { name = "httpx" },
+    { name = "mcc-config" },
+    { name = "mcc-core" },
+    { name = "mcc-harness" },
+    { name = "mcc-llm" },
+    { name = "mcc-session" },
+    { name = "mcc-tools" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "mcc-config", editable = "packages/mcc-config" },
+    { name = "mcc-core", editable = "packages/mcc-core" },
+    { name = "mcc-harness", editable = "packages/mcc-harness" },
+    { name = "mcc-llm", editable = "packages/mcc-llm" },
+    { name = "mcc-session", editable = "packages/mcc-session" },
+    { name = "mcc-tools", editable = "packages/mcc-tools" },
+    { name = "pydantic", specifier = ">=2.9" },
+]
 
 [[package]]
 name = "mcc-harness"
