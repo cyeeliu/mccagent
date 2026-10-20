@@ -52,6 +52,11 @@ uv run --all-packages pytest tests/ -q
 cd eval-platform
 uv sync --all-packages
 uv run --all-packages pytest
+
+# 平台前端
+cd web
+npm run build   # tsc 严格类型检查 + vite 生产构建
+npm test        # vitest
 ```
 
 ## 路线图
@@ -59,7 +64,7 @@ uv run --all-packages pytest
 1. 事件契约与 server 骨架（本页所述，已完成）
 2. server 完整实现：REST 路由、SSE 广播、租约调度、轨迹存储、指标暴露（已完成）
 3. runner 完整实现：执行主循环、心跳续租、mock / anthropic / langgraph 适配器、评分（已完成）
-4. web 功能页面：批次看板、轨迹查看器、对比报告、仪表盘
+4. web 功能页面：批次看板、轨迹查看器、对比报告、仪表盘（已完成）
 5. 部署与运维：docker compose 全栈、Prometheus/Grafana、K8s 配置
 
 ## server 与 runner 内部结构
@@ -78,6 +83,19 @@ runner/src/runner/
 ├── main.py       主循环：lease → 执行 → 批量上报 JSONL → complete；心跳后台任务
 ├── scoring.py    expectations 评分：四类断言加权叠加，阈值判定
 └── adapters/     适配器：mock（零依赖演示）、anthropic、langgraph（惰性导入）
+```
+
+## web 内部结构
+
+```
+web/src/
+├── api/schemas.ts             Zod 契约：全部网络数据运行时校验，未知事件降级占位
+├── api/client.ts              fetch + SSE 封装（EventSource 自动重连带 Last-Event-ID）
+├── App.tsx                    路由（批次/详情/轨迹/仪表盘/对比）+ 顶部导航
+├── features/runs/             批次列表 + 批次详情（run_stats 汇总，运行中自动轮询）
+├── features/trace/            轨迹查看器 + useTrace Hook（实时/历史按 seq 拼接去重）
+├── features/dashboard/        仪表盘：统计卡 + 双 Y 轴趋势图（通过率左轴 / Run 数右轴）
+└── features/compare/          批次对比：URL 参数驱动，verdict 过滤 + 可比性警告
 ```
 
 测试基线：server 走 FastAPI TestClient + 内存数据库替身全链路验证；

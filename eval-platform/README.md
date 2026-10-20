@@ -65,7 +65,7 @@ run 生命周期：`queued → leased → running → passed | failed | error | 
 | server 领域类型 / 配置 / 错误 / API 契约 / 状态机 | ✅ 可用 |
 | server 路由实现（REST + SSE + 调度 + 存储 + 指标） | ✅ 可用 |
 | runner 执行主循环 / 评分 / 适配器（mock / anthropic / langgraph） | ✅ 可用 |
-| web 功能页面（看板 / 轨迹 / 对比 / 仪表盘） | 🚧 建设中 |
+| web 功能页面（看板 / 轨迹 / 对比 / 仪表盘） | ✅ 可用 |
 | 部署（docker compose / K8s / 可观测栈） | 🚧 规划中 |
 
 本地开发：
@@ -93,7 +93,32 @@ cd runner && uv run python -m runner.main
 可选 extras：`uv sync --extra s3`（server，S3 轨迹后端）、
 `uv sync --extra anthropic` / `--extra langgraph`（runner，真实 Agent 适配器）。
 
-前端（`web/`）为标准 Vite 项目：`npm install && npm run dev` 启动开发服务器（代理 `/api` 到本地 API 服务）。
+### web 前端
+
+标准 Vite + React + TanStack Query 项目，所有网络数据先过 Zod 校验，未知事件类型降级为占位而不是崩溃。
+
+```bash
+cd web
+npm install
+npm run dev     # 开发服务器（/api 代理到本地 API 服务，SSE 不缓冲）
+npm run build   # tsc 严格类型检查 + 生产构建
+npm test        # vitest（Zod 契约 + 轨迹合并纯函数）
+```
+
+页面路由：
+
+| 路由 | 页面 |
+|---|---|
+| `/` | 批次列表（运行中自动轮询，跑完自动停） |
+| `/batches/:batchId` | 批次详情（run_stats 汇总 + runs 表） |
+| `/runs/:runId` | 轨迹查看器（时间线 + 详情双栏，只看失败过滤） |
+| `/dashboard` | 仪表盘（统计卡 + 通过率/Run 数双 Y 轴趋势 + 成本趋势） |
+| `/compare?a=…&b=…` | 批次对比（URL 驱动可分享，verdict 过滤 + 可比性警告） |
+
+**实时与历史无缝拼接**（`web/src/features/trace/useTrace.ts`）：run 无论已结束、正在跑、
+还是看着看着跑完，组件拿到的都是同一份按 `seq` 排序去重后的事件流——
+历史段分页拉全，实时段 SSE 续接（100ms 节流合帧），
+SSE 掉帧读到 lagged 信号时触发全量重拉补偿，全部封装在 Hook 内。
 
 ## 环境变量（server）
 
