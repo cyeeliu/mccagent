@@ -16,3 +16,25 @@ jobs:
       - run: uv sync --all-packages --dev
       - run: uv run ruff check .
       - run: uv run --all-packages pytest tests/ packages/ -q
+
+  eval-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      # 评测链路自身的回归：mock 适配器跑示例 case（零 API 成本），
+      # 多次采样路径一并覆盖；产物作为 artifact 供失败归因
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-packages --dev
+      - run: |
+          uv run --package mcc-eval mcc-eval run \
+            --cases packages/mcc-eval/examples/mock-cases.json \
+            --mock --runs-per-case 2 --out eval-runs
+          grep -q "demo-pass | 2/2 | 稳定通过" eval-runs/*/report.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-smoke-report
+          path: eval-runs/
+          retention-days: 14

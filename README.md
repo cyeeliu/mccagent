@@ -120,7 +120,8 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [权限与 Hooks](docs/permissions.md) | 规则语法、决策顺序、外部脚本钩子 |
 | [会话与记忆](docs/sessions.md) | JSONL 快照、resume、Markdown 记忆库 |
 | [子代理](docs/subagents.md) | 预设角色、并发护栏、fan-out 用法 |
-| [评测](packages/mcc-eval/README.md) | mcc-eval：基准评测、轨迹契约、报告 |
+| [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
+| [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |
 | [踩坑与排障](docs/troubleshooting.md) | 已修复的 bug 与已知陷阱记录 |
 
@@ -131,11 +132,11 @@ uv run ruff check .                               # lint
 uv run --all-packages pytest tests/ packages/ -q  # 全量测试
 ```
 
-评测冒烟（mock，无需 API key）：
+评测冒烟（mock，无需 API key，CI 的 eval-smoke job 同款）：
 
 ```bash
 uv run --package mcc-eval mcc-eval run \
-  --cases packages/mcc-eval/examples/mock-cases.json --mock
+  --cases packages/mcc-eval/examples/mock-cases.json --mock --runs-per-case 2
 uv run --package mcc-eval mcc-eval report eval-runs/<run-id>
 ```
 

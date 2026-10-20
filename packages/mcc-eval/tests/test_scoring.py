@@ -175,3 +175,70 @@ def test_score_case_falls_back_to_assertions_without_check(tmp_path) -> None:
         work_dir=tmp_path,
     )
     assert result.status == "passed"
+
+
+# ─── 轨迹 lint 断言（过程性检查）─────────────────────────────────────────
+
+
+def _loop_snap(repeats: int) -> TraceSnapshot:
+    """构造连续 repeats 次相同调用的快照。"""
+    calls = [
+        ToolCall(seq=i, turn=0, call_id=f"c{i}", tool_name="read_file",
+                 args={"path": "a.py"})
+        for i in range(repeats)
+    ]
+    return TraceSnapshot(tool_calls=calls)
+
+
+@pytest.mark.parametrize(
+    ("repeats", "max_repeat", "ok"),
+    [(3, 3, True), (4, 3, False), (2, 1, False)],
+)
+def test_no_loops_detection(repeats: int, max_repeat: int, ok: bool) -> None:
+    result = score_assertions(
+        _loop_snap(repeats),
+        [{"type": "no_loops", "max_repeat": max_repeat, "weight": 1.0}],
+    )
+    assert (result.status == "passed") is ok
+    assert "identical call streak" in result.reason
+
+
+def test_no_loops_allows_interleaved_repeats() -> None:
+    """相同调用被其他调用隔开不算循环（A B A B A 不触发）。"""
+    calls = [
+        ToolCall(seq=i, turn=0, call_id=f"c{i}",
+                 tool_name="read_file" if i % 2 == 0 else "grep",
+                 args={"path": "a.py"} if i % 2 == 0 else {"pattern": "x"})
+        for i in range(5)
+    ]
+    snap = TraceSnapshot(tool_calls=calls)
+    result = score_assertions(
+        snap, [{"type": "no_loops", "max_repeat": 3, "weight": 1.0}]
+    )
+    assert result.status == "passed"
+
+
+@pytest.mark.parametrize(
+    ("cost", "max_usd", "ok"),
+    [(0.5, 1.0, True), (1.0, 1.0, True), (1.01, 1.0, False)],
+)
+def test_cost_budget(cost: float, max_usd: float, ok: bool) -> None:
+    snap = TraceSnapshot(cost_usd=cost)
+    result = score_assertions(
+        snap, [{"type": "cost_budget", "max_usd": max_usd, "weight": 1.0}]
+    )
+    assert (result.status == "passed") is ok
+    assert "cost $" in result.reason
+
+
+@pytest.mark.parametrize(
+    ("turns", "max_turns", "ok"),
+    [(5, 10, True), (10, 10, True), (11, 10, False)],
+)
+def test_turns_budget(turns: int, max_turns: int, ok: bool) -> None:
+    snap = TraceSnapshot(turns=turns)
+    result = score_assertions(
+        snap, [{"type": "turns_budget", "max_turns": max_turns, "weight": 1.0}]
+    )
+    assert (result.status == "passed") is ok
+    assert "turns" in result.reason

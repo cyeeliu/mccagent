@@ -5,10 +5,17 @@
   1. 执行式（case.check 存在，HumanEval / MBPP）：把官方测试代码写入
      Agent 工作目录，用独立子进程运行（超时保护），退出码 0 即 passed。
      语义对齐官方基准的单样本判定——Agent 产物 + 官方测试，测试说了算。
-  2. 断言式（case.expectations）：对轨迹快照做加权断言
-     （tool_called / output_contains / no_tool_errors / tool_call_count）。
+  2. 断言式（case.expectations）：对轨迹快照做加权断言。
 
-两种可以并存：执行式决定最终 status / score，断言明细进 details
+断言分两类：
+
+  - 终态断言：``output_contains``（最终输出文本）
+  - 过程断言（轨迹 lint，零成本诊断 harness 过程性缺陷）：
+    ``tool_called`` / ``tool_call_count``（单元级——调用与参数纪律）、
+    ``no_tool_errors`` / ``no_loops`` / ``cost_budget`` / ``turns_budget``
+    （轨迹级——无循环、成本与轮次在预算内）
+
+两种策略可以并存：执行式决定最终 status / score，断言明细进 details
 供失败诊断。执行式判定不依赖 Agent 自述（如「PASSED」文本），从产物
 层面杜绝「声称通过但代码错误」的假阳性。
 
@@ -41,12 +48,18 @@ CHECK_PREAMBLE = (
 
 @dataclass
 class TraceSnapshot:
-    """从事件流中提取的 run 摘要，传给断言式评分。"""
+    """从事件流中提取的 run 摘要，传给断言式评分。
+
+    cost_usd / turns 取自轨迹末尾的 run_finished 事件——
+    过程性预算断言（cost_budget / turns_budget）的判定依据。
+    """
 
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_results: list[ToolResult] = field(default_factory=list)
     text_outputs: list[str] = field(default_factory=list)  # 所有 LlmChunk.delta 的拼接
     had_error: bool = False  # 任意 ToolResult.is_error
+    cost_usd: float = 0.0
+    turns: int = 0
 
 
 @dataclass
@@ -137,6 +150,12 @@ def score_assertions(
             )
         elif etype == "tool_call_count":
             ok, why = _check_tool_count(snapshot, exp)
+        elif etype == "no_loops":
+            ok, why = _check_no_loops(snapshot, exp)
+        elif etype == "cost_budget":
+            ok, why = _check_cost_budget(snapshot, exp)
+        elif etype == "turns_budget":
+            ok, why = _check_turns_budget(snapshot, exp)
         else:
             # 未知 expectation 类型：宽松跳过，不影响得分
             total_weight -= weight
@@ -207,3 +226,40 @@ def _check_tool_count(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bool, s
     count = sum(1 for tc in snap.tool_calls if tc.tool_name == tool_name)
     ok = min_c <= count <= max_c
     return ok, f"tool '{tool_name}' called {count} time(s) (expected [{min_c}, {max_c}])"
+
+
+DEFAULT_MAX_REPEAT = 3
+
+
+def _check_no_loops(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bool, str]:
+    """验证无循环：连续同工具同参数的调用次数不超过 max_repeat。
+
+    相同调用立刻重试一次（工具偶发失败后的重试）是合理的，
+    连续三次以上完全相同的调用基本可断定陷入了循环。
+    """
+    max_repeat = int(exp.get("max_repeat", DEFAULT_MAX_REPEAT))
+    longest = 0
+    current = 0
+    prev: tuple[str, Any] | None = None
+    for tc in snap.tool_calls:
+        key = (tc.tool_name, tc.args)
+        current = current + 1 if key == prev else 1
+        prev = key
+        longest = max(longest, current)
+    ok = longest <= max_repeat
+    why = f"longest identical call streak {longest} (max {max_repeat})"
+    return ok, why
+
+
+def _check_cost_budget(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bool, str]:
+    """验证单次 run 成本不超过 max_usd。"""
+    max_usd = float(exp.get("max_usd", 1.0))
+    ok = snap.cost_usd <= max_usd
+    return ok, f"cost ${snap.cost_usd:.4f} (budget ${max_usd:.4f})"
+
+
+def _check_turns_budget(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bool, str]:
+    """验证 LLM 轮次不超过 max_turns。"""
+    max_turns = int(exp.get("max_turns", 20))
+    ok = snap.turns <= max_turns
+    return ok, f"turns {snap.turns} (budget {max_turns})"

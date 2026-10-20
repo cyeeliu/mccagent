@@ -1,11 +1,13 @@
-"""评测 CLI：拉数据、跑 Agent、出报告。
+"""评测 CLI：拉数据、跑 Agent、出报告、回流失败会话。
 
 用法（在仓库根目录，经 uv workspace 运行）::
 
     uv run --package mcc-eval mcc-eval run --dataset humaneval --limit 5
     uv run --package mcc-eval mcc-eval run --cases my-cases.json --mock
+    uv run --package mcc-eval mcc-eval run --cases my-cases.json --runs-per-case 3
     uv run --package mcc-eval mcc-eval report eval-runs/<批次目录>
     uv run --package mcc-eval mcc-eval datasets --dataset mbpp --limit 20 --out mbpp.json
+    uv run --package mcc-eval mcc-eval distill --limit 20
 
 模型解析复用 mcc 的约定：--model > MODEL 环境变量 > mcc settings.json
 （model.main）> 平台默认值——评测不为模型配置引入第二份来源。
@@ -29,6 +31,7 @@ from mcc_eval.datasets import (
     fetch_rows,
     load_cases_file,
 )
+from mcc_eval.distill import distill_sessions
 from mcc_eval.report import rebuild, save_cases, write_report_md, write_results_json
 from mcc_eval.runner import new_batch_dir, run_batch
 
@@ -37,6 +40,7 @@ DEFAULT_OUT_ROOT = "eval-runs"
 DEFAULT_CONCURRENCY = 2
 DEFAULT_MAX_TURNS = 20
 DEFAULT_TIMEOUT_S = 600.0
+DEFAULT_RUNS_PER_CASE = 1
 
 
 def resolve_model(explicit: str | None, *, settings_loader: Any | None = None) -> str:
@@ -89,6 +93,14 @@ def _gather_cases(args: argparse.Namespace) -> tuple[list[Case], str]:
     return build_cases(args.dataset, records), args.dataset
 
 
+def _positive_int(raw: str) -> int:
+    """argparse 类型：正整数（采样次数至少 1 才构成一次结论）。"""
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return value
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cases, dataset_label = _gather_cases(args)
     if args.limit:
@@ -101,7 +113,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     save_cases(cases, batch_dir)
 
     adapter = MockAdapter() if args.mock else MccAdapter()
-    print(f"模型: {model}｜Case: {len(cases)}｜并发: {args.concurrency}", file=sys.stderr)
+    print(
+        f"模型: {model}｜Case: {len(cases)}｜并发: {args.concurrency}"
+        f"｜采样: {args.runs_per_case}/case",
+        file=sys.stderr,
+    )
     print(f"批次目录: {batch_dir}", file=sys.stderr)
 
     batch = asyncio.run(
@@ -114,6 +130,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             concurrency=args.concurrency,
             max_turns=args.max_turns,
             timeout_s=args.timeout,
+            runs_per_case=args.runs_per_case,
         )
     )
     write_results_json(batch, batch_dir)
@@ -124,6 +141,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         f"报告 {batch_dir}/report.md",
         file=sys.stderr,
     )
+    if batch.flaky_cases:
+        print(
+            f"注意：{batch.flaky_cases} 个 case 采样结果不稳定（flaky），"
+            f"详见报告的 case 级聚合表",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -158,6 +181,38 @@ def cmd_datasets(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_distill(args: argparse.Namespace) -> int:
+    """失败回流：把生产会话固化成 case 草稿。"""
+    sessions_dir = Path(args.sessions_dir)
+    if not sessions_dir.is_dir():
+        raise SystemExit(f"会话目录不存在：{sessions_dir}")
+    statuses = tuple(s.strip() for s in args.status.split(",") if s.strip())
+    outcomes = distill_sessions(
+        sessions_dir,
+        statuses=statuses,
+        limit=args.limit,
+        out_dir=Path(args.out),
+    )
+    created = [o for o in outcomes if o.created]
+    skipped = [o for o in outcomes if not o.created]
+    print(
+        f"回流完成：新建 {len(created)}，跳过（已存在）{len(skipped)}，"
+        f"状态过滤 {statuses}；草稿目录 {args.out}",
+        file=sys.stderr,
+    )
+    for o in created:
+        print(f"  + {o.path}（源状态 {o.source_status}）", file=sys.stderr)
+    for o in skipped:
+        print(f"  = {o.path}（已存在，未覆盖）", file=sys.stderr)
+    if created:
+        print(
+            "草稿的 expectations / setup 为空，需人工补齐判定器并校准后"
+            "再入正式评测集",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mcc-eval", description="轻量评测：业界基准 + mcc Agent 轨迹与评分"
@@ -172,6 +227,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="只取前 N 个 case（0 = 全量）")
     run.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY,
                      help=f"并发数（默认 {DEFAULT_CONCURRENCY}）")
+    run.add_argument("--runs-per-case", type=_positive_int,
+                     default=DEFAULT_RUNS_PER_CASE,
+                     help=f"每 case 采样次数（默认 {DEFAULT_RUNS_PER_CASE}；"
+                          f"Agent 输出非确定，≥3 才能看出稳定性）")
     run.add_argument("--model", default=None,
                      help="覆盖模型（缺省复用 mcc 配置：MODEL 环境变量 > settings.json）")
     run.add_argument("--mock", action="store_true",
@@ -193,6 +252,23 @@ def build_parser() -> argparse.ArgumentParser:
     datasets.add_argument("--limit", type=_non_negative_int, default=0)
     datasets.add_argument("--out", default=None, help="导出 case JSON（离线运行用）")
     datasets.set_defaults(func=cmd_datasets)
+
+    distill = sub.add_parser(
+        "distill", help="把失败生产会话回流为评测 case 草稿"
+    )
+    distill.add_argument(
+        "--sessions-dir", default=str(Path.home() / ".mcc" / "sessions"),
+        help="mcc 会话目录（默认 ~/.mcc/sessions）",
+    )
+    distill.add_argument(
+        "--status", default="errored",
+        help="按会话状态过滤，逗号分隔（默认 errored）",
+    )
+    distill.add_argument("--limit", type=_non_negative_int, default=20,
+                         help="最多处理多少个会话（默认 20）")
+    distill.add_argument("--out", default="evals/cases",
+                         help="草稿落盘目录（默认 evals/cases/）")
+    distill.set_defaults(func=cmd_distill)
 
     return parser
 

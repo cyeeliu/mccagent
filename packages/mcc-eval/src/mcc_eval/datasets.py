@@ -51,17 +51,23 @@ BUGFIX_EXPECTATIONS = [
 
 @dataclass
 class Case:
-    """一个待评测任务：提示词 + 可选的官方测试与行为断言。
+    """一个待评测任务：提示词 + 环境预置 + 可选的官方测试与行为断言。
 
     check 存在时评分走执行式（官方测试子进程运行，二值判定）；
     否则走 expectations 行为断言（加权得分）。两者可以并存——
     执行式决定 status/score，断言明细进 details 供诊断。
+
+    setup 是声明式的环境预置：``{相对路径: 文件内容}``
+    （路径限定在工作目录内），Agent 开跑前逐个写入。
+    评测任务因此可以表达「给定环境快照，改出正确终态」的
+    回流 case，而不只是裸任务描述。
     """
 
     case_id: str
     task: str
     check: str | None = None
     expectations: list[dict[str, Any]] = field(default_factory=list)
+    setup: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +75,7 @@ class Case:
             "task": self.task,
             "check": self.check,
             "expectations": self.expectations,
+            "setup": self.setup,
         }
 
     @classmethod
@@ -77,11 +84,19 @@ class Case:
         task = str(raw.get("task") or "")
         if not case_id or not task.strip():
             raise ValueError("case needs case_id and task")
+        setup_raw = raw.get("setup") or {}
+        if not isinstance(setup_raw, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in setup_raw.items()
+        ):
+            raise ValueError(
+                "case setup must be a {relative_path: content} mapping of strings"
+            )
         return cls(
             case_id=case_id,
             task=task,
             check=raw.get("check") or None,
             expectations=list(raw.get("expectations") or []),
+            setup=dict(setup_raw),
         )
 
 

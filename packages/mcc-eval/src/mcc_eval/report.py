@@ -41,7 +41,11 @@ def write_results_json(batch: BatchResult, batch_dir: Path) -> Path:
 
 
 def write_report_md(batch: BatchResult, batch_dir: Path, *, title: str) -> Path:
-    """生成 markdown 报告：汇总 + 逐 case 明细。"""
+    """生成 markdown 报告：汇总 + 按采样明细 + case 级 k/N 聚合 + 失败理由。"""
+    multi = any(r.attempt > 1 for r in batch.results)
+    counts = batch.case_pass_counts()
+    flaky = [(cid, k, n) for cid, k, n in counts if 0 < k < n]
+
     lines = [
         f"# 评测报告：{batch.batch_id}",
         "",
@@ -51,26 +55,59 @@ def write_report_md(batch: BatchResult, batch_dir: Path, *, title: str) -> Path:
         f"- 通过率：**{batch.pass_rate:.1%}**（passed {batch.passed} / "
         f"failed {batch.failed} / error+timeout {batch.errors}，共 {batch.total}）",
         f"- 总成本：${batch.cost_usd:.4f}",
-        "",
-        "## 明细",
-        "",
-        "| case | status | score | turns | cost | duration |",
-        "| --- | --- | --- | --- | --- | --- |",
     ]
+    if multi:
+        per_case = max((n for _, _, n in counts), default=1)
+        lines += [
+            f"- 采样：每 case {per_case} 次——"
+            f"稳定通过 {batch.stable_cases}，不稳定（flaky）{batch.flaky_cases}，"
+            f"共 {len(counts)} 个 case",
+        ]
+    lines += ["", "## 明细", ""]
+    if multi:
+        lines += [
+            "| case | attempt | status | score | turns | cost | duration |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    else:
+        lines += [
+            "| case | status | score | turns | cost | duration |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
     for r in batch.results:
         score = "-" if r.score is None else f"{r.score:.2f}"
         cost = "-" if r.cost_usd is None else f"${r.cost_usd:.4f}"
-        lines.append(
-            f"| {r.case_id} | {r.status} | {score} | {r.turns} | {cost} | {r.duration_s:.1f}s |"
-        )
+        cols = [r.case_id, str(r.attempt) if multi else r.status]
+        if multi:
+            cols.append(r.status)
+        cols += [score, str(r.turns), cost, f"{r.duration_s:.1f}s"]
+        lines.append("| " + " | ".join(cols) + " |")
+
+    if multi:
+        lines += [
+            "",
+            "## Case 级聚合（k/N 次采样通过）",
+            "",
+            "| case | k/N | 判定 |",
+            "| --- | --- | --- |",
+        ]
+        for cid, k, n in counts:
+            verdict = "稳定通过" if k == n else ("不稳定" if k > 0 else "稳定失败")
+            lines.append(f"| {cid} | {k}/{n} | {verdict} |")
+        if flaky:
+            lines += [
+                "",
+                "> 不稳定 case 是 harness 迭代最值得排查的对象："
+                "同一任务多次运行结果不同。",
+            ]
 
     lines += ["", "## 失败理由", ""]
     failures = [r for r in batch.results if r.status != "passed"]
     if not failures:
-        lines.append("（无失败 case）")
+        lines.append("（无失败采样）")
     for r in failures:
-        lines.append(f"### {r.case_id} — {r.status}")
-        lines.append("")
+        label = f"{r.case_id}（第 {r.attempt} 次）" if multi else r.case_id
+        lines += [f"### {label} — {r.status}", ""]
         lines.append(f"理由：{r.reason}")
         if r.details:
             lines.append("")
@@ -93,8 +130,31 @@ def load_trace_events(trace_path: Path) -> list[TraceEvent]:
     return events
 
 
+def _attempt_files(runs_dir: Path, case_id: str) -> list[tuple[int, Path]]:
+    """收集一个 case 的全部采样轨迹，按采样序号升序。
+
+    兼容两种历史布局：``<case>-a<N>.jsonl``（多次采样）与旧版
+    ``<case>.jsonl``（单次，视为 attempt 1）。
+    """
+    found: list[tuple[int, Path]] = []
+    legacy = runs_dir / f"{case_id}.jsonl"
+    if legacy.exists():
+        found.append((1, legacy))
+    for path in runs_dir.glob(f"{case_id}-a*.jsonl"):
+        try:
+            attempt = int(path.stem.rsplit("-a", 1)[1])
+        except ValueError:
+            continue
+        found.append((attempt, path))
+    return sorted(found, key=lambda pair: pair[0])
+
+
 def rebuild(batch_dir: Path) -> BatchResult:
-    """对已存轨迹与产物重评分（不重新执行 Agent）。"""
+    """对已存轨迹与产物重评分（不重新执行 Agent）。
+
+    每 case 可能有多份采样轨迹（-a<attempt> 后缀），逐份重评，
+    保持与运行时一致的 k/N 结构。
+    """
     cases = load_cases(batch_dir)
     header: dict[str, Any] = {}
     results_path = batch_dir / RESULTS_FILE
@@ -103,44 +163,55 @@ def rebuild(batch_dir: Path) -> BatchResult:
             header = json.load(fh)
 
     results: list[CaseResult] = []
+    runs_dir = batch_dir / "runs"
     for case in cases:
-        trace_path = batch_dir / "runs" / f"{case.case_id}.jsonl"
-        events = load_trace_events(trace_path) if trace_path.exists() else []
-        finished = next(
-            (ev for ev in reversed(events) if isinstance(ev, RunFinished)), None
-        )
-        if not events:
+        attempts = _attempt_files(runs_dir, case.case_id) if runs_dir.is_dir() else []
+        if not attempts:
             results.append(
                 CaseResult(case_id=case.case_id, status="error", score=None,
                            reason="trace file missing")
             )
             continue
-        if finished and finished.status in ("error", "timeout"):
+
+        for attempt, trace_path in attempts:
+            events = load_trace_events(trace_path)
+            finished = next(
+                (ev for ev in reversed(events) if isinstance(ev, RunFinished)), None
+            )
+            if not events:
+                results.append(
+                    CaseResult(case_id=case.case_id, status="error", score=None,
+                               reason="trace file empty", attempt=attempt)
+                )
+                continue
+            if finished and finished.status in ("error", "timeout"):
+                results.append(
+                    CaseResult(case_id=case.case_id, status=finished.status,
+                               score=None, attempt=attempt,
+                               reason=f"execution terminated as {finished.status}")
+                )
+                continue
+            snap = snapshot_from_events(events)
+            scored = score_case(
+                snap,
+                check=case.check,
+                expectations=case.expectations,
+                work_dir=trace_path.parent.parent / "work" / trace_path.stem,
+            )
+            duration = (events[-1].ts - events[0].ts) if len(events) > 1 else 0.0
             results.append(
-                CaseResult(case_id=case.case_id, status=finished.status, score=None,
-                           reason=f"execution terminated as {finished.status}")
+                CaseResult(
+                    case_id=case.case_id,
+                    status=scored.status,
+                    score=scored.score,
+                    reason=scored.reason,
+                    cost_usd=finished.cost_usd if finished else None,
+                    turns=finished.turns if finished else 0,
+                    duration_s=duration,
+                    details=scored.details,
+                    attempt=attempt,
+                )
             )
-            continue
-        snap = snapshot_from_events(events)
-        scored = score_case(
-            snap,
-            check=case.check,
-            expectations=case.expectations,
-            work_dir=batch_dir / "work" / case.case_id,
-        )
-        duration = (events[-1].ts - events[0].ts) if len(events) > 1 else 0.0
-        results.append(
-            CaseResult(
-                case_id=case.case_id,
-                status=scored.status,
-                score=scored.score,
-                reason=scored.reason,
-                cost_usd=finished.cost_usd if finished else None,
-                turns=finished.turns if finished else 0,
-                duration_s=duration,
-                details=scored.details,
-            )
-        )
 
     return BatchResult(
         batch_id=header.get("batch_id", batch_dir.name),

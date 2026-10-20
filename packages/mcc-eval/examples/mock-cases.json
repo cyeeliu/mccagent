@@ -2,6 +2,9 @@
   {
     "case_id": "demo-pass",
     "task": "修复除零缺陷并跑测试",
+    "setup": {
+      "src/math.py": "def divide(a, b):\n    return a / b\n"
+    },
     "expectations": [
       {"type": "tool_called", "tool": "grep", "weight": 0.3},
       {"type": "tool_called", "tool": "edit", "weight": 0.3},

@@ -158,6 +158,23 @@ def test_case_from_dict_requires_id_and_task() -> None:
         Case.from_dict({"case_id": "x"})
 
 
+def test_case_setup_roundtrip() -> None:
+    """setup 环境预置随 case 落盘 / 读取往返保持。"""
+    case = Case(case_id="s1", task="修复 config 解析", setup={
+        "config/app.yaml": "port: 8081\n",
+        "tests/test_app.py": "def test_port(): ...\n",
+    })
+    raw = case.to_dict()
+    assert raw["setup"]["config/app.yaml"] == "port: 8081\n"
+    assert Case.from_dict(raw) == case
+
+
+@pytest.mark.parametrize("bad", [{"a": 1}, ["x"], "file"])
+def test_case_from_dict_rejects_non_mapping_setup(bad) -> None:
+    with pytest.raises(ValueError, match="setup must be"):
+        Case.from_dict({"case_id": "x", "task": "t", "setup": bad})
+
+
 def test_load_cases_file_rejects_non_array(tmp_path) -> None:
     path = tmp_path / "bad.json"
     path.write_text(json.dumps({"case_id": "x", "task": "t"}), encoding="utf-8")
