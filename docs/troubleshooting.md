@@ -147,4 +147,4 @@
 
 **根因**：基准数据经 HuggingFace datasets-server 公开 API（`datasets-server.huggingface.co`）在线拉取，runner 容器无外网访问（公司代理、K8s prod overlay 的 NetworkPolicy 断网等场景）时必然失败。
 
-**修复**：本地 compose 栈容器默认可联网；受限网络环境先在有网机器上 `--out batch.json` 导出批次 JSON，再经 `POST /api/batches` 手工提交。另注意 LLM 凭证（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`）未设置时任务会在首次调用模型时报错——compose 已透传宿主机同名变量，启动前 export 即可。
+**修复**：本地 compose 栈容器默认可联网；受限网络环境先在有网机器上 `--out batch.json` 导出批次 JSON，再经 `POST /api/batches` 手工提交。另注意 LLM 凭证（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`）未设置时任务会在首次调用模型时报错——compose 已透传宿主机同名变量，启动前 export 即可；用 `MCC_LLM_BASE_URL` 自托管网关时地址里的 `localhost` / `127.0.0.1` 在容器内指向容器自身，须改 `http://host.docker.internal:端口/v1`（compose 已配置 host-gateway 映射）。

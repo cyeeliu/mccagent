@@ -100,17 +100,27 @@ cd runner && uv run python -m runner.main
 事件流逐条转译为标准轨迹（无需改 mcc 一行代码）。
 
 runner 容器镜像已内置 mcc 源码（构建上下文为仓库根），compose 栈启动后
-即可直接评测，无需手动安装任何依赖：
+即可直接评测，无需手动安装任何依赖。
+
+**模型与凭证复用 mcc 的配置**——已经配过 mcc CLI 就无需再配第二遍：
+
+- **模型名**：`~/.mcc/settings.json`（compose 已只读挂载进容器）与
+  `MODEL` 环境变量，解析优先级与 mcc CLI 一致
+  （显式 `--model` > `MODEL` > settings 的 `model.main`）
+- **API 凭证**：`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 环境变量
+- **自托管网关**：`MCC_LLM_BASE_URL`（OpenAI 兼容协议，vLLM / SGLang /
+  Ollama 等；容器内访问宿主机网关用 `host.docker.internal`，compose 已
+  配置 host-gateway 映射）
 
 ```bash
-# 1. 提供模型凭证（mcc 走环境变量自动探测，二选一）
-export ANTHROPIC_API_KEY=sk-ant-...    # 或 OPENAI_API_KEY
+# 已配过 mcc 的环境变量（或 ~/.mcc/settings.json）直接用；没配过则先 export
+export ANTHROPIC_API_KEY=sk-ant-...    # 或 MCC_LLM_BASE_URL=http://host.docker.internal:8000/v1
 
-# 2. 启动全栈（首次或代码变更后须 --build 重建 runner 镜像）
+# 启动全栈（首次或代码变更后须 --build 重建 runner 镜像）
 docker compose up --build -d
 
-# 3. 在 runner 容器内拉取业界基准并提交批次（一条命令完成
-#    拉取 → 转换 → 创建 profile → 提交）
+# 在 runner 容器内拉取业界基准并提交批次（一条命令完成
+# 拉取 → 转换 → 创建 profile → 提交）
 docker compose exec runner python -m runner.benchmarks \
     --dataset swebench-lite --limit 10 --submit
 ```
@@ -306,3 +316,5 @@ Prometheus 抓取 `server:8081/metrics`；Grafana provisioning 自动导入数�
 | `POLL_IDLE_S` | `2.0` | 无任务时的轮询间隔（秒） |
 | `LG_MODEL_PROVIDER` | `anthropic` | langgraph 适配器的底层 LLM（anthropic / openai） |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | mini-claude-code 适配器的 LLM 凭证（mcc 环境变量自动探测；compose 已透传宿主机同名变量） |
+| `MODEL` | — | 模型名覆盖，优先级与 mcc CLI 一致（--model > MODEL > ~/.mcc/settings.json 的 model.main；compose 已挂载宿主机 ~/.mcc 并透传） |
+| `MCC_LLM_BASE_URL` | — | OpenAI 兼容自托管网关地址（vLLM / SGLang / Ollama；容器内访问宿主机用 host.docker.internal） |

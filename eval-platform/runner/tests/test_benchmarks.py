@@ -216,3 +216,43 @@ class TestSubmitBatch:
         assert all(
             not (r.method == "POST" and str(r.url.path) == "/api/profiles") for r in requests
         )
+
+
+class _FakeConfig:
+    def __init__(self, main: str) -> None:
+        from types import SimpleNamespace
+
+        self.model = SimpleNamespace(main=main)
+
+
+class TestResolveModel:
+    """模型解析复用 mcc 的优先级：显式参数 > MODEL 环境变量 > settings。"""
+
+    @pytest.mark.parametrize(
+        ("explicit", "model_env", "settings_main", "expected"),
+        [
+            pytest.param("my-model", None, "cfg-model", "my-model", id="explicit_wins"),
+            pytest.param(None, "env-model", "cfg-model", "env-model", id="env_over_settings"),
+            pytest.param(None, None, "cfg-model", "cfg-model", id="settings_main"),
+        ],
+    )
+    def test_priority_order(self, monkeypatch, explicit, model_env, settings_main, expected):
+        from runner.benchmarks import resolve_model
+
+        monkeypatch.delenv("MODEL", raising=False)
+        if model_env:
+            monkeypatch.setenv("MODEL", model_env)
+        assert (
+            resolve_model(explicit, settings_loader=lambda: _FakeConfig(settings_main))
+            == expected
+        )
+
+    def test_settings_failure_falls_back_to_default(self, monkeypatch):
+        from runner.benchmarks import DEFAULT_MODEL, resolve_model
+
+        monkeypatch.delenv("MODEL", raising=False)
+
+        def broken_loader():
+            raise RuntimeError("no running event loop")
+
+        assert resolve_model(None, settings_loader=broken_loader) == DEFAULT_MODEL

@@ -29,6 +29,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -249,6 +250,38 @@ def build_batch(
     }
 
 
+def resolve_model(
+    explicit: str | None = None,
+    *,
+    settings_loader: Callable[[], Any] | None = None,
+) -> str:
+    """按 mcc 的解析顺序确定模型，复用 CLI 已有配置。
+
+    优先级与 mcc CLI 的模型解析保持一致：显式参数 > MODEL 环境变量 >
+    mcc settings（~/.mcc/settings.json 与 .mcc/settings.json 合并）的
+    model.main。mcc 未安装或配置读取失败时回落平台默认值，
+    不要求为评测再配一遍模型。
+    """
+    if explicit:
+        return explicit
+    env = os.environ.get("MODEL")
+    if env:
+        return env
+    if settings_loader is None:
+        def settings_loader() -> Any:  # type: ignore[misc]
+            import asyncio
+
+            from mcc_config import load
+
+            return asyncio.run(load(Path.cwd()))
+
+    try:
+        return str(settings_loader().model.main)
+    except Exception:
+        # mcc 未安装 / 无事件循环 / 配置不可读：回落平台默认
+        return DEFAULT_MODEL
+
+
 def submit_batch(
     batch: dict[str, Any],
     *,
@@ -307,7 +340,11 @@ def main(argv: list[str] | None = None) -> int:
         help="API 服务地址（默认读 EVAL_SERVER_URL）",
     )
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Agent profile 名称")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="profile 使用的模型")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="覆盖模型（缺省复用 mcc 配置：MODEL 环境变量 > settings.json 的 model.main）",
+    )
     parser.add_argument("--parallelism", type=int, default=DEFAULT_PARALLELISM)
     parser.add_argument("--name", default=None, help="批次名称（默认 <dataset>-<count>）")
     parser.add_argument("--out", default=None, help="批次 JSON 导出路径（不提交）")
@@ -340,7 +377,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"批次已导出: {args.out}（{len(batch['cases'])} 例）", file=sys.stderr)
 
     if args.submit:
-        result = submit_batch(batch, server=args.server, model=args.model)
+        model = resolve_model(args.model)
+        print(f"模型: {model}（--model > MODEL 环境变量 > mcc settings.json）", file=sys.stderr)
+        result = submit_batch(batch, server=args.server, model=model)
         batch_id = result.get("id")
         print(f"批次已提交: {batch_id}")
         print(f"看板页面: {args.web_url}/batches/{batch_id}")

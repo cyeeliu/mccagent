@@ -232,3 +232,42 @@ async def test_mcc_run_through_execute(monkeypatch) -> None:
     assert '"run_started"' in events[2]
     assert '"llm_chunk"' in events[2]
     assert '"run_finished"' in events[2]
+
+
+class TestProviderFromEnv:
+    """_provider_from_env 的分支选择：复用 mcc 的环境变量约定。"""
+
+    def test_gateway_base_url_wins_over_api_keys(self, monkeypatch):
+        monkeypatch.setenv("MCC_LLM_BASE_URL", "http://host.docker.internal:8000/v1")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-be-ignored")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
+
+        from mcc_llm.openai import OpenAiClient
+        from runner.adapters.mcc_agent import _provider_from_env
+
+        provider = _provider_from_env()
+        assert isinstance(provider, OpenAiClient)
+        assert provider._base_url == "http://host.docker.internal:8000/v1"
+        assert provider._api_key == "sk-openai-real"
+
+    def test_gateway_without_api_key_uses_placeholder(self, monkeypatch):
+        monkeypatch.setenv("MCC_LLM_BASE_URL", "http://localhost:11434/v1")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        from mcc_llm.openai import OpenAiClient
+        from runner.adapters.mcc_agent import _provider_from_env
+
+        provider = _provider_from_env()
+        assert isinstance(provider, OpenAiClient)
+        assert provider._api_key == "dummy"
+
+    def test_without_gateway_uses_anthropic_autodetect(self, monkeypatch):
+        monkeypatch.delenv("MCC_LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+        from mcc_llm.anthropic import AnthropicClient
+        from runner.adapters.mcc_agent import _provider_from_env
+
+        assert isinstance(_provider_from_env(), AnthropicClient)

@@ -5,7 +5,9 @@ ToolCallStart→tool_call、ToolCallEnd→tool_result），在事件流层转译
 拿到完整轨迹。Agent 以 headless 方式在独立工作目录跑单任务，
 权限模式固定为 bypassPermissions（评测沙箱内无人工确认通道）。
 
-依赖 mcc 系列包（不在 extras 中声明，需手动安装）::
+模型与凭证复用 mcc 的配置约定（环境变量 > settings.json），评测侧
+不引入第二份模型配置。mcc 系列包已内置在 runner 容器镜像中；本地
+直跑 runner 时需手动 editable 安装::
 
     uv pip install -e ../../packages/mcc-core -e ../../packages/mcc-config \\
         -e ../../packages/mcc-llm -e ../../packages/mcc-tools \\
@@ -15,6 +17,7 @@ ToolCallStart→tool_call、ToolCallEnd→tool_result），在事件流层转译
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -129,12 +132,33 @@ class _Translator:
         )
 
 
+def _provider_from_env() -> Any:
+    """构建 LLM provider，凭证与网关地址复用 mcc 的环境变量约定。
+
+    MCC_LLM_BASE_URL 指向 OpenAI 兼容自托管网关（vLLM / SGLang /
+    Ollama 等）时走 OpenAiClient，API key 缺省用占位值——本地网关
+    通常不鉴权（组装逻辑与 mcc CLI 一致）；否则按
+    ANTHROPIC_API_KEY / OPENAI_API_KEY 自动探测。
+    """
+    from mcc_llm import auto_provider_from_env
+
+    base_url = os.environ.get("MCC_LLM_BASE_URL")
+    if base_url:
+        from mcc_llm.openai import OpenAiClient
+
+        return OpenAiClient(
+            api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
+            base_url=base_url,
+        )
+    return auto_provider_from_env()
+
+
 class MccAdapter:
     """以 mcc AgentLoop 为被测对象：headless 跑单任务并转译轨迹。
 
     llm / registry / work_dir 可注入（测试替身）；缺省惰性构建——
-    LLM 走环境变量自动探测，工作目录用每 run 独立的临时目录，
-    保证任务之间互不污染。
+    LLM 复用 mcc 的环境变量约定（含 MCC_LLM_BASE_URL 自托管网关），
+    工作目录用每 run 独立的临时目录，保证任务之间互不污染。
     """
 
     def __init__(
@@ -154,12 +178,7 @@ class MccAdapter:
         from mcc_harness import AgentLoopBuilder, PermissionChecker
         from mcc_tools import default_registry
 
-        if self._llm is not None:
-            llm = self._llm
-        else:
-            from mcc_llm import auto_provider_from_env
-
-            llm = auto_provider_from_env()
+        llm = self._llm if self._llm is not None else _provider_from_env()
 
         work_dir = self._work_dir or Path(tempfile.mkdtemp(prefix="eval-mcc-"))
         ctx = ToolContext(cwd=work_dir, session_id=req.run_id)
