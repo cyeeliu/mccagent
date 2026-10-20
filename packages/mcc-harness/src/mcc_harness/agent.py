@@ -387,8 +387,9 @@ class AgentLoop:
                 await tx.put(TextDelta(text=ev.text))
                 text_buf.append(ev.text)
             elif isinstance(ev, ToolUseStart):
+                # 工具名先记下，ToolCallStart 延迟到参数流完（见下方
+                # blocks 组装后）再发——此时才有完整 args 可带
                 current_tool_idx = len(tool_slots)
-                await tx.put(ToolCallStart(id=ev.id, name=ev.name, args_preview=""))
                 tool_slots.append((ev.id, ev.name, ""))
             elif isinstance(ev, ToolUseInputDelta):
                 if current_tool_idx is not None:
@@ -406,6 +407,12 @@ class AgentLoop:
         if text_buf:
             blocks.append(TextBlock(text="".join(text_buf)))
         for tid, tname, json_str in tool_slots:
+            # 参数已流完：先发完整 ToolCallStart（携带 args），再组装块。
+            # 此时发射比 ToolUseStart 时机晚一个参数流的时长，但换来
+            # 事件携带完整参数——下游（TUI 提示 / 评测轨迹的 args 断言）
+            # 不再拿到恒空的 args_preview。截断责任在消费方（TUI 渲染
+            # 时自行 truncate）。
+            await tx.put(ToolCallStart(id=tid, name=tname, args_preview=json_str))
             try:
                 inp = json.loads(json_str) if json_str else {}
             except json.JSONDecodeError:

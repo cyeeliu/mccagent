@@ -252,7 +252,11 @@ def _history_events(history: list, cost_usd: float = 0.0) -> list:
                 if isinstance(b, TextBlock) and b.text.strip():
                     events.append(TextDelta(text=b.text))
                 elif isinstance(b, ToolUseBlock):
-                    events.append(ToolCallStart(id=b.id, name=b.name, args_preview=""))
+                    events.append(ToolCallStart(
+                        id=b.id, name=b.name,
+                        args_preview=json.dumps(b.input, ensure_ascii=False)
+                        if b.input else "",
+                    ))
         elif m.role == Role.tool:
             for b in m.content:
                 if isinstance(b, ToolResultBlock):

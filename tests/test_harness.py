@@ -198,6 +198,35 @@ async def test_tool_use_cycle(ctx, registry, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tool_call_start_carries_full_args(ctx, registry):
+    """ToolCallStart 携带完整参数 JSON（参数分片流完后发射）。
+
+    下游（评测轨迹的 args 断言、TUI 提示）依赖事件里的参数；
+    空 args_preview 会让 args_regex 断言恒失效。
+    """
+    args_json = json.dumps({"path": "out.txt", "content": "hi"})
+    turn1 = [
+        ToolUseStart(id="t1", name="write_file"),
+        ToolUseInputDelta(partial_json=args_json),
+        MessageStop(stop_reason="tool_use", usage=Usage(input_tokens=10, output_tokens=5)),
+    ]
+    llm = MockLlm([turn1, single_text_turn("done.")])
+    agent = _make_agent(llm, ctx, registry)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    await agent.run_streaming("write a file", queue)
+    events = await _collect_events(queue)
+
+    starts = [e for e in events if isinstance(e, ToolCallStart)]
+    assert len(starts) == 1
+    assert starts[0].args_preview == args_json
+    # 参数流完成、工具执行前发射：先 tool_call 后 tool_result 的顺序不变
+    idx_call = events.index(starts[0])
+    idx_end = next(i for i, e in enumerate(events) if isinstance(e, ToolCallEnd))
+    assert idx_call < idx_end
+
+
+@pytest.mark.asyncio
 async def test_tool_error_propagates_as_tool_result(ctx, registry):
     """工具失败时产生 is_error=True 的 ToolResult，不中断循环。"""
     turn1 = [
