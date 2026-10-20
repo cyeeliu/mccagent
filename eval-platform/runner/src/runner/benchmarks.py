@@ -282,6 +282,17 @@ def resolve_model(
         return DEFAULT_MODEL
 
 
+def derive_profile_name(model: str, explicit: str | None = None) -> str:
+    """按模型派生 profile 名，避免同名 profile 挂着不同模型。
+
+    profile 的语义是被测 Agent 的配置快照（scaffold + model），模型不同
+    即不同 profile。显式指定名称时原样使用（提交时会校验模型一致性）；
+    缺省派生 ``mcc-<model>``——换模型自然落在新 profile 上，不会把
+    批次静默挂到旧模型的 profile 上跑。
+    """
+    return explicit or f"mcc-{model}"
+
+
 def submit_batch(
     batch: dict[str, Any],
     *,
@@ -289,15 +300,29 @@ def submit_batch(
     model: str = DEFAULT_MODEL,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
-    """幂等创建 profile 并提交批次，返回批次响应。"""
+    """幂等创建 profile 并提交批次，返回批次响应。
+
+    profile 已存在且模型与本次解析不一致时报错退出——批次挂在哪个
+    profile 上就按哪个模型执行，静默沿用旧模型会造成「提交的模型」
+    与「实际评测的模型」不一致。
+    """
     own = client is None
     client = client or httpx.Client(timeout=30.0)
     try:
         server = server.rstrip("/")
         profiles = client.get(f"{server}/api/profiles")
         profiles.raise_for_status()
-        existing = {p["name"] for p in profiles.json().get("items", [])}
-        if batch["profile"] not in existing:
+        existing = {p["name"]: p.get("model") for p in profiles.json().get("items", [])}
+        if batch["profile"] in existing:
+            current = existing[batch["profile"]]
+            if current != model:
+                msg = (
+                    f"profile {batch['profile']!r} 已存在且模型为 {current!r}，"
+                    f"与本次解析的 {model!r} 不一致；请用 --profile 指定新名称，"
+                    f"或缺省不指定（自动按模型派生 mcc-<model>）"
+                )
+                raise ValueError(msg)
+        else:
             resp = client.post(
                 f"{server}/api/profiles",
                 json={
@@ -339,7 +364,11 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("EVAL_SERVER_URL", "http://localhost:8081"),
         help="API 服务地址（默认读 EVAL_SERVER_URL）",
     )
-    parser.add_argument("--profile", default=DEFAULT_PROFILE, help="Agent profile 名称")
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Agent profile 名称（缺省按模型派生 mcc-<model>，模型不同自然分家）",
+    )
     parser.add_argument(
         "--model",
         default=None,
@@ -363,11 +392,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"拉取 {spec.title}（{spec.hf_id}）…", file=sys.stderr)
     records = fetch_rows(spec, args.limit)
     print(f"取得 {len(records)} 条记录", file=sys.stderr)
+
+    model = resolve_model(args.model)
+    profile = derive_profile_name(model, args.profile)
+    print(f"模型: {model}（--model > MODEL 环境变量 > mcc settings.json）", file=sys.stderr)
+    print(f"profile: {profile}", file=sys.stderr)
     batch = build_batch(
         args.dataset,
         records,
         name=args.name,
-        profile=args.profile,
+        profile=profile,
         parallelism=args.parallelism,
     )
 
@@ -377,8 +411,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"批次已导出: {args.out}（{len(batch['cases'])} 例）", file=sys.stderr)
 
     if args.submit:
-        model = resolve_model(args.model)
-        print(f"模型: {model}（--model > MODEL 环境变量 > mcc settings.json）", file=sys.stderr)
         result = submit_batch(batch, server=args.server, model=model)
         batch_id = result.get("id")
         print(f"批次已提交: {batch_id}")

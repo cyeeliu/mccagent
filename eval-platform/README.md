@@ -107,6 +107,9 @@ runner 容器镜像已内置 mcc 源码（构建上下文为仓库根），compo
 - **模型名**：`~/.mcc/settings.json`（compose 已只读挂载进容器）与
   `MODEL` 环境变量，解析优先级与 mcc CLI 一致
   （显式 `--model` > `MODEL` > settings 的 `model.main`）
+- **profile 名**：缺省按模型派生 `mcc-<model>`——换模型自然落在新
+  profile 上；显式 `--profile` 指定已有名称且其模型与本次不一致时会
+  报错（批次挂哪个 profile 就按哪个模型执行，不静默沿用旧模型）
 - **API 凭证**：`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 环境变量
 - **自托管网关**：`MCC_LLM_BASE_URL`（OpenAI 兼容协议，vLLM / SGLang /
   Ollama 等；容器内访问宿主机网关用 `host.docker.internal`，compose 已
@@ -141,7 +144,7 @@ HuggingFace datasets-server 公开 API 拉取（容器内可联网即可，无�
 常用命令：
 
 ```bash
-# SWE-bench Lite 前 10 例（默认 profile: mcc-main）
+# SWE-bench Lite 前 10 例（profile 按模型自动派生：mcc-<model>）
 docker compose exec runner python -m runner.benchmarks \
     --dataset swebench-lite --limit 10 --submit
 

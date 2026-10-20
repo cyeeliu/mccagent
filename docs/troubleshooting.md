@@ -148,3 +148,11 @@
 **根因**：基准数据经 HuggingFace datasets-server 公开 API（`datasets-server.huggingface.co`）在线拉取，runner 容器无外网访问（公司代理、K8s prod overlay 的 NetworkPolicy 断网等场景）时必然失败。
 
 **修复**：本地 compose 栈容器默认可联网；受限网络环境先在有网机器上 `--out batch.json` 导出批次 JSON，再经 `POST /api/batches` 手工提交。另注意 LLM 凭证（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`）未设置时任务会在首次调用模型时报错——compose 已透传宿主机同名变量，启动前 export 即可；用 `MCC_LLM_BASE_URL` 自托管网关时地址里的 `localhost` / `127.0.0.1` 在容器内指向容器自身，须改 `http://host.docker.internal:端口/v1`（compose 已配置 host-gateway 映射）。
+
+### 评测批次实际模型与提交模型不一致
+
+**现象**：benchmarks 提交时打印「模型: deepseek-...」，但 web 轨迹事件的 run_started 里 `model` 仍是旧值（如 claude-sonnet-4-6）。
+
+**根因**：批次挂在 profile 上执行，run 的模型取自 profile 表（lease 时 `p.model`）。`submit_batch` 的幂等逻辑是「profile 名已存在即跳过创建」——此前用别的模型建过同名 profile 时，本次解析出的模型只是打印，批次仍静默挂到旧 profile 上按旧模型执行。
+
+**修复**：profile 名缺省按模型派生 `mcc-<model>`（模型不同即不同 profile，语义上 profile 本就是被测 Agent 配置快照）；显式 `--profile` 指定已有名称时校验模型一致性，不一致直接报错退出并提示换名，不再静默沿用。

@@ -9,6 +9,7 @@ import pytest
 from runner.benchmarks import (
     CODE_GEN_EXPECTATIONS,
     DATASETS,
+    DEFAULT_MODEL,
     build_batch,
     fetch_rows,
     humaneval_case,
@@ -179,14 +180,15 @@ class TestFetchRows:
 
 
 class TestSubmitBatch:
-    def _make_server(self, profile_exists: bool) -> tuple[httpx.MockTransport, list[httpx.Request]]:
+    def _make_server(
+        self, existing_profiles: list[dict]
+    ) -> tuple[httpx.MockTransport, list[httpx.Request]]:
         requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
             if request.url.path == "/api/profiles" and request.method == "GET":
-                items = [{"name": "mcc-main"}] if profile_exists else []
-                return httpx.Response(200, json={"items": items})
+                return httpx.Response(200, json={"items": existing_profiles})
             if request.url.path == "/api/profiles":
                 return httpx.Response(200, json={"id": "p1"})
             if request.url.path == "/api/batches":
@@ -197,7 +199,7 @@ class TestSubmitBatch:
 
     def test_creates_profile_then_submits(self):
         batch = build_batch("humaneval", [HUMANEVAL_ROW])
-        transport, requests = self._make_server(profile_exists=False)
+        transport, requests = self._make_server(existing_profiles=[])
         with httpx.Client(transport=transport) as client:
             result = submit_batch(batch, server="http://srv:8081", client=client)
         assert result == {"id": "b1"}
@@ -208,14 +210,49 @@ class TestSubmitBatch:
         profile_body = json.loads(requests[1].content)
         assert profile_body["scaffold"] == "mini-claude-code"
 
-    def test_reuses_existing_profile(self):
+    def test_reuses_existing_profile_with_same_model(self):
         batch = build_batch("humaneval", [HUMANEVAL_ROW])
-        transport, requests = self._make_server(profile_exists=True)
+        transport, requests = self._make_server(
+            existing_profiles=[{"name": "mcc-main", "model": DEFAULT_MODEL}]
+        )
         with httpx.Client(transport=transport) as client:
             submit_batch(batch, server="http://srv:8081", client=client)
         assert all(
             not (r.method == "POST" and str(r.url.path) == "/api/profiles") for r in requests
         )
+
+    def test_conflicting_model_raises_instead_of_silent_reuse(self):
+        batch = build_batch("humaneval", [HUMANEVAL_ROW])
+        transport, requests = self._make_server(
+            existing_profiles=[{"name": "mcc-main", "model": "claude-sonnet-4-6"}]
+        )
+        with httpx.Client(transport=transport) as client, pytest.raises(
+            ValueError, match="claude-sonnet-4-6"
+        ):
+            submit_batch(
+                batch, server="http://srv:8081", model="deepseek-v4-flash-0731", client=client
+            )
+        methods_paths = [(r.method, str(r.url.path)) for r in requests]
+        assert ("POST", "/api/batches") not in methods_paths
+
+
+class TestDeriveProfileName:
+    """profile 名按模型派生：模型不同自然分家，显式指定时原样使用。"""
+
+    @pytest.mark.parametrize(
+        ("model", "explicit", "expected"),
+        [
+            pytest.param(
+                "deepseek-v4-flash-0731", None, "mcc-deepseek-v4-flash-0731", id="derived"
+            ),
+            pytest.param("any-model", "my-profile", "my-profile", id="explicit_wins"),
+            pytest.param("model-a", None, "mcc-model-a", id="model_varies_name"),
+        ],
+    )
+    def test_derivation(self, model, explicit, expected):
+        from runner.benchmarks import derive_profile_name
+
+        assert derive_profile_name(model, explicit) == expected
 
 
 class _FakeConfig:
