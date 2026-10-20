@@ -63,7 +63,7 @@ npm test        # vitest
 
 1. 事件契约与 server 骨架（本页所述，已完成）
 2. server 完整实现：REST 路由、SSE 广播、租约调度、轨迹存储、指标暴露（已完成）
-3. runner 完整实现：执行主循环、心跳续租、mock / anthropic / langgraph 适配器、评分（已完成）
+3. runner 完整实现：执行主循环、心跳续租、mock / anthropic / langgraph / mini-claude-code 适配器、评分（已完成）
 4. web 功能页面：批次看板、轨迹查看器、对比报告、仪表盘（已完成）
 5. 部署与运维：docker compose 全栈、Prometheus/Grafana、K8s 配置（已完成）
 
@@ -82,7 +82,8 @@ server/src/eval_server/
 runner/src/runner/
 ├── main.py       主循环：lease → 执行 → 批量上报 JSONL → complete；心跳后台任务
 ├── scoring.py    expectations 评分：四类断言加权叠加，阈值判定
-└── adapters/     适配器：mock（零依赖演示）、anthropic、langgraph（惰性导入）
+└── adapters/     适配器：mock（零依赖演示）、anthropic、langgraph（惰性导入）、
+                  mini-claude-code（headless 包装 mcc AgentLoop，事件流逐条转译）
 ```
 
 ## web 内部结构

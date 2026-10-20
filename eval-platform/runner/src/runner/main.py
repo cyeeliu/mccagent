@@ -53,6 +53,11 @@ def make_adapter(scaffold: str) -> AgentAdapter:
         from runner.adapters.langgraph_agent import LangGraphAdapter
 
         return LangGraphAdapter()
+    if scaffold == "mini-claude-code":
+        # mcc 包不在 PyPI，须在 runner 环境手动安装（见 adapters/mcc_agent.py）
+        from runner.adapters.mcc_agent import MccAdapter
+
+        return MccAdapter()
     raise ValueError(f"unknown scaffold: {scaffold}")
 
 

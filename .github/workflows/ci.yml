@@ -44,8 +44,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --all-packages --dev
+      # mcc 适配器依赖（editable 安装同仓库的 mcc 系列 包，未装则相关测试跳过）
+      - run: uv pip install -e ../packages/mcc-core -e ../packages/mcc-config
+             -e ../packages/mcc-llm -e ../packages/mcc-tools
+             -e ../packages/mcc-session -e ../packages/mcc-harness
       - run: uv run ruff check .
-      - run: uv run --all-packages pytest -q
+      # --no-sync：保留上一步 editable 安装的 mcc 包（uv run 默认精确同步会剔除）
+      - run: uv run --all-packages --no-sync pytest -q
 
   eval-web:
     runs-on: ubuntu-latest

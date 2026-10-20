@@ -64,7 +64,7 @@ run 生命周期：`queued → leased → running → passed | failed | error | 
 | 事件契约（schemas + 三端对齐） | ✅ 可用 |
 | server 领域类型 / 配置 / 错误 / API 契约 / 状态机 | ✅ 可用 |
 | server 路由实现（REST + SSE + 调度 + 存储 + 指标） | ✅ 可用 |
-| runner 执行主循环 / 评分 / 适配器（mock / anthropic / langgraph） | ✅ 可用 |
+| runner 执行主循环 / 评分 / 适配器（mock / anthropic / langgraph / mini-claude-code） | ✅ 可用 |
 | web 功能页面（看板 / 轨迹 / 对比 / 仪表盘） | ✅ 可用 |
 | 部署（docker compose / K8s / 可观测栈） | ✅ 可用 |
 
@@ -92,6 +92,36 @@ cd runner && uv run python -m runner.main
 
 可选 extras：`uv sync --extra s3`（server，S3 轨迹后端）、
 `uv sync --extra anthropic` / `--extra langgraph`（runner，真实 Agent 适配器）。
+
+### 以 mcc 为被测对象
+
+平台的原生被测对象是同仓库的 `mcc`（mini-claude-code）：runner 的
+`mini-claude-code` 适配器把 mcc 的 AgentLoop 以 headless 方式跑单任务，
+事件流逐条转译为标准轨迹（无需改 mcc 一行代码）。接入步骤：
+
+```bash
+# 1. 在 runner 环境安装 mcc 系列 包（不在 extras 中，须手动 editable 安装）
+uv pip install -e ../packages/mcc-core -e ../packages/mcc-config \
+    -e ../packages/mcc-llm -e ../packages/mcc-tools \
+    -e ../packages/mcc-session -e ../packages/mcc-harness
+
+# 2. 给 runner 提供 LLM 凭证（mcc 走环境变量自动探测）
+export ANTHROPIC_API_KEY=sk-ant-...   # 或 OPENAI_API_KEY
+
+# 3. 创建 mcc profile 并提交批次（scaffold 必须是 mini-claude-code）
+curl -X POST $SERVER/api/profiles -H "Content-Type: application/json" -d '{
+  "name": "mcc-main", "scaffold": "mini-claude-code", "model": "claude-sonnet-4-5",
+  "harness_version": "0.1.0", "sandbox_image": "local"}'
+```
+
+适配器行为：每个 run 在独立临时工作目录执行（任务间互不污染），权限模式
+固定 `bypassPermissions`（沙箱内无人工确认通道）；`max_turns` 映射到
+AgentLoop 迭代上限；`expectations` 评分由 runner 统一完成（工具报错会被
+`no_tool_errors` 断言捕获）。
+
+注意：ch52 的 runner 容器镜像构建上下文是 `eval-platform/`，不含 mcc 源码——
+容器化跑 mini-claude-code 批次需把构建上下文扩到仓库根并调整 Dockerfile 的
+COPY 路径；本地 `uv run` 直接跑 runner 无此限制。
 
 ### web 前端
 
@@ -224,3 +254,4 @@ Prometheus 抓取 `server:8081/metrics`；Grafana provisioning 自动导入数�
 | `RUNNER_SECRET` | 未设置 | 内部接口 Bearer token；须与 server 一致 |
 | `POLL_IDLE_S` | `2.0` | 无任务时的轮询间隔（秒） |
 | `LG_MODEL_PROVIDER` | `anthropic` | langgraph 适配器的底层 LLM（anthropic / openai） |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | mini-claude-code 适配器的 LLM 凭证（mcc 环境变量自动探测） |
