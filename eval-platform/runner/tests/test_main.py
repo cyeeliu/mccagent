@@ -244,3 +244,72 @@ async def test_heartbeat_loop_uses_env_interval(monkeypatch: pytest.MonkeyPatch)
             await task
 
     assert len(server.posts_to("/heartbeat")) >= 2
+
+
+class _ErrorWithSignalAdapter:
+    """模拟 mcc 适配器的 error 路径：出错前已有工具调用与模型输出。"""
+
+    async def run(self, req):
+        from runner.events import LlmChunk, Seq, ToolCall, ToolResult
+
+        seq = Seq()
+        yield RunStarted(
+            seq=seq.next(), run_id=req.run_id, case_id=req.case_id,
+            task=req.task, model=req.model,
+        )
+        yield ToolCall(seq=seq.next(), turn=0, call_id="c1", tool_name="run_bash",
+                       args={"command": "git clone https://example/repo.git"})
+        yield ToolResult(seq=seq.next(), call_id="c1", output="cloned")
+        yield LlmChunk(seq=seq.next(), turn=1, delta="cloned, starting fix")
+        yield RunFinished(seq=seq.next(), status="error", score=None, turns=1)
+
+
+class _ErrorNoSignalAdapter:
+    """模拟零产出 error：LLM 首调即挂，无任何工具调用或模型输出。"""
+
+    async def run(self, req):
+        seq = Seq()
+        yield RunStarted(
+            seq=seq.next(), run_id=req.run_id, case_id=req.case_id,
+            task=req.task, model=req.model,
+        )
+        yield RunFinished(seq=seq.next(), status="error", score=None, turns=0)
+
+
+@pytest.mark.parametrize(
+    ("adapter", "expected_status", "expected_score"),
+    [
+        pytest.param(
+            _ErrorWithSignalAdapter, "passed", 1.0, id="error_with_signal_scored"
+        ),
+        pytest.param(_ErrorNoSignalAdapter, "error", None, id="error_no_signal_kept"),
+    ],
+)
+async def test_execute_scores_error_runs_with_trace_signal(
+    monkeypatch, adapter, expected_status, expected_score
+) -> None:
+    """执行中出错的 run：轨迹有实质内容时仍按 expectations 评分。
+
+    error 只代表执行中有未恢复异常；git clone 超时等场景的轨迹
+    依旧可评（no_tool_errors 断言自会扣分）。零产出 error 保留
+    error 状态不评分，避免把基础设施故障误判成 Agent 低分。
+    """
+    monkeypatch.setattr(main, "make_adapter", lambda scaffold: adapter())
+    server = FakeServer()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(server.handler), base_url="http://test"
+    ) as http:
+        await main.execute(
+            http,
+            _lease(
+                expectations=[
+                    {"type": "tool_called", "tool": "run_bash",
+                     "args_regex": "git clone", "weight": 1.0},
+                ]
+            ),
+        )
+
+    completes = server.posts_to("/complete")
+    assert len(completes) == 1
+    assert completes[0]["status"] == expected_status
+    assert completes[0]["score"] == expected_score

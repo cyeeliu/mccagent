@@ -61,6 +61,11 @@ def make_adapter(scaffold: str) -> AgentAdapter:
     raise ValueError(f"unknown scaffold: {scaffold}")
 
 
+def _has_signal(snap: TraceSnapshot) -> bool:
+    """轨迹是否包含可评分的实质内容（工具调用或非空模型输出）。"""
+    return bool(snap.tool_calls) or bool("".join(snap.text_outputs).strip())
+
+
 async def heartbeat_loop(http: httpx.AsyncClient, run_id: str) -> None:
     """后台心跳：租约被 reaper 回收时主动失败。"""
     while True:
@@ -130,9 +135,13 @@ async def execute(http: httpx.AsyncClient, lease: dict) -> None:
         ensure_heartbeat_alive()
         duration_s = time.monotonic() - t_start
 
-        # 评分：adapter 返回的 RunFinished.status 是执行状态；
-        # 如果有 expectations，用评分结果覆盖 status 和 score。
-        if final and final.status in ("passed", "failed") and expectations:
+        # 评分：adapter 返回的 RunFinished.status 是执行状态（error 只代表
+        # 执行中出过未恢复的异常，不代表轨迹不可评）。有 expectations 且
+        # 轨迹有实质内容（工具调用或模型输出）时按评分覆盖 status 与
+        # score——no_tool_errors 断言会正确惩罚带错的轨迹；零产出的
+        # error（如凭证未配、LLM 首调即挂）保留 error 状态不评分，
+        # 避免把基础设施故障误判成 Agent 低分。
+        if final and expectations and _has_signal(snap):
             result = compute_score(snap, expectations)
             status = result.status
             score_val = result.score

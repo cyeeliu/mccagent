@@ -156,3 +156,11 @@
 **根因**：批次挂在 profile 上执行，run 的模型取自 profile 表（lease 时 `p.model`）。`submit_batch` 的幂等逻辑是「profile 名已存在即跳过创建」——此前用别的模型建过同名 profile 时，本次解析出的模型只是打印，批次仍静默挂到旧 profile 上按旧模型执行。
 
 **修复**：profile 名缺省按模型派生 `mcc-<model>`（模型不同即不同 profile，语义上 profile 本就是被测 Agent 配置快照）；显式 `--profile` 指定已有名称时校验模型一致性，不一致直接报错退出并提示换名，不再静默沿用。
+
+### 评测 run 跑完却没有分数
+
+**现象**：批次执行完成，web 上 run 无 score（status 为 error），轨迹里能看到工具调用与模型输出。
+
+**根因**：runner 的评分分支条件是 `final.status in ("passed", "failed")`——mcc 适配器的 RunFinished.status 只有两态（出现 Error 事件即 error，如 git clone 超时、run_bash 非零退出、max_iterations 超限），error 状态直接跳过 expectations 评分，`score=None` 上报。SWE-bench 任务大量 clone/测试操作极易触发 Error，导致轨迹明明可评却无分。
+
+**修复**：评分条件改为「有 expectations 且轨迹有实质内容（工具调用或非空模型输出）」——带错轨迹照样评分，`no_tool_errors` 断言（权重 0.3）会正确惩罚它；零产出 error（凭证未配、LLM 首调即挂）保留 error 状态不评分，避免把基础设施故障误判成 Agent 低分。教训：**「执行状态」与「可评性」是两个正交维度**，用执行状态做评分开关会漏掉「跑出错但轨迹完整」的大类。
