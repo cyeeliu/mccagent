@@ -140,6 +140,11 @@ docker compose up --build
 轨迹文件存 `traces` 卷（`TRACE_BACKEND` 缺省为 `local`）。健康检查链保证任意顺序重启幂等：
 server 等 db 健康才起，runner 等 server 健康才连。
 
+所有发布到宿主机的端口可用环境变量覆盖（宿主机端口被占用时无需改文件）：
+`SERVER_PORT`（默认 8081）、`WEB_PORT`（5173）、`PROMETHEUS_PORT`（9090）、`GRAFANA_PORT`（3000）。
+例如 `GRAFANA_PORT=3001 docker compose up`。注意改 `WEB_PORT` 后浏览器来源变了，
+须同步设置 `CORS_ALLOWED_ORIGINS`（如 `http://localhost:3002`）。
+
 提交演示批次（mock agent，无需 API key）：
 
 ```bash

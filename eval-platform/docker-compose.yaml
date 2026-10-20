@@ -57,7 +57,7 @@ services:
     volumes:
       - traces:/traces
     ports:
-      - "8081:8081"
+      - "${SERVER_PORT:-8081}:8081"
     depends_on:
       db: { condition: service_healthy }
     healthcheck:
@@ -89,7 +89,7 @@ services:
       context: .
       dockerfile: web/Dockerfile
     ports:
-      - "5173:8081"
+      - "${WEB_PORT:-5173}:8081"
     depends_on: [server]
     logging: *default-logging
 
@@ -104,7 +104,7 @@ services:
       - ./deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
       - promdata:/prometheus
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     depends_on: [server]
     logging: *default-logging
 
@@ -118,7 +118,7 @@ services:
       - grafanadata:/var/lib/grafana
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
     depends_on: [prometheus]
     logging: *default-logging
 

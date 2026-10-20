@@ -116,3 +116,11 @@
 **根因**：MinIO 社区版已停止发布预编译产物——官方仓库 README 声明 *"The MinIO community edition is now distributed as source code only. We will no longer provide pre-compiled binary releases"*，Docker Hub 上不再有可拉取的新镜像（容器场景官方指引是自行 clone 源码构建）。此前"tag 号虚构"的诊断不成立，问题是任何 tag 都拉不到。
 
 **修复**：本地栈移除 minio / minio-init 服务，轨迹后端改用 `TRACE_BACKEND=local`（存容器卷，`/workspace/mccagent/eval-platform/docker-compose.yaml`）；S3 后端留给生产环境接真实对象存储端点。教训：编排选型时确认镜像的发布策略（是否持续发布、渠道是否变更），而不只是核对 tag 存在性。
+
+### 评测平台 compose 端口被占用
+
+**现象**：`docker compose up` 报 `Bind for 127.0.0.1:3000 failed: port is already allocated`（3000 为例，其他端口同理）。
+
+**根因**：宿主机端口发布冲突。报 `port is already allocated` 通常是**另一个 Docker 容器**已发布该端口（如本机已有的 Grafana、其他 compose 项目残留）；报 `address already in use` 则是宿主机上的非容器进程占用。
+
+**修复**：先 `docker ps --filter publish=3000` 定位占用容器（本项目残留先 `docker compose down`），宿主机进程用 `ss -ltnp | grep :3000` 查。compose 的四个宿主机端口均支持环境变量覆盖（`SERVER_PORT` / `WEB_PORT` / `PROMETHEUS_PORT` / `GRAFANA_PORT`，默认 8081 / 5173 / 9090 / 3000），如 `GRAFANA_PORT=3001 docker compose up`；改 `WEB_PORT` 后须同步设置 `CORS_ALLOWED_ORIGINS`。
