@@ -14,6 +14,7 @@ from mcc_eval.events import RunFinished, TraceEvent
 from mcc_eval.runner import (
     BatchResult,
     CaseResult,
+    ProgressTracker,
     apply_setup,
     new_batch_dir,
     run_batch,
@@ -286,6 +287,90 @@ def test_apply_setup_writes_nested_files(tmp_path: Path) -> None:
     apply_setup(tmp_path, {"a/b/c.txt": "hello", "top.py": "x = 1\n"})
     assert (tmp_path / "a" / "b" / "c.txt").read_text(encoding="utf-8") == "hello"
     assert (tmp_path / "top.py").read_text(encoding="utf-8") == "x = 1\n"
+
+
+# ─── progress.json 实时进度 ──────────────────────────────────────────────
+
+
+async def test_progress_json_updates_per_loop(tmp_path: Path) -> None:
+    """Agent 每推进一轮 loop，progress.json 即重写（case 未结束时可见）。
+
+    利用 async generator 挂起点做确定性验证：两个 yield 之间读盘，
+    断言 loop 计数与事件类型已实时落盘。
+    """
+    batch_dir = new_batch_dir(tmp_path, "unit", 0, 1)
+    progress_path = batch_dir / "progress.json"
+    tracker = ProgressTracker(batch_dir, dataset="unit", model="mock",
+                              total_runs=1, started_at="2026-10-20T10:00:00+00:00")
+    snaps: list[dict] = []
+
+    class _LoopGatedAdapter:
+        async def run(self, req: RunRequest) -> AsyncIterator[TraceEvent]:
+            from mcc_eval.events import LlmChunk, RunStarted, ToolCall, ToolResult
+
+            yield RunStarted(seq=0, run_id=req.run_id, case_id=req.case_id,
+                             task=req.task, model=req.model)
+            snaps.append(json.loads(progress_path.read_text(encoding="utf-8")))
+            yield LlmChunk(seq=1, turn=0, delta="thinking")
+            yield ToolCall(seq=2, turn=1, call_id="t1", tool_name="read_file",
+                           args={"path": "a.py"})
+            snaps.append(json.loads(progress_path.read_text(encoding="utf-8")))
+            yield ToolResult(seq=3, call_id="t1", output="ok")
+            yield LlmChunk(seq=4, turn=2, delta="done")
+            snaps.append(json.loads(progress_path.read_text(encoding="utf-8")))
+            yield RunFinished(seq=5, status="passed", turns=3)
+
+    result = await run_case(_case(), _LoopGatedAdapter(), model="mock",
+                            batch_dir=batch_dir, timeout_s=5, progress=tracker)
+    assert result.status == "passed"
+
+    assert snaps[0]["active"] == [{
+        "case_id": "case-1", "attempt": 1, "loop": 0, "events": 0,
+        "last_event": None, "last_event_at": None,
+    }]
+    assert snaps[1]["active"][0]["loop"] == 2  # turn=1 → 第 2 轮 loop
+    assert snaps[1]["active"][0]["last_event"] == "tool_call"
+    assert snaps[1]["active"][0]["events"] == 3
+    assert snaps[2]["active"][0]["loop"] == 3  # turn=2 → 第 3 轮
+    assert snaps[2]["active"][0]["last_event"] == "llm_chunk"
+    assert snaps[2]["active"][0]["events"] == 5
+    assert all(s["running"] is True for s in snaps)
+
+
+async def test_progress_json_batch_lifecycle(tmp_path: Path) -> None:
+    """批次跑完后 progress.json 收敛为终态：active 清空、completed 齐全。"""
+    cases = [_case(case_id="ok"), _case(case_id="bad", task="this will fail")]
+    batch_dir = new_batch_dir(tmp_path, "unit", 2, 2)
+    batch = await run_batch(cases, MockAdapter(), dataset="unit", model="mock",
+                            batch_dir=batch_dir, concurrency=2, timeout_s=5,
+                            runs_per_case=2)
+    assert batch.passed == 2 and batch.failed == 2
+
+    data = json.loads((batch_dir / "progress.json").read_text(encoding="utf-8"))
+    assert data["running"] is False
+    assert data["total_runs"] == 4
+    assert data["done_runs"] == 4
+    assert data["active"] == []
+    assert len(data["completed"]) == 4
+    by_key = {(c["case_id"], c["attempt"]): c["status"] for c in data["completed"]}
+    assert by_key == {
+        ("ok", 1): "passed", ("ok", 2): "passed",
+        ("bad", 1): "failed", ("bad", 2): "failed",
+    }
+    assert all(c["reason"] for c in data["completed"])
+
+
+async def test_progress_json_survives_crash_cleanup(tmp_path: Path) -> None:
+    """adapter 崩溃的采样也从 active 清理、按 error 记入 completed。"""
+    batch_dir = new_batch_dir(tmp_path, "unit", 1, 1)
+    await run_batch([_case()], _ExplodingAdapter(), dataset="unit", model="mock",
+                    batch_dir=batch_dir, timeout_s=5)
+
+    data = json.loads((batch_dir / "progress.json").read_text(encoding="utf-8"))
+    assert data["done_runs"] == 1
+    assert data["active"] == []
+    assert data["completed"][0]["status"] == "error"
+    assert "adapter exploded" in data["completed"][0]["reason"]
 
 
 # ─── snapshot 折叠 ──────────────────────────────────────────────────────

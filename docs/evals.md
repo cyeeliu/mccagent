@@ -60,6 +60,15 @@ uv run --package mcc-eval mcc-eval run --cases evals/cases/x.json \
 `results.json` 的 summary 同步携带 `stable_cases` / `flaky_cases`，
 供脚本消费。
 
+批次运行中还有 `progress.json` 实时进度镜像：Agent 每推进一轮
+loop（轨迹事件 turn 变化）或发生 case 状态迁移（开始 / 完成）即
+原子重写，记录当前各采样的 loop 数、事件数与最新事件。运行长批次
+时直接读它监控，不必等 `results.json`：
+
+```bash
+watch -n2 cat eval-runs/<批次目录>/progress.json
+```
+
 ## 环境预置：setup
 
 Case 的 `setup` 是声明式文件映射，Agent 开跑前写入其工作目录：

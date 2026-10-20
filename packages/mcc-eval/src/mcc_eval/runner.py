@@ -4,10 +4,14 @@
 状态只存在于一个进程的内存与文件系统里，没有跨进程副本就没有
 不一致。每个 Case 的每次采样（attempt）的产物是三件套：
 
-  - runs/<case_id>-a<attempt>.jsonl   完整轨迹（六类事件，流式落盘）
+  - runs/<case_id>-a<attempt>.jsonl   完整轨迹（六类事件，逐事件落盘）
   - work/<case_id>-a<attempt>/        Agent 工作目录（保留现场，供
                                       执行式评分与人工检查）
   - results.json 里的记录             状态、分数、理由、采样序号
+
+批次目录另有 progress.json：实时进度镜像——Agent 每推进一轮 loop
+（轨迹事件 turn 变化）或发生 case 状态迁移即原子重写，运行中读它
+即可监控，不必等批次结束的 results.json。
 
 支持每 case 多次采样（runs_per_case）：Agent 输出非确定，单次
 pass/fail 没有信息量，case 级结论看 k/N 聚合（全过 / 部分 flaky /
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -39,6 +44,8 @@ from mcc_eval.events import (
     TraceEvent,
 )
 from mcc_eval.scoring import TraceSnapshot, score_case
+
+PROGRESS_FILE = "progress.json"
 
 
 @dataclass
@@ -192,6 +199,102 @@ def apply_setup(work_dir: Path, setup: dict[str, str]) -> None:
         target.write_text(content, encoding="utf-8")
 
 
+class ProgressTracker:
+    """批次实时进度镜像：每次状态迁移原子重写 progress.json。
+
+    写盘时机与「每跑一个 loop 就实时更新」对齐：
+
+    - case 开始 / 完成（状态迁移）
+    - 轨迹事件的 ``turn`` 变化——Agent 推进了新一轮 loop
+
+    原子写（临时文件 + os.replace）保证外部任意时刻读到的都是
+    完整 JSON；文件很小（每个采样一条 active/completed 记录），
+    重写开销可忽略。所有方法都在同一事件循环里被调用，无需加锁。
+    """
+
+    def __init__(
+        self,
+        batch_dir: Path,
+        *,
+        dataset: str,
+        model: str,
+        total_runs: int,
+        started_at: str,
+    ) -> None:
+        self._path = batch_dir / PROGRESS_FILE
+        self._state: dict[str, Any] = {
+            "batch_id": batch_dir.name,
+            "dataset": dataset,
+            "model": model,
+            "started_at": started_at,
+            "updated_at": started_at,
+            "running": True,
+            "total_runs": total_runs,
+            "done_runs": 0,
+            "active": [],
+            "completed": [],
+        }
+        self._by_key: dict[tuple[str, int], dict[str, Any]] = {}
+
+    def case_started(self, case_id: str, attempt: int) -> None:
+        entry: dict[str, Any] = {
+            "case_id": case_id,
+            "attempt": attempt,
+            "loop": 0,
+            "events": 0,
+            "last_event": None,
+            "last_event_at": None,
+        }
+        self._state["active"].append(entry)
+        self._by_key[(case_id, attempt)] = entry
+        self._write()
+
+    def observe(
+        self, case_id: str, attempt: int, ev: TraceEvent, event_count: int
+    ) -> None:
+        """吸收一个轨迹事件：内存常更新，loop 推进时写盘。"""
+        entry = self._by_key.get((case_id, attempt))
+        if entry is None:
+            return
+        entry["events"] = event_count
+        entry["last_event"] = getattr(ev, "type", None)
+        entry["last_event_at"] = getattr(ev, "ts", None)
+        turn = getattr(ev, "turn", None)
+        if turn is not None and turn + 1 != entry["loop"]:
+            entry["loop"] = turn + 1
+            self._write()
+
+    def case_finished(self, result: CaseResult) -> None:
+        entry = self._by_key.pop((result.case_id, result.attempt), None)
+        if entry is not None:
+            self._state["active"].remove(entry)
+        self._state["completed"].append(
+            {
+                "case_id": result.case_id,
+                "attempt": result.attempt,
+                "status": result.status,
+                "score": result.score,
+                "reason": result.reason,
+                "cost_usd": result.cost_usd,
+                "turns": result.turns,
+                "duration_s": round(result.duration_s, 3),
+            }
+        )
+        self._state["done_runs"] += 1
+        self._write()
+
+    def finish(self) -> None:
+        self._state["running"] = False
+        self._write()
+
+    def _write(self) -> None:
+        self._state["updated_at"] = datetime.now(UTC).isoformat()
+        tmp = self._path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(self._state, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, self._path)
+
+
 def _dump_event(fh: Any, ev: TraceEvent) -> None:
     """逐事件落盘并即时 flush。
 
@@ -212,13 +315,15 @@ async def run_case(
     max_turns: int = 20,
     timeout_s: float = 600.0,
     attempt: int = 1,
+    progress: ProgressTracker | None = None,
 ) -> CaseResult:
     """执行单个 Case 的一次采样：预置环境 → 轨迹流式落盘 → 评分。
 
     每次采样独立的轨迹文件与工作目录（``-a<attempt>`` 后缀），
     采样之间互不污染。超时 / 执行异常时补一条 RunFinished 落盘，
     保证轨迹文件完整（末事件永远标记终态）；error / timeout
-    永远附 reason。
+    永远附 reason。progress 存在时，case 开始与每轮 loop 推进
+    都会实时反映到 progress.json。
     """
     started = time.monotonic()
     suffix = f"-a{attempt}"
@@ -236,6 +341,9 @@ async def run_case(
         work_dir=str(work_dir),
     )
 
+    if progress is not None:
+        progress.case_started(case.case_id, attempt)
+
     events: list[TraceEvent] = []
     terminal = "done"
     error_reason: str | None = None
@@ -245,6 +353,8 @@ async def run_case(
             async for ev in adapter.run(req):
                 events.append(ev)
                 _dump_event(fh, ev)
+                if progress is not None:
+                    progress.observe(case.case_id, attempt, ev, len(events))
 
         try:
             await asyncio.wait_for(consume(), timeout=timeout_s)
@@ -311,12 +421,20 @@ async def run_batch(
 
     非确定性下同一任务多次运行结果可能不同：单次 pass/fail 没有
     信息量，多次采样暴露不稳定 case（flaky）。进度逐条打到 stderr，
-    总数 = case 数 × 采样数。
+    总数 = case 数 × 采样数；progress.json 随每轮 loop 与每次
+    case 状态迁移实时更新。
     """
     started_at = datetime.now(UTC).isoformat()
     sem = asyncio.Semaphore(max(1, concurrency))
     total_runs = len(cases) * max(1, runs_per_case)
     done_count = 0
+    tracker = ProgressTracker(
+        batch_dir,
+        dataset=dataset,
+        model=model,
+        total_runs=total_runs,
+        started_at=started_at,
+    )
 
     async def one(case: Case, attempt: int) -> CaseResult:
         nonlocal done_count
@@ -329,7 +447,9 @@ async def run_batch(
                 max_turns=max_turns,
                 timeout_s=timeout_s,
                 attempt=attempt,
+                progress=tracker,
             )
+            tracker.case_finished(result)
             done_count += 1
             print(
                 f"[{done_count}/{total_runs}] {result.case_id}"
@@ -345,6 +465,7 @@ async def run_batch(
         for attempt in range(1, max(1, runs_per_case) + 1)
     ]
     results = await asyncio.gather(*jobs)
+    tracker.finish()
     return BatchResult(
         batch_id=batch_dir.name,
         dataset=dataset,
