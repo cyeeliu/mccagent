@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 DEFAULT_DATABASE_URL = "postgresql://postgres:dev@localhost:5432/evalplatform"
-DEFAULT_PORT = 8080
+DEFAULT_PORT = 8081
 DEFAULT_CORS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 DEFAULT_LEASE_TTL_S = 120
 

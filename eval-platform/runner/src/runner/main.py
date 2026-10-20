@@ -25,7 +25,7 @@ from runner.events import LlmChunk, RunFinished, ToolCall, ToolResult
 from runner.scoring import TraceSnapshot
 from runner.scoring import score as compute_score
 
-SERVER = os.environ.get("EVAL_SERVER_URL", "http://localhost:8080")
+SERVER = os.environ.get("EVAL_SERVER_URL", "http://localhost:8081")
 RUNNER_ID = os.environ.get("RUNNER_ID", f"{socket.gethostname()}-{os.getpid()}")
 RUNNER_SECRET = os.environ.get("RUNNER_SECRET")  # None → 开发模式（服务端放行）
 POLL_IDLE_S = float(os.environ.get("POLL_IDLE_S", "2.0"))

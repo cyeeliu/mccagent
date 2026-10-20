@@ -125,7 +125,7 @@ SSE 掉帧读到 lagged 信号时触发全量重拉补偿，全部封装在 Hook
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `DATABASE_URL` | `postgresql://postgres:dev@localhost:5432/evalplatform` | PostgreSQL 连接串 |
-| `PORT` | `8080` | HTTP 监听端口 |
+| `PORT` | `8081` | HTTP 监听端口 |
 | `RUNNER_SECRET` | 未设置 | 内部接口 Bearer token；未设置为开发模式（放行并告警） |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 允许的浏览器来源，逗号分隔 |
 | `LEASE_TTL_S` | `120` | 任务租约时长（秒） |
@@ -137,7 +137,7 @@ SSE 掉帧读到 lagged 信号时触发全量重拉补偿，全部封装在 Hook
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `EVAL_SERVER_URL` | `http://localhost:8080` | API 服务地址 |
+| `EVAL_SERVER_URL` | `http://localhost:8081` | API 服务地址 |
 | `RUNNER_ID` | `主机名-进程号` | Runner 标识（领取归属与事件校验） |
 | `RUNNER_SECRET` | 未设置 | 内部接口 Bearer token；须与 server 一致 |
 | `POLL_IDLE_S` | `2.0` | 无任务时的轮询间隔（秒） |
