@@ -124,3 +124,11 @@
 **根因**：宿主机端口发布冲突。报 `port is already allocated` 通常是**另一个 Docker 容器**已发布该端口（如本机已有的 Grafana、其他 compose 项目残留）；报 `address already in use` 则是宿主机上的非容器进程占用。
 
 **修复**：先 `docker ps --filter publish=3000` 定位占用容器（本项目残留先 `docker compose down`），宿主机进程用 `ss -ltnp | grep :3000` 查。compose 的四个宿主机端口均支持环境变量覆盖（`SERVER_PORT` / `WEB_PORT` / `PROMETHEUS_PORT` / `GRAFANA_PORT`，默认 8081 / 5173 / 9090 / 3000），如 `GRAFANA_PORT=3001 docker compose up`；改 `WEB_PORT` 后须同步设置 `CORS_ALLOWED_ORIGINS`。
+
+### 评测平台 server 容器 unhealthy
+
+**现象**：`docker compose up` 卡在 `dependency failed to start: container eval-platform-server-1 is unhealthy`，`docker compose logs server` 可见 `/healthz/ready` 报 500 或 `PermissionError`。
+
+**根因**：非 root 运行 + 命名卷属主的组合问题。server 镜像以 uid 10001 运行；Docker 命名卷挂载到镜像中**不存在**的路径时，卷根目录由 root 拥有（只有挂载到镜像中已存在的目录时，才按 copy-up 语义继承目录属主）。ready 探针会向轨迹目录写 `_healthcheck` 探测文件，root 拥有的卷上直接 `PermissionError`。
+
+**修复**：镜像 runtime 阶段预创建 `/traces` 并 `chown app:app`（`/workspace/mccagent/eval-platform/server/Dockerfile`），首次挂载的卷继承属主即可写。**注意：已经创建过的卷不会随镜像重建而重新初始化属主**——修复前已存在的 `traces` 卷仍是 root 拥有，须 `docker compose down -v` 删卷重建（本地开发数据可丢弃），或 `docker compose run --rm -u root server chown -R 10001:10001 /traces` 保留数据修复。
