@@ -109,6 +109,8 @@
 
 `"0.1.0rc1"` 的第三段若提取段内**所有**数字会得到 `1`（`rc1` 的 1），导致 `(0, 1, 1)` 与 `(0, 1, 0)` 误判为不同版本。每段只取**前导数字**（`re.match(r"\d+", seg)`），`rc` 后缀自然归零。
 
+## 评测平台
+
 ### 评测平台 compose 拉不到 MinIO 镜像
 
 **现象**：`docker compose up` 报 `failed to resolve reference "docker.io/minio/minio:..."`，无论 `RELEASE.2025-09-07T16-13-09Z` 还是 `latest` 均 404。
@@ -164,3 +166,11 @@
 **根因**：runner 的评分分支条件是 `final.status in ("passed", "failed")`——mcc 适配器的 RunFinished.status 只有两态（出现 Error 事件即 error，如 git clone 超时、run_bash 非零退出、max_iterations 超限），error 状态直接跳过 expectations 评分，`score=None` 上报。SWE-bench 任务大量 clone/测试操作极易触发 Error，导致轨迹明明可评却无分。
 
 **修复**：评分条件改为「有 expectations 且轨迹有实质内容（工具调用或非空模型输出）」——带错轨迹照样评分，`no_tool_errors` 断言（权重 0.3）会正确惩罚它；零产出 error（凭证未配、LLM 首调即挂）保留 error 状态不评分，避免把基础设施故障误判成 Agent 低分。教训：**「执行状态」与「可评性」是两个正交维度**，用执行状态做评分开关会漏掉「跑出错但轨迹完整」的大类。
+
+### 轨迹已 passed 但 run 状态是 error
+
+**现象**：web 事件详情里 `run_finished` 显示 `passed` / `score=1`，但 run 列表状态却是 error，同一 run 的两条信息自相矛盾。
+
+**根因**：轨迹事件（JSONL buf 逐段上报）与 run 表状态（complete 端点 UPDATE）是**两条独立链路**，收尾阶段的异常会让二者矛盾。两个触发路径：① runner 的心跳循环对单次 HTTP 失败零容错——一次网络抖动即判死心跳任务，`ensure_heartbeat_alive()` 抛异常进入 except 收尾分支，把 buf 里完整的 `run_finished` 照常 flush 进轨迹（事件链路正常），却以 `complete(status="error")` 收尾（状态链路被覆盖）；② 心跳断供超过 `LEASE_TTL_S`（120s）后 server reaper 直接把 run 置 error，runner 随后的 complete 打在 `WHERE status IN ('leased','running')` 上不中，状态永远停在 error。
+
+**修复**：两层。① 心跳容错：单次失败改为短间隔（5s）重试计数，连续 3 次才判死心跳；server 主动宣告 `alive=false` 仍立即失败。② 评分保全：except 收尾分支里若已收到 `RunFinished`（`final is not None`），按正常评分逻辑取 status/score 上报，error 字段附「completed with finish error」说明；仅未产出 final 的 run 才报纯 error。教训：**基础设施故障不应覆盖已得出的业务结论**——收尾路径的容错（链路层）与结果的保全（业务层）要分开处理。

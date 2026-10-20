@@ -313,3 +313,100 @@ async def test_execute_scores_error_runs_with_trace_signal(
     assert len(completes) == 1
     assert completes[0]["status"] == expected_status
     assert completes[0]["score"] == expected_score
+
+class FlakyHeartbeatServer(FakeServer):
+    """前 N 次心跳返回 503（网络抖动替身），之后恢复 alive。"""
+
+    def __init__(self, fail_times: int) -> None:
+        super().__init__(heartbeat_alive=True)
+        self._remaining = fail_times
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/heartbeat") and self._remaining > 0:
+            self._remaining -= 1
+            return httpx.Response(503, json={"detail": "transient"})
+        return super().handler(request)
+
+
+class FlakyEventsServer(FakeServer):
+    """events 端点前 N 次返回 503，模拟上报期瞬时连接故障。"""
+
+    def __init__(self, fail_times: int = 1) -> None:
+        super().__init__()
+        self._remaining = fail_times
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/events") and self._remaining > 0:
+            self._remaining -= 1
+            return httpx.Response(503, json={"detail": "gateway reset"})
+        return super().handler(request)
+
+
+def _patch_fast_adapter(monkeypatch) -> None:
+    monkeypatch.setattr(main, "HEARTBEAT_INTERVAL_S", 0.01)
+    monkeypatch.setattr(main, "HEARTBEAT_RETRY_S", 0.01)
+    monkeypatch.setattr(main, "make_adapter", lambda scaffold: MockAdapter(pace_s=0.0))
+
+
+async def test_heartbeat_single_transient_failure_recovers(monkeypatch) -> None:
+    """单次心跳 503 不判死：短间隔重试恢复，run 正常完成。"""
+    server = FlakyHeartbeatServer(fail_times=1)
+    _patch_fast_adapter(monkeypatch)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(server.handler), base_url="http://test"
+    ) as http:
+        await main.execute(http, _lease())
+
+    completes = server.posts_to("/complete")
+    assert len(completes) == 1
+    assert completes[0]["status"] == "passed"
+
+
+async def test_heartbeat_consecutive_failures_abort_unfinished_run(monkeypatch) -> None:
+    """连续 3 次心跳失败判死：未完成的 run 上报 error。
+
+    用慢 adapter 制造心跳触发窗口且 run_finished 尚未产出——
+    已产出 run_finished 的 run 走评分保全路径，不在此测试范围。
+    """
+    server = FlakyHeartbeatServer(fail_times=99)
+    monkeypatch.setattr(main, "HEARTBEAT_INTERVAL_S", 0.01)
+    monkeypatch.setattr(main, "HEARTBEAT_RETRY_S", 0.01)
+    monkeypatch.setattr(main, "make_adapter", lambda scaffold: SlowAdapter())
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(server.handler), base_url="http://test"
+    ) as http:
+        await main.execute(http, _lease(scaffold="slow"))
+
+    completes = server.posts_to("/complete")
+    assert len(completes) == 1
+    assert completes[0]["status"] == "error"
+    assert "heartbeat failed" in completes[0]["error"]
+
+
+async def test_finish_stage_crash_keeps_scored_result(monkeypatch) -> None:
+    """收尾上报瞬时 503 后重试成功：评分结果保留，error 字段附摘要。
+
+    对应真实事故：轨迹里 run_finished=passed/score=1，run 状态却是
+    error——收尾期上报故障把已完成的评分结果覆盖成了 error。
+    """
+    server = FlakyEventsServer(fail_times=1)
+    _patch_fast_adapter(monkeypatch)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(server.handler), base_url="http://test"
+    ) as http:
+        await main.execute(
+            http,
+            _lease(
+                expectations=[
+                    {"type": "tool_called", "tool": "bash", "weight": 1.0},
+                ]
+            ),
+        )
+
+    completes = server.posts_to("/complete")
+    assert len(completes) == 1
+    # 评分保全：mock 轨迹含 bash 调用，判 passed score=1，
+    # 而不是收尾异常覆盖成 error
+    assert completes[0]["status"] == "passed"
+    assert completes[0]["score"] == 1.0
+    assert "finish error" in completes[0]["error"]

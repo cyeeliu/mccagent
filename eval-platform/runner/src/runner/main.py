@@ -31,6 +31,8 @@ RUNNER_SECRET = os.environ.get("RUNNER_SECRET")  # None → 开发模式（服�
 POLL_IDLE_S = float(os.environ.get("POLL_IDLE_S", "2.0"))
 FLUSH_INTERVAL_S = 0.5
 HEARTBEAT_INTERVAL_S = 30.0
+HEARTBEAT_RETRY_S = 5.0  # 心跳失败后的短间隔重试（远小于租约 TTL）
+HEARTBEAT_MAX_FAILURES = 3  # 连续失败判死阈值
 ERROR_MESSAGE_LIMIT = 1000
 
 
@@ -66,15 +68,55 @@ def _has_signal(snap: TraceSnapshot) -> bool:
     return bool(snap.tool_calls) or bool("".join(snap.text_outputs).strip())
 
 
+def _final_status_score(
+    final: RunFinished | None,
+    snap: TraceSnapshot,
+    expectations: list[dict],
+) -> tuple[str, float | None]:
+    """计算 complete 上报的 status 与 score。
+
+    adapter 返回的 RunFinished.status 是执行状态（error 只代表执行中
+    出过未恢复的异常，不代表轨迹不可评）。有 expectations 且轨迹有
+    实质内容（工具调用或模型输出）时按评分覆盖——no_tool_errors
+    断言会正确惩罚带错的轨迹；零产出的 error（如凭证未配、LLM
+    首调即挂）保留 error 状态不评分，避免把基础设施故障误判成
+    Agent 低分。
+    """
+    if final and expectations and _has_signal(snap):
+        result = compute_score(snap, expectations)
+        return result.status, result.score
+    if final:
+        return final.status, final.score
+    return "error", None
+
+
 async def heartbeat_loop(http: httpx.AsyncClient, run_id: str) -> None:
-    """后台心跳：租约被 reaper 回收时主动失败。"""
+    """后台心跳：租约被 reaper 回收时主动失败。
+
+    单次网络失败不判死（心跳对传输抖动容错，短间隔重试，连续
+    HEARTBEAT_MAX_FAILURES 次失败才放弃）——server 明确返回
+    alive=false（租约被回收）才立即失败。
+    """
+    failures = 0
     while True:
-        await asyncio.sleep(HEARTBEAT_INTERVAL_S)
-        r = await http.post(
-            f"/internal/runs/{run_id}/heartbeat",
-            json={"runner_id": RUNNER_ID},
-        )
-        r.raise_for_status()
+        await asyncio.sleep(HEARTBEAT_INTERVAL_S if failures == 0 else HEARTBEAT_RETRY_S)
+        try:
+            r = await http.post(
+                f"/internal/runs/{run_id}/heartbeat",
+                json={"runner_id": RUNNER_ID},
+            )
+            r.raise_for_status()
+        except Exception as e:
+            failures += 1
+            if failures >= HEARTBEAT_MAX_FAILURES:
+                raise RuntimeError(f"heartbeat failed {failures} times: {e}") from e
+            print(
+                f"[{RUNNER_ID}] heartbeat for {run_id} failed "
+                f"({failures}/{HEARTBEAT_MAX_FAILURES}): {e}",
+                file=sys.stderr,
+            )
+            continue
+        failures = 0
         if not r.json().get("alive"):
             # 租约被回收（多半是本进程卡顿太久）
             raise RuntimeError("lease lost")
@@ -135,22 +177,7 @@ async def execute(http: httpx.AsyncClient, lease: dict) -> None:
         ensure_heartbeat_alive()
         duration_s = time.monotonic() - t_start
 
-        # 评分：adapter 返回的 RunFinished.status 是执行状态（error 只代表
-        # 执行中出过未恢复的异常，不代表轨迹不可评）。有 expectations 且
-        # 轨迹有实质内容（工具调用或模型输出）时按评分覆盖 status 与
-        # score——no_tool_errors 断言会正确惩罚带错的轨迹；零产出的
-        # error（如凭证未配、LLM 首调即挂）保留 error 状态不评分，
-        # 避免把基础设施故障误判成 Agent 低分。
-        if final and expectations and _has_signal(snap):
-            result = compute_score(snap, expectations)
-            status = result.status
-            score_val = result.score
-        elif final:
-            status = final.status
-            score_val = final.score
-        else:
-            status = "error"
-            score_val = None
+        status, score_val = _final_status_score(final, snap, expectations)
 
         r = await http.post(
             f"/internal/runs/{run_id}/complete",
@@ -171,18 +198,31 @@ async def execute(http: httpx.AsyncClient, lease: dict) -> None:
         )
 
     except Exception as e:
-        # 单 run 失败隔离：上报 error 后继续下一个任务
+        # 单 run 失败隔离：上报后继续下一个任务。
+        # 评分保全：run_finished 已产出（adapter 走完整个生命周期）时，
+        # 收尾阶段的异常（心跳断连、上报抖动等）不应吞掉已完成的
+        # 评分结果——轨迹与 run 状态会因此互相矛盾；此时 status/score
+        # 仍按评分逻辑取值，异常摘要附在 error 字段。
         duration_s = time.monotonic() - t_start
         print(f"[{RUNNER_ID}] run {run_id} crashed: {e}", file=sys.stderr)
         try:
             await flush()
+            if final is not None:
+                status, score_val = _final_status_score(final, snap, expectations)
+                error_text = f"completed with finish error: {e}"
+            else:
+                status, score_val = "error", None
+                error_text = str(e)[:ERROR_MESSAGE_LIMIT]
             r = await http.post(
                 f"/internal/runs/{run_id}/complete",
                 json={
                     "runner_id": RUNNER_ID,
-                    "status": "error",
-                    "error": str(e)[:ERROR_MESSAGE_LIMIT],
+                    "status": status,
+                    "score": score_val,
+                    "cost_usd": final.cost_usd if final is not None else None,
+                    "turns": final.turns if final is not None else None,
                     "duration_s": round(duration_s, 3),
+                    "error": error_text[:ERROR_MESSAGE_LIMIT],
                 },
             )
             r.raise_for_status()
