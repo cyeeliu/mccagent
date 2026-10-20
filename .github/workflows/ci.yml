@@ -16,3 +16,62 @@ jobs:
       - run: uv sync --all-packages --dev
       - run: uv run ruff check .
       - run: uv run --all-packages pytest tests/ -q
+
+  eval-platform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: eval-platform
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: eval
+          POSTGRES_PASSWORD: eval
+          POSTGRES_DB: eval_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eval"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      EVAL_PG_DSN: postgres://eval:eval@localhost:5432/eval_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --all-packages --dev
+      - run: uv run ruff check .
+      - run: uv run --all-packages pytest -q
+
+  eval-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: eval-platform/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  images:
+    needs: [test, eval-platform, eval-web]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: eval-platform
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f server/Dockerfile -t eval-server:ci .
+      - run: docker build -f runner/Dockerfile -t eval-runner:ci .
+      - run: docker build -f web/Dockerfile -t eval-web:ci .
+      # 推送镜像（配置 REGISTRY_TOKEN secret 后启用）：
+      # - run: docker tag eval-server:ci ghcr.io/$REGISTRY/eval-server:${{ github.sha }} 等

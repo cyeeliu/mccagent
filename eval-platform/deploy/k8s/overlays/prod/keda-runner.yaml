@@ -1,0 +1,29 @@
+# KEDA：runner 副本数随队列深度自动伸缩（需集群预先安装 KEDA operator）。
+# 没任务时缩到 0 省钱，高峰按 每 5 个排队任务 ≈ 1 个 runner 扩容。
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: runner-queue-auth
+spec:
+  secretTargetRef:
+    - parameter: connection
+      name: eval-secrets
+      key: DATABASE_URL
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-queue
+spec:
+  scaleTargetRef:
+    name: runner
+  minReplicaCount: 0
+  maxReplicaCount: 50
+  cooldownPeriod: 300
+  triggers:
+    - type: postgresql
+      metadata:
+        query: "SELECT count(*) FROM runs WHERE status = 'queued'"
+        targetQueryValue: "5"
+      authenticationRef:
+        name: runner-queue-auth

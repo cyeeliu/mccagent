@@ -66,7 +66,7 @@ run 生命周期：`queued → leased → running → passed | failed | error | 
 | server 路由实现（REST + SSE + 调度 + 存储 + 指标） | ✅ 可用 |
 | runner 执行主循环 / 评分 / 适配器（mock / anthropic / langgraph） | ✅ 可用 |
 | web 功能页面（看板 / 轨迹 / 对比 / 仪表盘） | ✅ 可用 |
-| 部署（docker compose / K8s / 可观测栈） | 🚧 规划中 |
+| 部署（docker compose / K8s / 可观测栈） | ✅ 可用 |
 
 本地开发：
 
@@ -120,6 +120,79 @@ npm test        # vitest（Zod 契约 + 轨迹合并纯函数）
 历史段分页拉全，实时段 SSE 续接（100ms 节流合帧），
 SSE 掉帧读到 lagged 信号时触发全量重拉补偿，全部封装在 Hook 内。
 
+## 部署与运维
+
+### 本地一键全栈
+
+```bash
+cd eval-platform
+docker compose up --build
+```
+
+| 服务 | 端口 | 说明 |
+|---|---|---|
+| web | http://localhost:5173 | 前端（nginx 托管 + /api 反代，SSE 不缓冲） |
+| server | http://localhost:8081 | API 服务 |
+| db | 5432 | PostgreSQL 17 |
+| minio | http://localhost:9001 | S3 兼容对象存储（admin/devpassword） |
+| prometheus | http://localhost:9090 | 指标采集 |
+| grafana | http://localhost:3000 | 仪表盘（admin/admin，自动导入数据源与看板） |
+
+健康检查链保证任意顺序重启幂等：`minio-init` 等 minio 健康后建 bucket，
+server 等 db 健康 + bucket 就绪才起，runner 等 server 健康才连。
+
+提交演示批次（mock agent，无需 API key）：
+
+```bash
+./scripts/demo-batch.sh
+```
+
+Runner 横向扩展（验证 `FOR UPDATE SKIP LOCKED` 并发领取）：
+
+```bash
+docker compose up --scale runner=4
+```
+
+### 本地与生产的三处刻意不同
+
+| | 本地（图省事） | 生产（要安全） |
+|---|---|---|
+| 对象存储 | MinIO | 真 S3 + IAM Role（不用 Access Key） |
+| 密钥 | `${RUNNER_SECRET:-dev-runner-secret}` | Kubernetes Secret + 外部 Vault 注入 |
+| Grafana 密码 | `admin` | 强密码 + SSO |
+
+### Kubernetes（Kustomize 管理环境差异）
+
+```bash
+kubectl apply -k deploy/k8s/overlays/staging/   # 1 副本、小资源
+kubectl apply -k deploy/k8s/overlays/prod/      # 3 副本、NetworkPolicy、KEDA
+```
+
+生产 overlay 比 base 多三样关键东西：
+
+- **NetworkPolicy**：runner 出方向只允许访问 server:8081 与集群 DNS——沙箱默认断网，攻破爆炸半径被框死
+- **KEDA ScaledObject**：runner 副本数随 `queued` 队列深度自动伸缩（每 5 个任务 ≈ 1 个 runner），没任务缩到 0
+- **PodDisruptionBudget**：节点维护时至少保留副本数，滚动更新 `maxUnavailable: 0`
+
+### 可观测性
+
+Prometheus 抓取 `server:8081/metrics`；Grafana provisioning 自动导入数据源与
+「Eval Platform」看板（通过率趋势 / API 延迟 P99 / 队列积压 / 活跃 run / 成本累积）。
+两条生产必装告警在 `deploy/alerts.yml`：
+
+- `EvalQueueBacklog`：队列深度 > 50 持续 5 分钟 → 通知 oncall
+- `EvalPassRateLow`：通过率连续 1 小时 < 60% → 通知算法团队
+
+### 高频故障排查
+
+| 故障现象 | 第一步排查 | 典型原因 |
+|---|---|---|
+| 任务全部卡在 queued | `eval_queue_depth` 飙高、`eval_active_runs` 为 0 | Runner 全挂 / 鉴权 token 不匹配 |
+| 通过率突然下降 | 看最近批次的 error message | 模型 API 限速 / 沙箱 OOM |
+| /healthz/ready 返回 500 | server 日志 | PostgreSQL 断连 / MinIO 不可达 |
+| Prometheus 没数据 | `curl server:8081/metrics` 手动检查 | scrape 配错 / 路由未注册 |
+| Runner 领不到任务 | server 日志看 401 | RUNNER_SECRET 两边不一致 |
+
 ## 环境变量（server）
 
 | 变量 | 默认值 | 说明 |
@@ -132,6 +205,7 @@ SSE 掉帧读到 lagged 信号时触发全量重拉补偿，全部封装在 Hook
 | `TRACE_BACKEND` | `local` | 轨迹后端：`local`（本地目录）或 `s3` / `minio` |
 | `TRACE_DIR` | `./traces` | local 后端的轨迹目录 |
 | `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` | — | s3 后端连接信息（需安装 s3 extra） |
+| `S3_REGION` / `S3_PREFIX` | `us-east-1` / 空 | s3 后端区域与 key 前缀 |
 
 ## 环境变量（runner）
 

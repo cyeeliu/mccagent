@@ -1,0 +1,13 @@
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+traces/
+web/node_modules/
+web/dist/
+web/.vite/
+deploy/k8s/
+scripts/
+docs/
+*.md
