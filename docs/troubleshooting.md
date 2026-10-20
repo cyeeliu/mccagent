@@ -108,3 +108,11 @@
 ### 版本号解析的 rc 段陷阱
 
 `"0.1.0rc1"` 的第三段若提取段内**所有**数字会得到 `1`（`rc1` 的 1），导致 `(0, 1, 1)` 与 `(0, 1, 0)` 误判为不同版本。每段只取**前导数字**（`re.match(r"\d+", seg)`），`rc` 后缀自然归零。
+
+### 评测平台 compose 的 MinIO 镜像 tag 不存在
+
+**现象**：`docker compose up` 报 `failed to resolve reference "docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z": not found`。
+
+**根因**：镜像 tag 写成了不存在的版本号——离线编排时未对照 Docker Hub 逐一核实（部分参考配置中的版本号是虚构的，`minio/mc` 的 `RELEASE.2025-08-13T08-35-41Z` 同样不存在）。
+
+**修复**：本地开发栈改用 `minio/minio:latest` 与 `minio/mc:latest`（`/workspace/mccagent/eval-platform/docker-compose.yaml`）；生产环境应固定真实 RELEASE tag 或镜像 digest。编排文件中新增镜像 tag 前先 `docker manifest inspect <image>:<tag>` 验证存在性。
