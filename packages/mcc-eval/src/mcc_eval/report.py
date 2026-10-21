@@ -188,7 +188,8 @@ def rebuild(batch_dir: Path) -> BatchResult:
                 results.append(
                     CaseResult(case_id=case.case_id, status=finished.status,
                                score=None, attempt=attempt,
-                               reason=f"execution terminated as {finished.status}")
+                               reason=finished.reason
+                               or f"execution terminated as {finished.status}")
                 )
                 continue
             snap = snapshot_from_events(events)

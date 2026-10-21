@@ -100,7 +100,9 @@ def test_translator_skips_non_trace_events(ev) -> None:
 def test_translator_error_marks_run_error() -> None:
     t = _Translator(_req())
     t.translate(ErrorEvent(text="boom"))
-    assert t.run_finished().status == "error"
+    finished = t.run_finished()
+    assert finished.status == "error"
+    assert finished.reason == "boom"
 
 
 def test_translator_seq_monotonic() -> None:
@@ -181,6 +183,7 @@ def test_adapter_error_event_maps_to_error_status() -> None:
 
     assert isinstance(events[-1], RunFinished)
     assert events[-1].status == "error"
+    assert events[-1].reason == "provider down"
 
 
 # ─── MockAdapter ─────────────────────────────────────────────────────────

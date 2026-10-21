@@ -65,6 +65,9 @@ class RunFinished(_Base):
     score: float | None = None
     cost_usd: float | None = None
     turns: int = 0
+    # error / timeout 的具体原因（如 LLM 认证失败、网关不可达）。
+    # 没有它，失败 run 只剩光秃秃的 status，无从排障
+    reason: str | None = None
 
 
 TraceEvent = Annotated[

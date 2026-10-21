@@ -388,6 +388,22 @@ async def run_case(
     run_finished = next(
         (ev for ev in reversed(events) if isinstance(ev, RunFinished)), None
     )
+    # adapter 自报的执行终态优先于评分器（与 rebuild 语义一致）：
+    # error / timeout 说明 Agent 根本没跑完（如 LLM 认证失败、网关
+    # 不可达），对残缺轨迹评分没有意义，reason 透传供排障
+    if run_finished is not None and run_finished.status in ("error", "timeout"):
+        return CaseResult(
+            case_id=case.case_id,
+            status=run_finished.status,
+            score=None,
+            reason=run_finished.reason
+            or f"execution terminated as {run_finished.status}",
+            cost_usd=run_finished.cost_usd,
+            turns=run_finished.turns,
+            duration_s=duration,
+            attempt=attempt,
+        )
+
     snap = snapshot_from_events(events)
     scored = score_case(
         snap, check=case.check, expectations=case.expectations, work_dir=work_dir

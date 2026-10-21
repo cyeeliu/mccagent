@@ -40,6 +40,7 @@ def test_schema_covers_all_event_types() -> None:
         ToolCall(seq=2, turn=0, call_id="x", tool_name="bash", args="pytest"),
         ToolResult(seq=3, call_id="x", output="ok"),
         RunFinished(seq=4, status="passed", score=1.0),
+        RunFinished(seq=5, status="error", reason="no ANTHROPIC_API_KEY"),
     ],
     ids=lambda e: type(e).__name__,
 )
@@ -61,3 +62,10 @@ def test_run_finished_status_vocabulary() -> None:
         assert RunFinished(seq=0, status=status).status == status
     with pytest.raises(ValueError):
         RunFinished(seq=0, status="running")
+
+
+def test_run_finished_reason_optional() -> None:
+    """reason 可选：缺省 None（旧轨迹无此字段可继续解析）。"""
+    assert RunFinished(seq=0, status="passed").reason is None
+    with_reason = RunFinished(seq=1, status="error", reason="gateway unreachable")
+    assert json.loads(with_reason.model_dump_json())["reason"] == "gateway unreachable"

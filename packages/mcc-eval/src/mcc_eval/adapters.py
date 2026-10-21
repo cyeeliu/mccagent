@@ -145,7 +145,9 @@ class _Translator:
 
     def run_finished(self) -> RunFinished:
         # 执行层只报 error / passed 二态：是否有价值交由评分器判定，
-        # 有官方测试或断言配置时以评分结果为准
+        # 有官方测试或断言配置时以评分结果为准。error 时必须带
+        # reason（AgentLoop 的异常文本）——LLM 认证失败 / 网关不可达
+        # 这类第一步就死的 run，原因要直达轨迹与报告
         status = "error" if self.error_text is not None else "passed"
         return RunFinished(
             seq=self._seq.next(),
@@ -153,6 +155,7 @@ class _Translator:
             score=None,
             cost_usd=self.cost_usd,
             turns=self.turns,
+            reason=self.error_text,
         )
 
 

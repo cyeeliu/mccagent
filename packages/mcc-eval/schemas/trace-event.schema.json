@@ -163,6 +163,13 @@
         },
         "turns": {
           "type": "integer"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "error / timeout 的具体原因（LLM 认证失败、网关不可达等）"
         }
       },
       "required": [

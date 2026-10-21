@@ -289,6 +289,53 @@ def test_apply_setup_writes_nested_files(tmp_path: Path) -> None:
     assert (tmp_path / "top.py").read_text(encoding="utf-8") == "x = 1\n"
 
 
+# ─── adapter 自报终态 ────────────────────────────────────────────────────
+
+
+async def test_run_case_respects_adapter_terminal_error(tmp_path: Path) -> None:
+    """adapter 报 error（如 LLM 认证失败）时保留终态不评分，reason 透传。"""
+
+    class _AuthFailAdapter:
+        async def run(self, req: RunRequest) -> AsyncIterator[TraceEvent]:
+            from mcc_eval.events import RunStarted
+
+            yield RunStarted(seq=0, run_id=req.run_id, case_id=req.case_id,
+                             task=req.task, model=req.model)
+            yield RunFinished(seq=1, status="error", turns=0, cost_usd=0.0,
+                              reason="no ANTHROPIC_API_KEY in environment")
+
+    batch_dir = new_batch_dir(tmp_path, "unit", 0, 1)
+    result = await run_case(_case(check="assert True\n"), _AuthFailAdapter(),
+                            model="mock", batch_dir=batch_dir, timeout_s=5)
+    assert result.status == "error"
+    assert result.score is None
+    assert result.reason == "no ANTHROPIC_API_KEY in environment"
+    lines = [json.loads(ln) for ln in
+             (batch_dir / "runs" / "case-1-a1.jsonl").read_text(encoding="utf-8")
+             .splitlines() if ln]
+    assert lines[-1]["reason"] == "no ANTHROPIC_API_KEY in environment"
+
+
+async def test_run_case_adapter_terminal_without_reason_falls_back(
+    tmp_path: Path,
+) -> None:
+    """旧 adapter 无 reason 时兜底文案仍可读。"""
+
+    class _BareErrorAdapter:
+        async def run(self, req: RunRequest) -> AsyncIterator[TraceEvent]:
+            from mcc_eval.events import RunStarted
+
+            yield RunStarted(seq=0, run_id=req.run_id, case_id=req.case_id,
+                             task=req.task, model=req.model)
+            yield RunFinished(seq=1, status="error")
+
+    batch_dir = new_batch_dir(tmp_path, "unit", 0, 1)
+    result = await run_case(_case(), _BareErrorAdapter(), model="mock",
+                            batch_dir=batch_dir, timeout_s=5)
+    assert result.status == "error"
+    assert result.reason == "execution terminated as error"
+
+
 # ─── progress.json 实时进度 ──────────────────────────────────────────────
 
 
