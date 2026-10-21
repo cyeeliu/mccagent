@@ -121,3 +121,28 @@
 **修复**：三层贯通——OpenAiClient 流式请求开 `include_usage` 并解析尾 chunk；AgentLoop 每轮流完发射 `LlmUsage` 事件（iteration/tokens/cost）；评测轨迹新增 `llm_usage` 事件（token 统计的权威来源）。顺带修复：工具轮之间 AgentLoop 不发 TurnEnd（其语义是任务结束），`_request_sent` 永不复位导致第二轮起 `llm_request` 静默消失——以 `llm_usage` 为轮边界复位。
 
 **教训**：流式协议里"请求边界事件"与"用量事件"天然不同步——用量只能在响应尾拿到，append-only 轨迹的正确形态是请求时标记 + 流尾补用量事件，而不是试图在请求时机填入未来才可知的值。
+
+
+## SWE-bench run 报 exceeded max_iterations 且 cost/turns 为 0
+
+**现象**：SWE-bench Lite 单 case 跑 984 秒后 error，理由
+`exceeded max_iterations=20`，报告 cost_usd=$0.0000、turns=0——
+与实际跑了 20 轮 LLM 调用完全不符。
+
+**根因**（两层）：
+
+1. 默认 20 轮对真实编码任务太小——「clone 仓库 → 定位 → 修复 →
+   跑测试」完整流程走不完；且该默认与 mcc `BudgetConfig.max_iterations`
+   的 40 不一致（随手定值）。
+2. 统计清零 bug：`_Translator` 的 cost/turns 只在 `TurnEnd` 更新，
+   而超迭代走 AgentError 异常路径**不发 TurnEnd**——20 轮真实消耗
+   被静默丢弃。
+
+**修复**：默认轮数三处统一 40（CLI/RunRequest/run_case，对齐
+BudgetConfig）；`LlmUsage` 事件逐轮累计成本（TurnEnd 正常结束时以
+会话累计值覆盖，超迭代 / 异常中断用累加值兜底）；`run_finished.turns`
+改取 LLM 调用轮数（与轨迹 turn 字段同源，截断时如实报数）。
+
+**教训**：任何「依赖正常结束信号才落账」的统计都有截断清零风险——
+增量记账（每个完成单元落账）才是中断安全的；SWE-bench 类长任务
+记得 `--max-turns 80 --timeout 3600` 起步。

@@ -45,7 +45,7 @@ class RunRequest(BaseModel):
     case_id: str
     task: str
     model: str
-    max_turns: int = 20
+    max_turns: int = 40
     work_dir: str | None = None
 
 
@@ -70,7 +70,7 @@ class _Translator:
         self._seq = Seq()
         self._call = 0  # LLM 调用序号（工具轮 + 文本轮各算一次）
         self._request_sent = False
-        self.turns = 0  # 用户回合数（TurnEnd 计数，单任务恒为 1）
+        self.turns = 0  # TurnEnd 计数（用户回合，单任务恒 1；仅诊断用）
         self.cost_usd = 0.0
         self.error_text: str | None = None
 
@@ -135,10 +135,12 @@ class _Translator:
             # 空产出轮（无文本无工具）此前没有事件触发 llm_request，
             # 在此补发——轮次标记与用量一并可见。
             #
-            # 同时复位轮内标记：一轮 LLM 调用以此结束，下一轮产出
-            # 事件重新触发 llm_request（turn 递增）。工具轮循环中
-            # AgentLoop 不发 TurnEnd（其语义是任务结束），若只靠
-            # TurnEnd 复位，第二轮起 llm_request 会静默消失
+            # 同时累计成本与复位轮内标记：TurnEnd（正常结束）会以
+            # 会话累计值覆盖，但超迭代 / 异常中断不发 TurnEnd——
+            # 没有这行累计，被截断的 run_finished.cost_usd 会静默
+            # 清零；下一轮产出事件重新触发 llm_request（turn 递增），
+            # 工具轮循环中 AgentLoop 不发 TurnEnd，这是唯一的轮边界
+            self.cost_usd += ev.cost_usd
             out = self._llm_request()
             out.append(
                 LlmUsage(
@@ -172,14 +174,16 @@ class _Translator:
         # 执行层只报 error / passed 二态：是否有价值交由评分器判定，
         # 有官方测试或断言配置时以评分结果为准。error 时必须带
         # reason（AgentLoop 的异常文本）——LLM 认证失败 / 网关不可达
-        # 这类第一步就死的 run，原因要直达轨迹与报告
+        # 这类第一步就死的 run，原因要直达轨迹与报告。
+        # turns 取 LLM 调用轮数（与轨迹 turn 字段同源）：TurnEnd 计数
+        # 在超迭代 / 异常中断时不发生，会把跑了 20 轮的 run 报成 0
         status = "error" if self.error_text is not None else "passed"
         return RunFinished(
             seq=self._seq.next(),
             status=status,
             score=None,
             cost_usd=self.cost_usd,
-            turns=self.turns,
+            turns=self._call,
             reason=self.error_text,
         )
 

@@ -312,7 +312,7 @@ async def run_case(
     *,
     model: str,
     batch_dir: Path,
-    max_turns: int = 20,
+    max_turns: int = 40,
     timeout_s: float = 600.0,
     attempt: int = 1,
     progress: ProgressTracker | None = None,
@@ -429,7 +429,7 @@ async def run_batch(
     model: str,
     batch_dir: Path,
     concurrency: int = 2,
-    max_turns: int = 20,
+    max_turns: int = 40,
     timeout_s: float = 600.0,
     runs_per_case: int = 1,
 ) -> BatchResult:

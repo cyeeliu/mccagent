@@ -19,6 +19,10 @@ uv run --package mcc-eval mcc-eval run --cases examples/mock-cases.json \
 uv run --package mcc-eval mcc-eval run --dataset humaneval --limit 5 \
     --runs-per-case 3
 
+# SWE-bench 类真实编码任务：默认 40 轮不够时显式加大轮数与超时
+uv run --package mcc-eval mcc-eval run --dataset swebench-lite --limit 1 \
+    --max-turns 80 --timeout 3600
+
 # 把失败生产会话回流为评测 case 草稿（失败回流是评测集的主力来源）
 uv run --package mcc-eval mcc-eval distill --limit 20
 

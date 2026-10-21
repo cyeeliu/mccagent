@@ -38,7 +38,9 @@ from mcc_eval.runner import new_batch_dir, run_batch
 
 DEFAULT_OUT_ROOT = "eval-runs"
 DEFAULT_CONCURRENCY = 2
-DEFAULT_MAX_TURNS = 20
+# 默认轮数对齐 mcc BudgetConfig.max_iterations（40）：20 轮连
+# 「clone 仓库 → 定位 → 修复 → 跑测试」的完整 SWE-bench 流程都走不完
+DEFAULT_MAX_TURNS = 40
 DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_RUNS_PER_CASE = 1
 

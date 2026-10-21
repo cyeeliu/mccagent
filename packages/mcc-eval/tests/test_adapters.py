@@ -95,6 +95,45 @@ def test_translator_tool_call_args_carry_preview() -> None:
     assert nxt[1].turn == 1
 
 
+def test_translator_max_iterations_keeps_cost_and_turns() -> None:
+    """超迭代中断（无 TurnEnd）时 run_finished 保留真实成本与轮数。
+
+    复现用户实测：SWE-bench case 跑满 20 轮被 exceeded max_iterations
+    截断，此前 cost_usd=0.0 / turns=0——20 轮真实消耗被静默清零。
+    """
+    t = _Translator(_req())
+    # 三轮 LLM 调用各带用量；无任何 TurnEnd（异常中断路径）
+    for i, (inp, out, cost) in enumerate([(900, 80, 0.004), (1500, 300, 0.012),
+                                          (2000, 90, 0.007)]):
+        t.translate(TextDelta(text=f"turn {i}"))
+        t.translate(LlmUsageEvent(
+            iteration=i + 1, input_tokens=inp, output_tokens=out, cost_usd=cost,
+        ))
+    t.translate(ErrorEvent(text="exceeded max_iterations=20"))
+
+    finished = t.run_finished()
+    assert finished.status == "error"
+    assert finished.reason == "exceeded max_iterations=20"
+    assert finished.turns == 3  # 实际 LLM 调用轮数，而非 TurnEnd 计数 0
+    assert finished.cost_usd == pytest.approx(0.023)
+
+
+def test_translator_turn_end_overrides_accumulated_cost() -> None:
+    """正常结束（有 TurnEnd）时以会话累计值覆盖逐轮累加。"""
+    t = _Translator(_req())
+    t.translate(TextDelta(text="hi"))
+    t.translate(LlmUsageEvent(iteration=1, input_tokens=100, output_tokens=20,
+                              cost_usd=0.5))
+    t.translate(LlmUsageEvent(iteration=2, input_tokens=100, output_tokens=20,
+                              cost_usd=0.7))
+    t.translate(TurnEnd(cost_usd=1.2))  # AgentLoop 的会话累计值
+
+    finished = t.run_finished()
+    assert finished.cost_usd == pytest.approx(1.2)
+    assert finished.turns == 2  # LLM 调用轮数
+    assert finished.status == "passed"
+
+
 def test_translator_llm_usage_carries_tokens() -> None:
     """AgentLoop 的 LlmUsage 事件转译为轨迹 llm_usage：token 权威来源。"""
     t = _Translator(_req())
@@ -209,7 +248,7 @@ def test_adapter_uses_request_work_dir(tmp_path: Path) -> None:
 
     finished = events[-1]
     assert isinstance(finished, RunFinished)
-    assert finished.turns == 1  # 单任务单回合；turns 计 TurnEnd 而非 LLM 轮次
+    assert finished.turns == 2  # LLM 调用轮数（工具轮 + 文本轮），与轨迹 turn 同源
     assert finished.status == "passed"
 
 
