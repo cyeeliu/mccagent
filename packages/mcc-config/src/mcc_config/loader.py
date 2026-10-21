@@ -88,6 +88,10 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.model.subagent = project.model.subagent
     if project.model.summarize is not None:
         base.model.summarize = project.model.summarize
+    if project.llm.base_url is not None:
+        base.llm.base_url = project.llm.base_url
+    if project.llm.api_key is not None:
+        base.llm.api_key = project.llm.api_key
 
     return base
 

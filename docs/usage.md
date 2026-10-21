@@ -112,4 +112,4 @@ JSON 数组，每个元素是一轮事件列表，按顺序被 `MockLlm` 消费�
 | `MODEL` | 覆盖所有类型的模型选择 |
 | `MCC_PROJECT` | 工作目录（同 `--cwd`） |
 
-优先级详见 [configuration.md](configuration.md)。项目根目录的 `.env` 会被自动加载（已存在的环境变量不覆盖）。
+优先级详见 [configuration.md](configuration.md)。网关地址与 key 也可写进 settings.json 的 `llm` 段（优先级高于上表环境变量）。项目根目录的 `.env` 会被自动加载（已存在的环境变量不覆盖）。

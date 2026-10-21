@@ -20,6 +20,10 @@
     "subagent": null,
     "summarize": null
   },
+  "llm": {
+    "base_url": null,
+    "api_key": null
+  },
   "permissions": {
     "mode": "default",
     "allow": ["Read(**)", "Bash(git status:*)"],
@@ -57,7 +61,7 @@ CLI 与评测（mcc-eval）调用同一 API，不存在第二份实现：
 from mcc_config import resolve_model, build_llm_provider
 
 model = resolve_model("main", explicit_arg, config=config)   # 解析模型名
-llm = build_llm_provider(base_url=None)                       # 构建 provider
+llm = build_llm_provider(base_url=None, config=config)        # 构建 provider
 ```
 
 **解析优先级**（每类型独立生效）：
@@ -72,12 +76,35 @@ llm = build_llm_provider(base_url=None)                       # 构建 provider
 
 即：`subagent` / `summarize` 未配置（`null`）时一律回落 `main`；设置 `MODEL` 环境变量会同时覆盖三者；`--model` 只覆盖主模型，不影响子代理与摘要。
 
-**provider 构建**（`build_llm_provider`）：显式 `base_url`（CLI
-`--llm-base-url`）或 `MCC_LLM_BASE_URL` 环境变量指向 OpenAI 兼容
-自托管网关（vLLM / SGLang / Ollama 等）时走 OpenAiClient（API key
-缺省占位值——本地网关通常不鉴权）；否则按 `ANTHROPIC_API_KEY` /
-`OPENAI_API_KEY` 自动探测（Anthropic 优先），均缺失时抛
-RuntimeError。
+**provider 构建**（`build_llm_provider`）：`base_url` 与 `api_key`
+各自独立生效，优先级均为：
+
+```
+显式参数（CLI --llm-base-url）
+  > settings.json 的 llm 段（llm.base_url / llm.api_key）
+  > 环境变量（MCC_LLM_BASE_URL / 各厂商 key）
+```
+
+分支语义：
+
+- `base_url` 非空 → OpenAI 兼容网关（vLLM / SGLang / Ollama 等）
+  走 OpenAiClient，api_key 仍缺省时用占位值——本地网关通常不鉴权；
+- 无 `base_url` → 按 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 自动
+  探测厂商（Anthropic 优先）；环境变量全空但 settings 配了
+  `llm.api_key` 时按 Anthropic 构建（mcc 默认模型系列）；
+- 两手皆空 → RuntimeError。
+
+settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本机）：
+
+```json
+{
+  "model": {"main": "qwen2.5-coder-32b"},
+  "llm": {
+    "base_url": "http://vllm.local:8000/v1",
+    "api_key": "sk-your-gateway-key"
+  }
+}
+```
 
 示例——主对话用 Opus、子代理用便宜的 Haiku：
 

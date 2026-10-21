@@ -162,8 +162,9 @@ class MccAdapter:
     """以 mcc AgentLoop 为被测对象：headless 跑单任务并转译轨迹。
 
     llm / registry / work_dir 可注入（测试替身）；缺省惰性构建——
-    provider 经 mcc-config 统一构建（含 MCC_LLM_BASE_URL 自托管
-    网关约定），工作目录由 runner 指定以保证任务之间互不污染。
+    provider 经 mcc-config 统一构建（settings.json llm 段与
+    MCC_LLM_BASE_URL 等环境变量共用一套优先级），工作目录由
+    runner 指定以保证任务之间互不污染。
     """
 
     def __init__(
@@ -177,13 +178,25 @@ class MccAdapter:
         self._llm = llm
         self._registry = registry
 
-    def _build_agent(self, req: RunRequest) -> Any:
-        from mcc_config import PermissionConfig, build_llm_provider
+    async def _build_agent(self, req: RunRequest) -> Any:
+        """构建被测 AgentLoop；llm 未注入时按 mcc-config 统一约定。
+
+        provider 构建读取当前目录的 mcc settings（含 llm 段的
+        base_url / api_key），与 CLI 同一入口同一优先级；配置加载
+        失败不阻断评测（环境变量约定仍可用）。
+        """
+        from mcc_config import PermissionConfig, build_llm_provider, load
         from mcc_core import ToolContext
         from mcc_harness import AgentLoopBuilder, PermissionChecker
         from mcc_tools import default_registry
 
-        llm = self._llm if self._llm is not None else build_llm_provider()
+        llm = self._llm
+        if llm is None:
+            try:
+                config = await load(Path.cwd())
+            except Exception:
+                config = None
+            llm = build_llm_provider(config=config)
 
         if req.work_dir:
             work_dir = Path(req.work_dir)
@@ -210,7 +223,8 @@ class MccAdapter:
 
         async def worker() -> None:
             try:
-                await self._build_agent(req).run_streaming(req.task, queue)
+                agent = await self._build_agent(req)
+                await agent.run_streaming(req.task, queue)
             except Exception as exc:
                 from mcc_core.event import Error as ErrorEvent
 

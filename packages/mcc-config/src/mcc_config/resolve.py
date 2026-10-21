@@ -69,23 +69,48 @@ def build_llm_provider(
     *,
     base_url: str | None = None,
     api_key: str | None = None,
+    config: Config | None = None,
 ) -> Any:
-    """构建 LLM provider，凭证与网关约定全项目唯一。
+    """构建 LLM provider，settings.json 与环境变量共用一套约定。
 
-    - ``base_url`` 显式指定（如 CLI 的 ``--llm-base-url``）或
-      ``MCC_LLM_BASE_URL`` 环境变量指向 OpenAI 兼容自托管网关
-      （vLLM / SGLang / Ollama 等）时走 OpenAiClient，API key
-      缺省用占位值——本地网关通常不鉴权；
-    - 否则按 ``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY`` 自动探测
-      （Anthropic 优先）；都没有时抛 RuntimeError。
+    优先级（base_url 与 api_key 各自独立生效）：
+
+    - ``base_url``：显式参数 > settings.json 的 ``llm.base_url`` >
+      ``MCC_LLM_BASE_URL`` 环境变量
+    - ``api_key``：显式参数 > settings.json 的 ``llm.api_key`` >
+      各厂商环境变量（``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY``）
+
+    分支语义：
+
+    - ``base_url`` 非空 → OpenAI 兼容网关（vLLM / SGLang / Ollama
+      等），api_key 仍缺省时用占位值——本地网关通常不鉴权；
+    - 无 ``base_url`` → 按环境变量自动探测厂商（Anthropic 优先）；
+      环境变量全空但 settings 配了 ``llm.api_key`` 时按 Anthropic
+      构建（mcc 默认模型系列）；
+    - 两手皆空 → RuntimeError。
     """
     from mcc_llm import auto_provider_from_env
+    from mcc_llm.anthropic import AnthropicClient
     from mcc_llm.openai import OpenAiClient
 
-    url = base_url or os.environ.get("MCC_LLM_BASE_URL")
+    url = base_url
+    if url is None and config is not None and config.llm.base_url:
+        url = config.llm.base_url
+    if url is None:
+        url = os.environ.get("MCC_LLM_BASE_URL")
+
+    key = api_key
+    if key is None and config is not None and config.llm.api_key:
+        key = config.llm.api_key
+
     if url:
         return OpenAiClient(
-            api_key=api_key or os.environ.get("OPENAI_API_KEY", "dummy"),
+            api_key=key or os.environ.get("OPENAI_API_KEY", "dummy"),
             base_url=url,
         )
-    return auto_provider_from_env()
+    try:
+        return auto_provider_from_env()
+    except RuntimeError:
+        if key:
+            return AnthropicClient(api_key=key)
+        raise

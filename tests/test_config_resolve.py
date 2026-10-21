@@ -11,7 +11,12 @@ from pathlib import Path
 
 import pytest
 from mcc_config import DEFAULT_MODEL, build_llm_provider, resolve_model
-from mcc_config.models import Config, ModelConfig
+from mcc_config.models import Config, LlmConfig, ModelConfig
+
+
+def _clear_llm_env(monkeypatch) -> None:
+    for key in ("MCC_LLM_BASE_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
 
 
 class _Settings:
@@ -112,3 +117,119 @@ def test_provider_raises_without_any_credentials(monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(RuntimeError):
         build_llm_provider()
+
+
+# ─── settings.json llm 段 ────────────────────────────────────────────────
+
+
+def test_provider_settings_base_url_beats_env(monkeypatch) -> None:
+    """settings.json 的 llm.base_url 优先于 MCC_LLM_BASE_URL。"""
+    monkeypatch.setenv("MCC_LLM_BASE_URL", "http://from-env:8000/v1")
+    config = Config(llm=LlmConfig(base_url="http://from-settings:9000/v1"))
+
+    provider = build_llm_provider(config=config)
+    assert type(provider).__name__ == "OpenAiClient"
+    assert provider._base_url == "http://from-settings:9000/v1"
+
+
+def test_provider_explicit_base_url_beats_settings(monkeypatch) -> None:
+    """显式参数（CLI --llm-base-url）优先于 settings.json。"""
+    config = Config(llm=LlmConfig(base_url="http://from-settings:9000/v1"))
+
+    provider = build_llm_provider(base_url="http://explicit:7000/v1", config=config)
+    assert type(provider).__name__ == "OpenAiClient"
+    assert provider._base_url == "http://explicit:7000/v1"
+
+
+def test_provider_settings_api_key_used_for_gateway(monkeypatch) -> None:
+    """网关场景下 settings 的 api_key 优先于 OPENAI_API_KEY env。"""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    config = Config(llm=LlmConfig(base_url="http://vllm:8000/v1",
+                                  api_key="sk-from-settings"))
+
+    provider = build_llm_provider(config=config)
+    assert type(provider).__name__ == "OpenAiClient"
+    assert provider._api_key == "sk-from-settings"
+
+
+def test_provider_settings_gateway_without_key_uses_placeholder(monkeypatch) -> None:
+    """settings 只配 base_url 时 key 用占位值（本地网关通常不鉴权）。"""
+    _clear_llm_env(monkeypatch)
+    config = Config(llm=LlmConfig(base_url="http://vllm:8000/v1"))
+
+    provider = build_llm_provider(config=config)
+    assert type(provider).__name__ == "OpenAiClient"
+    assert provider._api_key == "dummy"
+
+
+def test_provider_settings_api_key_only_defaults_to_anthropic(monkeypatch) -> None:
+    """settings 只配 api_key（无 base_url、环境变量全空）→ Anthropic。"""
+    _clear_llm_env(monkeypatch)
+    config = Config(llm=LlmConfig(api_key="sk-settings-only"))
+
+    provider = build_llm_provider(config=config)
+    assert type(provider).__name__ == "AnthropicClient"
+    assert provider._api_key == "sk-settings-only"
+
+
+def test_provider_settings_base_url_falls_back_to_env(monkeypatch) -> None:
+    """settings 无 llm 段时维持原环境变量约定。"""
+    monkeypatch.setenv("MCC_LLM_BASE_URL", "http://from-env:8000/v1")
+
+    provider = build_llm_provider(config=Config())
+    assert type(provider).__name__ == "OpenAiClient"
+    assert provider._base_url == "http://from-env:8000/v1"
+
+
+# ─── llm 段合并 ──────────────────────────────────────────────────────────
+
+
+def test_merge_llm_section_project_overrides_home() -> None:
+    """project 的 llm 显式设置覆盖 home；未设置的字段保留 home。"""
+    from mcc_config import merge
+
+    home = Config(llm=LlmConfig(base_url="http://home:8000/v1",
+                                api_key="sk-home"))
+    project = Config(llm=LlmConfig(base_url="http://proj:9000/v1"))
+
+    merged = merge(home, project)
+    assert merged.llm.base_url == "http://proj:9000/v1"
+    assert merged.llm.api_key == "sk-home"
+
+
+def test_settings_json_llm_section_roundtrip(tmp_path, monkeypatch) -> None:
+    """settings.json 的 llm 段解析进 Config（旧格式无此段可继续解析）。"""
+    import asyncio
+
+    from mcc_config import load
+
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    project = tmp_path / "proj"
+    (project / ".mcc").mkdir(parents=True)
+    (project / ".mcc" / "settings.json").write_text(json.dumps({
+        "model": {"main": "test-model"},
+        "llm": {"base_url": "http://gw:8000/v1", "api_key": "sk-json"},
+    }), encoding="utf-8")
+
+    config = asyncio.run(load(project))
+    assert config.llm.base_url == "http://gw:8000/v1"
+    assert config.llm.api_key == "sk-json"
+    assert config.model.main == "test-model"
+
+
+def test_legacy_settings_without_llm_section_parses(tmp_path, monkeypatch) -> None:
+    """旧 settings.json（无 llm 段）继续解析为空 LlmConfig。"""
+    import asyncio
+
+    from mcc_config import load
+
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    project = tmp_path / "proj"
+    (project / ".mcc").mkdir(parents=True)
+    (project / ".mcc" / "settings.json").write_text(
+        json.dumps({"model": {"main": "old"}}), encoding="utf-8"
+    )
+
+    config = asyncio.run(load(project))
+    assert config.llm.base_url is None
+    assert config.llm.api_key is None

@@ -133,12 +133,13 @@ def _build_source(
             turns = [single_text_turn("[mock] No --mock-script provided; echoing.")]
         llm = MockLlm(turns)
     else:
-        # 网关与凭证约定统一在 mcc-config：显式 --llm-base-url /
-        # MCC_LLM_BASE_URL → OpenAI 兼容网关，否则按环境自动探测
+        # 网关与凭证约定统一在 mcc-config：显式 --llm-base-url >
+        # settings.json llm 段 > MCC_LLM_BASE_URL，均未配置时按
+        # 环境自动探测
         from mcc_config import build_llm_provider
 
         try:
-            llm = build_llm_provider(base_url=llm_base_url)
+            llm = build_llm_provider(base_url=llm_base_url, config=config)
         except RuntimeError as e:
             click.echo(f"Error: {e}\nUse --mock for testing without API keys.", err=True)
             sys.exit(2)

@@ -16,6 +16,17 @@ class ModelConfig(BaseModel):
     summarize: str | None = None
 
 
+class LlmConfig(BaseModel):
+    """LLM 网关配置：base_url 指向 OpenAI 兼容网关时连同 api_key 生效。
+
+    settings.json 里持久化网关地址与凭证（本机配置， ~/.mcc 不入库），
+    优先级：显式参数 > settings.json > 环境变量。
+    """
+
+    base_url: str | None = None
+    api_key: str | None = None
+
+
 class PermissionConfig(BaseModel):
     mode: str | None = None
     allow: list[str] = Field(default_factory=list)
@@ -44,6 +55,7 @@ class HooksConfig(BaseModel):
 
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
+    llm: LlmConfig = Field(default_factory=LlmConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
