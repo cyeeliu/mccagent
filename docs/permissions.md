@@ -111,3 +111,45 @@ headless / 子代理上下文中无响应通道，等待超时（默认 120s）�
 - 非 `0` → **deny**（pre-tool 阻止工具执行），stderr 作为拒绝原因回传 Agent
 
 脚本超时（默认 10s）或执行失败视为 allow（附错误消息），钩子故障不阻断主流程。
+
+## 沙箱
+
+权限是**逻辑层**（工具「应该做」什么），沙箱是**物理层**（工具「能做」什么）——即使 prompt injection 骗过模型与权限检查，破坏性操作在沙箱内物理不可达。两层正交：deny 规则永远先行，沙箱在其后兜底。沙箱只作用于 `run_bash`。
+
+### 档位
+
+| mode | 隔离手段 | 禁网 | 说明 |
+|---|---|---|---|
+| `none`（默认） | 无 | — | 行为与历史版本一致 |
+| `restrictions` | rlimit（内存/CPU/进程数/文件大小）+ 环境变量白名单 + umask 077 + HOME 重定向 | ❌ 做不到 | 纯 Python 实现，任何环境可用 |
+| `bubblewrap` | bwrap 命名空间：系统目录只读绑定 + 独立 tmpfs /tmp + `--unshare-net` + `--die-with-parent` | ✅ | 不可用时**报错**而非静默降级 |
+| `auto` | 依次探测 bubblewrap → restrictions | 随档 | 降级在 stderr 提示一次 |
+
+### 配置
+
+```json
+{
+  "sandbox": {
+    "mode": "auto",
+    "network": "off",
+    "max_memory_mb": 512,
+    "max_cpu_secs": 60,
+    "max_processes": 64,
+    "max_file_mb": 64,
+    "env_allow": ["PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL"]
+  }
+}
+```
+
+- 数值为 `0` 表示该项不限制
+- `restrictions` 档下 `HOME` 被重定向到工作目录内 `.sandbox-home/`，环境变量仅白名单可见（API key 等天然不出现在子进程里）
+- `RLIMIT_NPROC` 语义是 per-uid 进程总数：单用户工作站/容器即等价限制本沙箱，共享多用户机器请评估该 uid 既有进程数
+- `env_allow` 同时作用于 restrictions 与 bubblewrap 档
+- project 级配置显式设置过 sandbox（任何字段偏离默认）时整体覆盖 home 级
+
+### 选型建议
+
+- 桌面 / 容器开发机：`auto`（有 bwrap 用 bwrap，没有降 restrictions）
+- CI / 受限容器（无 user namespace 权能）：`restrictions`
+- 需要禁网（数据防泄露）且可装包：`bubblewrap`
+- 更强隔离（gVisor / microVM）属于服务器集群部署层，超出单机 CLI 场景

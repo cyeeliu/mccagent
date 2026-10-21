@@ -17,6 +17,7 @@ from mcc_config.models import (
     Config,
     ModelConfig,
     PermissionConfig,
+    SandboxConfig,
 )
 
 _DEFAULT_CONFIG = Config(
@@ -92,6 +93,10 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.llm.base_url = project.llm.base_url
     if project.llm.api_key is not None:
         base.llm.api_key = project.llm.api_key
+    # 与 budget 同语义：project 显式配置过沙箱（任何字段偏离默认）
+    # 时整体覆盖，避免逐字段拼接出语义含混的组合
+    if project.sandbox != SandboxConfig():
+        base.sandbox = project.sandbox
 
     return base
 

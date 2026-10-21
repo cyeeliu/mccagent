@@ -146,3 +146,15 @@ BudgetConfig）；`LlmUsage` 事件逐轮累计成本（TurnEnd 正常结束时�
 **教训**：任何「依赖正常结束信号才落账」的统计都有截断清零风险——
 增量记账（每个完成单元落账）才是中断安全的；SWE-bench 类长任务
 记得 `--max-turns 80 --timeout 3600` 起步。
+
+## bwrap 在容器环境不可用，auto 档降级
+
+**现象**：`sandbox.mode=auto` 时 stderr 提示「bwrap 不可用，降级为
+restrictions」；显式 `bubblewrap` 档直接报错。
+
+**根因**：bwrap 依赖 unprivileged user namespace。多数托管容器
+（含本开发沙箱）禁用了该权能——`which bwrap` 能找到二进制也起不了
+沙箱，因此探测必须真跑一次最小绑定而非只查存在性。
+
+**处置**：容器/CI 内用 `restrictions` 档（资源限制可用，但不隔离
+网络）；宿主机安装 bubblewrap 后 `auto` 会自动升级到命名空间隔离。

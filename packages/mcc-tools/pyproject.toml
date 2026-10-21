@@ -6,9 +6,13 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "mcc-core",
+    "mcc-config",
     "pydantic>=2.9",
     "pathspec>=0.12",
 ]
+
+[tool.uv.sources]
+mcc-config = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

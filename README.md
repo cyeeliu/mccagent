@@ -7,6 +7,7 @@
 - **交互式 TUI** — 流式渲染、工具进度、成本面板、交互式权限确认（允许 / 总是允许 / 拒绝 / 附反馈拒绝）
 - **10 个内建工具** — 读 / 写 / 编辑 / bash / grep / glob / 目录浏览 / 记忆读写 / 子代理派生
 - **权限系统** — deny 优先的规则门控，bash 命令按词边界匹配前缀，支持交互确认与运行时放行
+- **命令沙箱** — run_bash 物理隔离四档：rlimit 资源限制 / bwrap 命名空间禁网 / auto 探测降级
 - **Hooks** — pre/post-tool 外部脚本钩子，可阻止工具执行或改写输入输出
 - **会话持久化** — JSONL 逐轮快照落盘，`resume` 恢复上下文继续对话，自动生成会话标题
 - **长期记忆** — Markdown 记忆库 + 记忆索引注入 system prompt
@@ -117,7 +118,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [CLI 用法](docs/usage.md) | 全命令详解、TUI 按键、mock 脚本格式 |
 | [配置](docs/configuration.md) | settings.json、多类型模型解析、环境变量 |
 | [工具系统](docs/tools.md) | 10 个内建工具的输入输出契约 |
-| [权限与 Hooks](docs/permissions.md) | 规则语法、决策顺序、外部脚本钩子 |
+| [权限与 Hooks](docs/permissions.md) | 规则语法、决策顺序、外部脚本钩子、命令沙箱 |
 | [会话与记忆](docs/sessions.md) | JSONL 快照、resume、Markdown 记忆库 |
 | [子代理](docs/subagents.md) | 预设角色、并发护栏、fan-out 用法 |
 | [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |

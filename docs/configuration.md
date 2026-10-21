@@ -24,6 +24,15 @@
     "base_url": null,
     "api_key": null
   },
+  "sandbox": {
+    "mode": "none",
+    "network": "off",
+    "max_memory_mb": 512,
+    "max_cpu_secs": 60,
+    "max_processes": 64,
+    "max_file_mb": 64,
+    "env_allow": ["PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL"]
+  },
   "permissions": {
     "mode": "default",
     "allow": ["Read(**)", "Bash(git status:*)"],

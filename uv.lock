@@ -276,6 +276,7 @@ name = "mcc-tools"
 version = "0.1.0"
 source = { editable = "packages/mcc-tools" }
 dependencies = [
+    { name = "mcc-config" },
     { name = "mcc-core" },
     { name = "pathspec" },
     { name = "pydantic" },
@@ -283,6 +284,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "mcc-config", editable = "packages/mcc-config" },
     { name = "mcc-core", editable = "packages/mcc-core" },
     { name = "pathspec", specifier = ">=0.12" },
     { name = "pydantic", specifier = ">=2.9" },

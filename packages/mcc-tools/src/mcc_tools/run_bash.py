@@ -1,19 +1,30 @@
-"""run_bash 工具：执行 shell 命令，捕获 stdout/stderr，支持超时。"""
+"""run_bash 工具：执行 shell 命令，捕获 stdout/stderr，支持超时。
+
+命令的实际隔离由注入的 SandboxExecutor 决定（默认 DirectExecutor，
+行为与历史版本一致）；沙箱配置见 settings.json 的 sandbox 段。
+"""
 
 from __future__ import annotations
 
-import asyncio
+from pathlib import Path
 from typing import Any
 
 from mcc_core import ToolContext, ToolOutput
 
 from ._common import cap_str
+from .sandbox import DirectExecutor, ExecResult, ExecTimeout, SandboxExecutor
 
 _CAP = 32 * 1024
 
 
 class RunBashTool:
-    """在会话工作目录执行 shell 命令，带超时隔离与输出截断。"""
+    """在会话工作目录执行 shell 命令，带超时隔离与输出截断。
+
+    executor 可注入（沙箱档位）；缺省直跑不隔离。
+    """
+
+    def __init__(self, executor: SandboxExecutor | None = None) -> None:
+        self._executor = executor or DirectExecutor()
 
     @property
     def name(self) -> str:
@@ -53,26 +64,18 @@ class RunBashTool:
         timeout = input.get("timeout_secs", 30)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "bash",
-                "-c",
-                command,
-                cwd=str(ctx.cwd),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            result = await self._executor.run(
+                command, Path(str(ctx.cwd)), float(timeout)
             )
-        except OSError as e:
-            return ToolOutput.err(f"spawn bash: {e}")
-
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
+        except ExecTimeout:
             return ToolOutput.err(f"command timed out after {timeout}s: {command}")
 
-        stdout_str = cap_str(stdout.decode("utf-8", errors="replace"), _CAP)
-        stderr_str = cap_str(stderr.decode("utf-8", errors="replace"), _CAP)
+        return self._format(result)
+
+    @staticmethod
+    def _format(result: ExecResult) -> ToolOutput:
+        stdout_str = cap_str(result.stdout.decode("utf-8", errors="replace"), _CAP)
+        stderr_str = cap_str(result.stderr.decode("utf-8", errors="replace"), _CAP)
 
         body = ""
         if stdout_str:
@@ -85,6 +88,6 @@ class RunBashTool:
         if not body:
             body = "(no output)"
 
-        if proc.returncode == 0:
+        if result.returncode == 0:
             return ToolOutput.ok(body)
-        return ToolOutput.err(f"exit {proc.returncode}\n{body}")
+        return ToolOutput.err(f"exit {result.returncode}\n{body}")

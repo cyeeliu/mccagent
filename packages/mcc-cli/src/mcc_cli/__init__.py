@@ -107,12 +107,16 @@ def _build_source(
         default_presets,
     )
     from mcc_session import MarkdownMemoryStore, SessionRecorder, memory_tools
-    from mcc_tools import default_registry
+    from mcc_tools import RunBashTool, default_registry
+    from mcc_tools.sandbox import build_executor
 
     config = ensure_default_config(work_dir)
     sid = session_id or uuid.uuid4().hex[:8]
     ctx = ToolContext(cwd=work_dir, session_id=sid)
     registry = default_registry()
+    # 沙箱按配置生效（默认 none 即直跑，行为不变）；显式 bubblewrap
+    # 不可用时在此报错退出，而不是静默降级
+    registry.register(RunBashTool(build_executor(config.sandbox)))
 
     system = _system_prompt()
     store = MarkdownMemoryStore()
