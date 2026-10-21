@@ -158,3 +158,18 @@ restrictions」；显式 `bubblewrap` 档直接报错。
 
 **处置**：容器/CI 内用 `restrictions` 档（资源限制可用，但不隔离
 网络）；宿主机安装 bubblewrap 后 `auto` 会自动升级到命名空间隔离。
+
+
+## 长会话 prompt_too_long / context_length_exceeded
+
+**现象**：长任务中途 API 拒绝请求，错误含 `prompt_too_long`（Anthropic）
+或 `context_length_exceeded`（OpenAI 兼容网关）。
+
+**处置**：mcc 默认启用四步上下文压缩（见
+[context-compaction.md](context-compaction.md)）——字符估算超限即逐级
+压缩；API 拒绝后还有一次 reactive 补救。若被 `--no-compact` /
+`auto_compact: false` 显式禁用，重新启用即可。字符估算与真实 token 有
+偏差，临界任务可下调 `context.char_limit` 留出余量。
+
+**注意**：转存目录 `.task_outputs/` 与会话工作目录绑定，删除工作目录
+即清理转存产物；resume 依赖会话 JSONL，无需额外文件。

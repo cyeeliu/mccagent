@@ -21,6 +21,7 @@ from mcc_tools import (
 from mcc_tools._common import cap_str, resolve
 
 EXPECTED_TOOL_NAMES = [
+    "compact",
     "edit_file",
     "glob",
     "grep",

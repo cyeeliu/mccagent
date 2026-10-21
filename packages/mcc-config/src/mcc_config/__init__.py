@@ -9,6 +9,7 @@ from mcc_config.loader import ensure_default_config, load, merge
 from mcc_config.models import (
     BudgetConfig,
     Config,
+    ContextConfig,
     HookEntry,
     HooksConfig,
     LlmConfig,
@@ -28,6 +29,7 @@ __all__ = [
     "DEFAULT_MODEL",
     "BudgetConfig",
     "Config",
+    "ContextConfig",
     "HookEntry",
     "HooksConfig",
     "LlmConfig",

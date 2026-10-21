@@ -8,6 +8,7 @@
 - **10 个内建工具** — 读 / 写 / 编辑 / bash / grep / glob / 目录浏览 / 记忆读写 / 子代理派生
 - **权限系统** — deny 优先的规则门控，bash 命令按词边界匹配前缀，支持交互确认与运行时放行
 - **命令沙箱** — run_bash 默认物理隔离：rlimit 防失控，env 白名单与 bwrap 命名空间档备选；评测侧恒定环境清洗防污染
+- **上下文压缩** — 四步管线：大结果转存 → 历史归档 → 旧结果替换 → 模型摘要（最后手段）；API 拒绝后 reactive 补救
 - **Hooks** — pre/post-tool 外部脚本钩子，可阻止工具执行或改写输入输出
 - **会话持久化** — JSONL 逐轮快照落盘，`resume` 恢复上下文继续对话，自动生成会话标题
 - **长期记忆** — Markdown 记忆库 + 记忆索引注入 system prompt
@@ -120,6 +121,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [工具系统](docs/tools.md) | 10 个内建工具的输入输出契约 |
 | [权限与 Hooks](docs/permissions.md) | 规则语法、决策顺序、外部脚本钩子、命令沙箱 |
 | [会话与记忆](docs/sessions.md) | JSONL 快照、resume、Markdown 记忆库 |
+| [上下文压缩](docs/context-compaction.md) | 四步管线、compact 工具、reactive 补救 |
 | [子代理](docs/subagents.md) | 预设角色、并发护栏、fan-out 用法 |
 | [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
 | [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |

@@ -13,6 +13,7 @@ from mcc_harness.agent import (
     permission_request_for,
     price_usd,
 )
+from mcc_harness.compactor import CompactionReport, ContextCompactor
 from mcc_harness.hooks import (
     Hook,
     HookContext,
@@ -47,6 +48,8 @@ __all__ = [
     "Action",
     "AgentLoop",
     "AgentLoopBuilder",
+    "CompactionReport",
+    "ContextCompactor",
     "AgentRun",
     "Allow",
     "Ask",

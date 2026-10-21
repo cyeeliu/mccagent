@@ -15,6 +15,7 @@ from pathlib import Path
 from mcc_config.models import (
     BudgetConfig,
     Config,
+    ContextConfig,
     ModelConfig,
     PermissionConfig,
     SandboxConfig,
@@ -97,6 +98,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
     # 时整体覆盖，避免逐字段拼接出语义含混的组合
     if project.sandbox != SandboxConfig():
         base.sandbox = project.sandbox
+    if project.context != ContextConfig():
+        base.context = project.context
 
     return base
 

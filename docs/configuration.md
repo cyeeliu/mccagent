@@ -24,6 +24,14 @@
     "base_url": null,
     "api_key": null
   },
+  "context": {
+    "auto_compact": true,
+    "char_limit": 120000,
+    "keep_head": 3,
+    "keep_tail": 46,
+    "keep_recent_results": 3,
+    "large_result_chars": 30000
+  },
   "sandbox": {
     "mode": "auto",
     "network": "on",

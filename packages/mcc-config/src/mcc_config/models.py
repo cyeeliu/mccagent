@@ -73,6 +73,21 @@ class SandboxConfig(BaseModel):
     )
 
 
+class ContextConfig(BaseModel):
+    """上下文压缩配置（四步管线，见 harness 的 compactor 模块）。
+
+    ``auto_compact`` 关闭时完全不注入压缩器（行为与历史版本一致）；
+    ``char_limit`` 及以下阈值与压缩模块常量同源默认。
+    """
+
+    auto_compact: bool = True
+    char_limit: int = 120_000
+    keep_head: int = 3
+    keep_tail: int = 46
+    keep_recent_results: int = 3
+    large_result_chars: int = 30_000
+
+
 class PermissionConfig(BaseModel):
     mode: str | None = None
     allow: list[str] = Field(default_factory=list)
@@ -104,6 +119,7 @@ class Config(BaseModel):
     llm: LlmConfig = Field(default_factory=LlmConfig)
     permissions: PermissionConfig = Field(default_factory=PermissionConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    context: ContextConfig = Field(default_factory=ContextConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)

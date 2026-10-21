@@ -89,6 +89,7 @@ def _build_source(
     mock_script: str | None,
     history: list | None = None,
     session_id: str | None = None,
+    no_compact: bool = False,
     llm_base_url: str | None = None,
 ) -> EventSource:
     """构建事件源：mock 模式用 MockLlm，否则用真实 LLM。
@@ -166,6 +167,16 @@ def _build_source(
 
     recorder = SessionRecorder.open_sync(sid, work_dir)
     builder = AgentLoopBuilder(llm, registry, ctx).system(system).recorder(recorder)
+
+    if config.context.auto_compact and not no_compact:
+        # 四步压缩管线：转存 → 归档 → 旧结果替换 → 模型摘要（最后手段）。
+        # 转存目录在会话工作目录内，随产物自包含
+        from mcc_harness import ContextCompactor
+
+        builder = builder.compactor(ContextCompactor(
+            persist_dir=work_dir / ".task_outputs" / "tool-results",
+            char_limit=config.context.char_limit,
+        ))
 
     builder = builder.model(resolve_model("main", model, config=config))
     builder = builder.summarize_model(summarize_model)
@@ -440,6 +451,7 @@ def _run_resume_cmd(
     mock: bool,
     mock_script: str | None,
     llm_base_url: str | None = None,
+    no_compact: bool = False,
 ) -> None:
     """resume 子命令：加载历史会话并继续对话。"""
     from mcc_session import SessionNotFoundError, load_session
@@ -471,6 +483,7 @@ def _run_resume_cmd(
         history=history,
         session_id=meta.id,
         llm_base_url=llm_base_url,
+        no_compact=no_compact,
     )
     replay = _history_events(history, cost_usd=meta.cost_usd)
     sys.exit(
@@ -489,6 +502,12 @@ def _run_resume_cmd(
     "mock_script",
     default=None,
     help="MockLlm 脚本 JSON 文件路径",
+)
+@click.option(
+    "--no-compact",
+    "no_compact",
+    is_flag=True,
+    help="禁用上下文自动压缩（长会话可能因上下文超限失败）",
 )
 @click.option(
     "--llm-base-url",
@@ -521,6 +540,7 @@ def main(
     mock: bool,
     mock_script: str | None,
     llm_base_url: str | None,
+    no_compact: bool,
     older_than: str | None,
     args: tuple[str, ...],
 ) -> None:
@@ -554,7 +574,8 @@ def main(
         return
 
     if cmd == "resume":
-        _run_resume_cmd(args, work_dir, model, mock, mock_script, llm_base_url)
+        _run_resume_cmd(args, work_dir, model, mock, mock_script, llm_base_url,
+                         no_compact)
         return
 
     has_llm = bool(
@@ -564,7 +585,8 @@ def main(
     )
 
     if has_llm:
-        source = _build_source(work_dir, model, mock, mock_script, llm_base_url=llm_base_url)
+        source = _build_source(work_dir, model, mock, mock_script,
+                               llm_base_url=llm_base_url, no_compact=no_compact)
     elif prompt is not None:
         _print_onboarding()
         sys.exit(2)

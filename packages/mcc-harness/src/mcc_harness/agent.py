@@ -51,6 +51,12 @@ from mcc_session import (
 )
 from mcc_tools import ToolRegistry
 
+from mcc_harness.compactor import (
+    CompactionReport,
+    ContextCompactor,
+    is_too_long_error,
+)
+
 from .hooks import HookContext, HookRegistry, HookType
 from .permission import (
     Allow,
@@ -158,6 +164,7 @@ class AgentLoop:
         recorder: SessionRecorder | None = None,
         history: list[Message] | None = None,
         summarize_model: str | None = None,
+        compactor: ContextCompactor | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -174,7 +181,28 @@ class AgentLoop:
         self.permission_timeout_secs = permission_timeout_secs
         self.recorder = recorder
         self.summarize_model = summarize_model
+        self.compactor = compactor
         self.history: list[Message] = list(history) if history else []
+        if self.compactor is not None:
+            # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
+            # 与 LLM 解耦（纯消息操作可独立测试）
+            self.compactor.attach_summarize(self._summarize_history)
+
+    async def _summarize_history(
+        self, system: str, messages: list[Message]
+    ) -> str:
+        """压缩管线的模型摘要步骤：非流式调用，取纯文本。"""
+        req = CompleteRequest(
+            model=self.summarize_model or self.model,
+            max_tokens=1024,
+            messages=list(messages),
+            system=system,
+        )
+        resp = await self.llm.complete(req)
+        text = "\n".join(
+            b.text for b in resp.content if isinstance(b, TextBlock)
+        )
+        return text.strip() or "(empty summary)"
 
     async def run_streaming(
         self, user_input: str, tx: asyncio.Queue[AgentEvent]
@@ -217,19 +245,47 @@ class AgentLoop:
                         if hr.message:
                             await tx.put(Notice(text=hr.message))
 
-                request_snapshot = list(messages)
-                req = CompleteRequest(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    messages=request_snapshot,
-                    system=self.system or None,
-                    temperature=self.temperature,
-                    tools=self.registry.as_api_schema(),
-                )
+                # 每轮调用模型前过压缩管线；API 拒绝超限时做一次性
+                # reactive 补救（内层循环重试，不占迭代预算）
+                reactive_used = False
+                while True:
+                    if self.compactor is not None:
+                        messages, report = await self.compactor.prepare(
+                            messages, user_input
+                        )
+                        if report.notable:
+                            await tx.put(Notice(text=report.describe()))
+                    request_snapshot = list(messages)
+                    req = CompleteRequest(
+                        model=self.model,
+                        max_tokens=self.max_tokens,
+                        messages=request_snapshot,
+                        system=self.system or None,
+                        temperature=self.temperature,
+                        tools=self.registry.as_api_schema(),
+                    )
 
-                blocks, stop_reason, turn_usage = await self._call_with_retry(
-                    req, tx
-                )
+                    try:
+                        blocks, stop_reason, turn_usage = (
+                            await self._call_with_retry(req, tx)
+                        )
+                        break
+                    except Exception as e:
+                        if (self.compactor is not None
+                                and not reactive_used
+                                and is_too_long_error(str(e))):
+                            messages = await self.compactor.reactive_compact(
+                                messages, user_input
+                            )
+                            reactive_used = True
+                            await tx.put(
+                                Notice(
+                                    text="[reactive compact] context rejected "
+                                    "by API; compacted and retrying once"
+                                )
+                            )
+                            continue
+                        raise
                 turn_cost = price_usd(self.model, turn_usage)
                 total_cost += turn_cost
                 total_usage = total_usage + turn_usage
@@ -297,6 +353,23 @@ class AgentLoop:
                         turn_usage,
                         turn_cost,
                     )
+                    # 模型主动请求压缩：本批工具结果已闭合（记录完整、
+                    # 无孤立结果）再摘要——顺序不对会让模型重复副作用
+                    if self.compactor is not None and any(
+                        isinstance(b, ToolUseBlock) and b.name == "compact"
+                        for b in blocks
+                    ):
+                        report = CompactionReport()
+                        messages = await self.compactor.compact_history(
+                            messages, user_input, report
+                        )
+                        if report.summarized:
+                            await tx.put(
+                                Notice(
+                                    text="context compacted: history summarized "
+                                    "(model-requested)"
+                                )
+                            )
                 else:
                     if self.hooks:
                         ctx = HookContext(
@@ -595,6 +668,7 @@ class AgentLoopBuilder:
         self._recorder: SessionRecorder | None = None
         self._history: list[Message] | None = None
         self._summarize_model: str | None = None
+        self._compactor: ContextCompactor | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -626,6 +700,11 @@ class AgentLoopBuilder:
 
     def hooks(self, h: HookRegistry) -> AgentLoopBuilder:
         self._hooks = h
+        return self
+
+    def compactor(self, c: ContextCompactor) -> AgentLoopBuilder:
+        """注入上下文压缩器（不注入则完全不压缩，行为与历史一致）。"""
+        self._compactor = c
         return self
 
     def permission_responses(
@@ -668,4 +747,5 @@ class AgentLoopBuilder:
             recorder=self._recorder,
             history=self._history,
             summarize_model=self._summarize_model,
+            compactor=self._compactor,
         )

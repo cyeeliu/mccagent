@@ -9,6 +9,7 @@ from typing import Any
 
 from mcc_core import Tool
 
+from .compact import CompactTool
 from .edit_file import EditFileTool
 from .glob_tool import GlobTool
 from .grep import GrepTool
@@ -64,12 +65,14 @@ def default_registry() -> ToolRegistry:
     r.register(WriteFileTool())
     r.register(EditFileTool())
     r.register(RunBashTool())
+    r.register(CompactTool())
     r.register(GrepTool())
     r.register(GlobTool())
     return r
 
 
 __all__ = [
+    "CompactTool",
     "EditFileTool",
     "GlobTool",
     "GrepTool",
