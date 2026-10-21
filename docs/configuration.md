@@ -25,12 +25,14 @@
     "api_key": null
   },
   "sandbox": {
-    "mode": "none",
-    "network": "off",
-    "max_memory_mb": 512,
-    "max_cpu_secs": 60,
-    "max_processes": 64,
-    "max_file_mb": 64,
+    "mode": "auto",
+    "network": "on",
+    "env_policy": "inherit",
+    "redirect_home": false,
+    "max_memory_mb": 2048,
+    "max_cpu_secs": 600,
+    "max_processes": 128,
+    "max_file_mb": 1024,
     "env_allow": ["PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL"]
   },
   "permissions": {

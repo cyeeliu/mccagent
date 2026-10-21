@@ -116,14 +116,23 @@ headless / 子代理上下文中无响应通道，等待超时（默认 120s）�
 
 权限是**逻辑层**（工具「应该做」什么），沙箱是**物理层**（工具「能做」什么）——即使 prompt injection 骗过模型与权限检查，破坏性操作在沙箱内物理不可达。两层正交：deny 规则永远先行，沙箱在其后兜底。沙箱只作用于 `run_bash`。
 
+**默认开启**（`mode: auto`）：无 bwrap 环境降级为资源限制档并在 stderr 提示一次；限额默认按「防失控不挡正常」校准（内存 2GB / CPU 600s / 进程 128 / 单文件 1GB），编译类任务不受影响。完全关闭需显式 `mode: none`。
+
 ### 档位
 
 | mode | 隔离手段 | 禁网 | 说明 |
 |---|---|---|---|
-| `none`（默认） | 无 | — | 行为与历史版本一致 |
-| `restrictions` | rlimit（内存/CPU/进程数/文件大小）+ 环境变量白名单 + umask 077 + HOME 重定向 | ❌ 做不到 | 纯 Python 实现，任何环境可用 |
-| `bubblewrap` | bwrap 命名空间：系统目录只读绑定 + 独立 tmpfs /tmp + `--unshare-net` + `--die-with-parent` | ✅ | 不可用时**报错**而非静默降级 |
-| `auto` | 依次探测 bubblewrap → restrictions | 随档 | 降级在 stderr 提示一次 |
+| `none` | 无 | — | 完全关闭（显式声明） |
+| `restrictions` | rlimit + 环境策略（见下） | ❌ 做不到 | 纯 Python 实现，任何环境可用 |
+| `bubblewrap` | bwrap 命名空间：系统目录只读绑定 + 独立 tmpfs /tmp + 按需 `--unshare-net` + `--die-with-parent` | `network: off` 时 | 恒定环境清洗 + HOME 重定向（真实 HOME 在沙箱内不可见）；不可用时**报错**而非静默降级 |
+| `auto`（默认） | 探测 bubblewrap → restrictions | 随档 | 降级在 stderr 提示一次 |
+
+### 环境策略 env_policy
+
+| 策略 | 子进程环境 | 适用 |
+|---|---|---|
+| `inherit`（默认） | 完整继承（PATH / HOME / 工具链变量原样），仅 rlimit 防失控 | harness 日常——Agent 能用项目 venv、cargo 等用户工具链 |
+| `allowlist` | 白名单变量；PATH 重置系统默认（不继承 harness venv）；umask 077；`redirect_home` 时 HOME 落工作目录内 | 评测与高隔离——防被测 Agent 污染 harness 环境 |
 
 ### 配置
 
@@ -131,25 +140,30 @@ headless / 子代理上下文中无响应通道，等待超时（默认 120s）�
 {
   "sandbox": {
     "mode": "auto",
-    "network": "off",
-    "max_memory_mb": 512,
-    "max_cpu_secs": 60,
-    "max_processes": 64,
-    "max_file_mb": 64,
+    "network": "on",
+    "env_policy": "inherit",
+    "redirect_home": false,
+    "max_memory_mb": 2048,
+    "max_cpu_secs": 600,
+    "max_processes": 128,
+    "max_file_mb": 1024,
     "env_allow": ["PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL"]
   }
 }
 ```
 
 - 数值为 `0` 表示该项不限制
-- `restrictions` 档下 `HOME` 被重定向到工作目录内 `.sandbox-home/`，环境变量仅白名单可见（API key 等天然不出现在子进程里）
+- `network` 默认 `on`（clone / pip 是 harness 刚需）；防数据泄露场景显式 `off`
+- `env_allow` 仅在 `env_policy: allowlist` 与 bubblewrap 档生效
 - `RLIMIT_NPROC` 语义是 per-uid 进程总数：单用户工作站/容器即等价限制本沙箱，共享多用户机器请评估该 uid 既有进程数
-- `env_allow` 同时作用于 restrictions 与 bubblewrap 档
 - project 级配置显式设置过 sandbox（任何字段偏离默认）时整体覆盖 home 级
+
+评测（mcc-eval）固定注入「零限额 + allowlist + HOME 重定向」清洗档：被测 Agent 的 shell 不继承 harness 的 venv 与环境变量，其 `pip install` 落在 case 工作目录内；资源不限（评测衡量 Agent 能力，失控防护由 runner 超时兜底）。
 
 ### 选型建议
 
-- 桌面 / 容器开发机：`auto`（有 bwrap 用 bwrap，没有降 restrictions）
-- CI / 受限容器（无 user namespace 权能）：`restrictions`
-- 需要禁网（数据防泄露）且可装包：`bubblewrap`
+- 默认（auto + inherit + network on）：日常开发——rlimit 防失控，工具链无感
+- 要禁网防泄露：`network: off`（bwrap 可用时生效）
+- 强隔离（不受信任务）：`env_policy: allowlist` + `redirect_home: true`
+- CI / 受限容器（无 user namespace 权能）：显式 `restrictions` 免去每次探测
 - 更强隔离（gVisor / microVM）属于服务器集群部署层，超出单机 CLI 场景

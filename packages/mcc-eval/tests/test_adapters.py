@@ -294,3 +294,37 @@ def test_mock_adapter_emits_full_pipeline() -> None:
     assert any("PASSED" in e.delta for e in events if isinstance(e, LlmChunk))
     seqs = [e.seq for e in events]
     assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+
+
+def test_mcc_adapter_bash_env_is_sanitized(tmp_path: Path) -> None:
+    """被测 Agent 的 bash 环境已清洗：无 harness venv PATH、HOME 重定向。
+
+    真实事故：Agent 继承 harness 的 venv PATH 后 `python -m pip`
+    把 numpy 装进 harness 环境。清洗后 Agent 的 python 是系统
+    解释器，HOME 写入也落在 case 工作目录内。
+    """
+    import json as _json
+
+    from mcc_core import Usage
+    from mcc_llm import MessageStop, ToolUseInputDelta, ToolUseStart
+    from mcc_llm.mock import MockLlm
+
+    probe = _json.dumps({
+        "command": "which python 2>/dev/null; echo HOME=$HOME; "
+                   "echo VENV=$VIRTUAL_ENV"
+    })
+    turn = [
+        ToolUseStart(id="probe", name="run_bash"),
+        ToolUseInputDelta(partial_json=probe),
+        MessageStop(stop_reason="tool_use",
+                    usage=Usage(input_tokens=10, output_tokens=5)),
+    ]
+    adapter = MccAdapter(llm=MockLlm([turn, single_text_turn("done")]))
+    events = _drain(adapter, _req(work_dir=str(tmp_path)))
+
+    results = [e for e in events if isinstance(e, ToolResult)]
+    assert results, "工具结果未产生"
+    out = results[0].output
+    assert ".venv" not in out          # harness venv PATH 不泄漏
+    assert "VENV=" in out              # 环境变量被白名单剥离后为空
+    assert str(tmp_path / ".sandbox-home") in out  # HOME 重定向生效

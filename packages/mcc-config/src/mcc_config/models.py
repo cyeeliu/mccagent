@@ -39,19 +39,33 @@ class SandboxConfig(BaseModel):
       进程数 / 文件大小）+ 环境变量白名单 + umask + HOME 重定向；
       无法限制网络（如实标注）
     - ``bubblewrap``：bwrap 命名空间隔离（文件系统只读绑定 +
-      独立 /tmp + 禁网）；不可用时显式报错而非静默降级
-    - ``auto``：依次探测 bubblewrap → restrictions，自动降级并
-      在 stderr 提示一次
+      独立 /tmp + 按需禁网）；不可用时显式报错而非静默降级。
+      该档恒定做环境清洗与 HOME 重定向（真实 HOME 在沙箱内
+      不可见，必须重定向）
+    - ``auto``（默认）：依次探测 bubblewrap → restrictions，
+      自动降级并在 stderr 提示一次
 
-    值为 0 表示该项不限制。
+    环境策略 ``env_policy``：
+
+    - ``inherit``（默认）：子进程继承完整环境（PATH / HOME /
+      工具链变量原样）——harness 日常档，Agent 能正常使用项目
+      venv、cargo 等用户工具链；隔离只剩 rlimit 防失控
+    - ``allowlist``：仅白名单变量传入，PATH 重置为系统默认
+      （不继承 harness 自身的 venv），HOME 可重定向，umask 077
+      ——评测与高隔离档，防止被测 Agent 污染 harness 环境
+
+    限额默认值按「防失控不挡正常」校准（编译类任务需要大内存与
+    长时间 CPU）。值为 0 表示该项不限制。
     """
 
-    mode: Literal["none", "restrictions", "bubblewrap", "auto"] = "none"
-    network: Literal["off", "on"] = "off"
-    max_memory_mb: int = 512
-    max_cpu_secs: int = 60
-    max_processes: int = 64
-    max_file_mb: int = 64
+    mode: Literal["none", "restrictions", "bubblewrap", "auto"] = "auto"
+    network: Literal["off", "on"] = "on"
+    env_policy: Literal["inherit", "allowlist"] = "inherit"
+    redirect_home: bool = False
+    max_memory_mb: int = 2048
+    max_cpu_secs: int = 600
+    max_processes: int = 128
+    max_file_mb: int = 1024
     env_allow: list[str] = Field(
         default_factory=lambda: [
             "PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL",

@@ -214,11 +214,23 @@ class MccAdapter:
         provider 构建读取当前目录的 mcc settings（含 llm 段的
         base_url / api_key），与 CLI 同一入口同一优先级；配置加载
         失败不阻断评测（环境变量约定仍可用）。
+
+        bash 注入环境清洗沙箱：被测 Agent 的 shell 不继承 harness
+        自身的 venv PATH / 环境变量（否则 Agent 的 pip install 会
+        污染 harness 环境，`which python` 也指向 harness venv），
+        HOME 重定向到 case 工作目录。rlimit 全 0——评测衡量 Agent
+        能力不做资源管制，失控防护由 runner 的 timeout 兜底。
         """
-        from mcc_config import PermissionConfig, build_llm_provider, load
+        from mcc_config import (
+            PermissionConfig,
+            SandboxConfig,
+            build_llm_provider,
+            load,
+        )
         from mcc_core import ToolContext
         from mcc_harness import AgentLoopBuilder, PermissionChecker
-        from mcc_tools import default_registry
+        from mcc_tools import RunBashTool, default_registry
+        from mcc_tools.sandbox import build_executor
 
         llm = self._llm
         if llm is None:
@@ -235,9 +247,25 @@ class MccAdapter:
         else:
             work_dir = Path(tempfile.mkdtemp(prefix="eval-mcc-"))
         ctx = ToolContext(cwd=work_dir, session_id=req.run_id)
+        registry = self._registry or default_registry()
+        registry.register(
+            RunBashTool(
+                build_executor(
+                    SandboxConfig(
+                        mode="restrictions",
+                        max_memory_mb=0,
+                        max_cpu_secs=0,
+                        max_processes=0,
+                        max_file_mb=0,
+                        env_policy="allowlist",
+                        redirect_home=True,
+                    )
+                )
+            )
+        )
         checker = PermissionChecker(PermissionConfig(mode="bypassPermissions"))
         return (
-            AgentLoopBuilder(llm, self._registry or default_registry(), ctx)
+            AgentLoopBuilder(llm, registry, ctx)
             .model(req.model)
             .permission(checker)
             .max_iterations(req.max_turns)

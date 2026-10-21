@@ -55,15 +55,17 @@ def test_resolve_model_priority(explicit, env_model, configured, expected,
     assert resolve_model("main", explicit, config=config) == expected
 
 
-def test_resolve_model_kind_falls_back_to_main(tmp_path) -> None:
+def test_resolve_model_kind_falls_back_to_main(monkeypatch) -> None:
     """配置只写 main 时，subagent / summarize 回落 main。"""
+    monkeypatch.delenv("MODEL", raising=False)  # .env 自动加载可能注入
     config = Config(model=ModelConfig(main="main-model"))
 
     assert resolve_model("subagent", config=config) == "main-model"
     assert resolve_model("summarize", config=config) == "main-model"
 
 
-def test_resolve_model_kind_configured_beats_main(tmp_path) -> None:
+def test_resolve_model_kind_configured_beats_main(monkeypatch) -> None:
+    monkeypatch.delenv("MODEL", raising=False)
     config = Config(model=ModelConfig(main="main-model", subagent="sub-model"))
 
     assert resolve_model("subagent", config=config) == "sub-model"

@@ -23,7 +23,10 @@ def test_version():
     assert "0.1.0" in result.output
 
 
-def test_config_default(tmp_path: Path):
+def test_config_default(tmp_path: Path, monkeypatch):
+    # 隔离 home 配置与 .env 注入的 MODEL：本测试钉的是「全空环境」默认
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("MODEL", raising=False)
     runner = CliRunner()
     result = runner.invoke(main, ["config", "--cwd", str(tmp_path)])
     assert result.exit_code == 0

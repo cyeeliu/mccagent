@@ -114,7 +114,12 @@ class RestrictionsExecutor:
         self._cfg = config
 
     def _limits(self):
-        """构造 preexec_fn 闭包：在子进程内施加 rlimit 与 umask。"""
+        """构造 preexec_fn 闭包：在子进程内施加 rlimit 与 umask。
+
+        umask 仅在 allowlist 策略下应用（077）：inherit 是 harness
+        日常档，尊重用户 shell 的 umask，避免 Agent 创建的文件
+        权限与用户预期不一致。
+        """
         cfg = self._cfg
 
         def _preexec() -> None:
@@ -126,24 +131,38 @@ class RestrictionsExecutor:
                 _set(resource.RLIMIT_NPROC, cfg.max_processes)
             if cfg.max_file_mb > 0:
                 _set(resource.RLIMIT_FSIZE, cfg.max_file_mb * 1024 * 1024)
-            os.umask(0o077)
+            if cfg.env_policy == "allowlist":
+                os.umask(0o077)
 
         def _set(res: int, limit: int) -> None:
             resource.setrlimit(res, (limit, limit))
 
         return _preexec
 
-    def _build_env(self, cwd: Path) -> dict[str, str]:
-        """按白名单重建子进程环境；HOME 重定向到工作目录内。"""
+    def _build_env(self, cwd: Path) -> dict[str, str] | None:
+        """按 env_policy 构建子进程环境。
+
+        - inherit：返回 None（spawn 继承完整环境）——harness 日常
+          档，Agent 能用项目 venv / cargo 等用户工具链
+        - allowlist：白名单重建；PATH 一律重置为系统默认而非继承
+          父进程值（否则 harness 自身的 venv PATH 会泄漏给被测
+          Agent，评测环境被污染）；HOME 按 redirect_home 决定是否
+          重定向到工作目录内
+        """
+        if self._cfg.env_policy == "inherit":
+            return None
         env = {k: os.environ[k] for k in self._cfg.env_allow if k in os.environ}
-        env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
-        env["HOME"] = str(cwd / SANDBOX_HOME_DIRNAME)
+        env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+        if self._cfg.redirect_home:
+            env["HOME"] = str(cwd / SANDBOX_HOME_DIRNAME)
+        else:
+            env.setdefault("HOME", os.environ.get("HOME", str(cwd)))
         env.setdefault("TMPDIR", "/tmp")
         return env
 
     async def run(self, command: str, cwd: Path, timeout: float) -> ExecResult:
-        home = cwd / SANDBOX_HOME_DIRNAME
-        home.mkdir(exist_ok=True)
+        if self._cfg.env_policy == "allowlist" and self._cfg.redirect_home:
+            (cwd / SANDBOX_HOME_DIRNAME).mkdir(exist_ok=True)
         return await _run_argv(
             ["bash", "-c", command],
             cwd,
@@ -184,8 +203,10 @@ class BubblewrapExecutor:
     async def run(self, command: str, cwd: Path, timeout: float) -> ExecResult:
         home = cwd / SANDBOX_HOME_DIRNAME
         home.mkdir(exist_ok=True)
+        # bwrap 档恒定环境清洗（强隔离语义）：真实 HOME 在沙箱内
+        # 不可见，HOME 必须重定向到工作目录内；PATH 重置为系统默认
         env = {k: os.environ[k] for k in self._cfg.env_allow if k in os.environ}
-        env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+        env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
         env["HOME"] = str(home)
         return await _run_argv(
             self.build_argv(command, cwd), cwd, timeout, env=env
