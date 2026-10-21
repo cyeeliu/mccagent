@@ -12,7 +12,6 @@ from mcc_eval.__main__ import (
     _positive_int,
     build_parser,
     main,
-    resolve_model,
 )
 
 EXAMPLES = Path(__file__).parents[1] / "examples" / "mock-cases.json"
@@ -187,36 +186,5 @@ def test_non_negative_int_accepts(good: str) -> None:
     assert _non_negative_int(good) == int(good)
 
 
-# ─── 模型解析优先级 ──────────────────────────────────────────────────────
-
-
-def test_resolve_model_explicit_wins(monkeypatch) -> None:
-    monkeypatch.setenv("MODEL", "from-env")
-    assert resolve_model("explicit") == "explicit"
-
-
-def test_resolve_model_env_beats_settings(monkeypatch) -> None:
-    monkeypatch.setenv("MODEL", "from-env")
-
-    class Settings:
-        class model:
-            main = "from-settings"
-
-    assert resolve_model(None, settings_loader=lambda: Settings) == "from-env"
-
-
-def test_resolve_model_settings_beats_default() -> None:
-    class Settings:
-        class model:
-            main = "from-settings"
-
-    assert resolve_model(None, settings_loader=lambda: Settings) == "from-settings"
-
-
-def test_resolve_model_defaults_when_all_missing(monkeypatch) -> None:
-    monkeypatch.delenv("MODEL", raising=False)
-
-    def broken_loader():
-        raise RuntimeError("no mcc config")
-
-    assert resolve_model(None, settings_loader=broken_loader) == "claude-sonnet-4-5"
+# 模型解析优先级测试已随实现迁至 tests/test_config_resolve.py
+# （mcc-config 是模型配置的唯一入口）

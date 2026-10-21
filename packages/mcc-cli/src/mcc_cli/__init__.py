@@ -82,25 +82,6 @@ def _build_hooks(config, work_dir: Path):
     return hook_registry
 
 
-def _resolve_model(
-    config, kind: str = "main", explicit: str | None = None
-) -> str:
-    """按用途解析模型：显式参数 > 环境变量 MODEL > 配置该类型 > 配置 main。
-
-    main / subagent / summarize 等类型共用此逻辑；
-    配置只写了 main 时，其余类型一律回落 main。
-    """
-    if explicit:
-        return explicit
-    env = os.environ.get("MODEL")
-    if env:
-        return env
-    configured = getattr(config.model, kind)
-    if configured:
-        return configured
-    return config.model.main
-
-
 def _build_source(
     work_dir: Path,
     model: str | None,
@@ -151,26 +132,23 @@ def _build_source(
 
             turns = [single_text_turn("[mock] No --mock-script provided; echoing.")]
         llm = MockLlm(turns)
-    elif llm_base_url:
-        from mcc_llm.openai import OpenAiClient
-
-        llm = OpenAiClient(
-            api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
-            base_url=llm_base_url,
-        )
     else:
-        try:
-            from mcc_llm import auto_provider_from_env
+        # 网关与凭证约定统一在 mcc-config：显式 --llm-base-url /
+        # MCC_LLM_BASE_URL → OpenAI 兼容网关，否则按环境自动探测
+        from mcc_config import build_llm_provider
 
-            llm = auto_provider_from_env()
+        try:
+            llm = build_llm_provider(base_url=llm_base_url)
         except RuntimeError as e:
             click.echo(f"Error: {e}\nUse --mock for testing without API keys.", err=True)
             sys.exit(2)
 
     hook_registry = _build_hooks(config, work_dir)
 
-    subagent_model = _resolve_model(config, "subagent")
-    summarize_model = _resolve_model(config, "summarize")
+    from mcc_config import resolve_model
+
+    subagent_model = resolve_model("subagent", config=config)
+    summarize_model = resolve_model("summarize", config=config)
     runner = SubagentRunner(
         llm=llm,
         registry=registry,
@@ -184,7 +162,7 @@ def _build_source(
     recorder = SessionRecorder.open_sync(sid, work_dir)
     builder = AgentLoopBuilder(llm, registry, ctx).system(system).recorder(recorder)
 
-    builder = builder.model(_resolve_model(config, "main", model))
+    builder = builder.model(resolve_model("main", model, config=config))
     builder = builder.summarize_model(summarize_model)
 
     checker = PermissionChecker(config.permissions)

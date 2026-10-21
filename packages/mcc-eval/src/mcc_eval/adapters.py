@@ -12,7 +12,6 @@ MockAdapter 用于无 API key 的链路冒烟与测试。
 from __future__ import annotations
 
 import asyncio
-import os
 import random
 import tempfile
 import uuid as uuid_module
@@ -159,33 +158,12 @@ class _Translator:
         )
 
 
-def _provider_from_env() -> Any:
-    """构建 LLM provider，凭证与网关地址复用 mcc 的环境变量约定。
-
-    MCC_LLM_BASE_URL 指向 OpenAI 兼容自托管网关（vLLM / SGLang /
-    Ollama 等）时走 OpenAiClient，API key 缺省用占位值——本地网关
-    通常不鉴权（组装逻辑与 mcc CLI 一致）；否则按
-    ANTHROPIC_API_KEY / OPENAI_API_KEY 自动探测。
-    """
-    from mcc_llm import auto_provider_from_env
-
-    base_url = os.environ.get("MCC_LLM_BASE_URL")
-    if base_url:
-        from mcc_llm.openai import OpenAiClient
-
-        return OpenAiClient(
-            api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
-            base_url=base_url,
-        )
-    return auto_provider_from_env()
-
-
 class MccAdapter:
     """以 mcc AgentLoop 为被测对象：headless 跑单任务并转译轨迹。
 
     llm / registry / work_dir 可注入（测试替身）；缺省惰性构建——
-    LLM 复用 mcc 的环境变量约定（含 MCC_LLM_BASE_URL 自托管网关），
-    工作目录由 runner 指定以保证任务之间互不污染。
+    provider 经 mcc-config 统一构建（含 MCC_LLM_BASE_URL 自托管
+    网关约定），工作目录由 runner 指定以保证任务之间互不污染。
     """
 
     def __init__(
@@ -200,12 +178,12 @@ class MccAdapter:
         self._registry = registry
 
     def _build_agent(self, req: RunRequest) -> Any:
-        from mcc_config import PermissionConfig
+        from mcc_config import PermissionConfig, build_llm_provider
         from mcc_core import ToolContext
         from mcc_harness import AgentLoopBuilder, PermissionChecker
         from mcc_tools import default_registry
 
-        llm = self._llm if self._llm is not None else _provider_from_env()
+        llm = self._llm if self._llm is not None else build_llm_provider()
 
         if req.work_dir:
             work_dir = Path(req.work_dir)

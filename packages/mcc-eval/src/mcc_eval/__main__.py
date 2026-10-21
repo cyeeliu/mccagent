@@ -9,18 +9,19 @@
     uv run --package mcc-eval mcc-eval datasets --dataset mbpp --limit 20 --out mbpp.json
     uv run --package mcc-eval mcc-eval distill --limit 20
 
-模型解析复用 mcc 的约定：--model > MODEL 环境变量 > mcc settings.json
-（model.main）> 平台默认值——评测不为模型配置引入第二份来源。
+模型解析与 provider 构建统一走 mcc-config（resolve_model /
+build_llm_provider），与 mcc CLI 同一入口同一优先级——评测不为
+模型配置引入第二份来源。
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
-from typing import Any
+
+from mcc_config import resolve_model
 
 from mcc_eval.adapters import MccAdapter, MockAdapter
 from mcc_eval.datasets import (
@@ -35,41 +36,11 @@ from mcc_eval.distill import distill_sessions
 from mcc_eval.report import rebuild, save_cases, write_report_md, write_results_json
 from mcc_eval.runner import new_batch_dir, run_batch
 
-DEFAULT_MODEL = "claude-sonnet-4-5"
 DEFAULT_OUT_ROOT = "eval-runs"
 DEFAULT_CONCURRENCY = 2
 DEFAULT_MAX_TURNS = 20
 DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_RUNS_PER_CASE = 1
-
-
-def resolve_model(explicit: str | None, *, settings_loader: Any | None = None) -> str:
-    """按 mcc 的解析顺序确定模型，复用 CLI 已有配置。
-
-    优先级与 mcc CLI 一致：显式参数 > MODEL 环境变量 > mcc settings
-    （~/.mcc/settings.json 与 .mcc/settings.json 合并）的 model.main；
-    mcc 配置读取失败时回落平台默认值。
-    """
-    if explicit:
-        return explicit
-    env = os.environ.get("MODEL")
-    if env:
-        return env
-    if settings_loader is None:
-        from mcc_config import load as load_settings
-
-        try:
-            settings = asyncio.run(load_settings(Path.cwd()))
-        except Exception:
-            return DEFAULT_MODEL
-        try:
-            return str(settings.model.main)
-        except Exception:
-            return DEFAULT_MODEL
-    try:
-        return str(settings_loader().model.main)
-    except Exception:
-        return DEFAULT_MODEL
 
 
 def _non_negative_int(raw: str) -> int:
@@ -106,7 +77,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.limit:
         cases = cases[: args.limit]
 
-    model = "mock" if args.mock else resolve_model(args.model)
+    model = "mock" if args.mock else resolve_model("main", args.model)
     batch_dir = new_batch_dir(
         Path(args.out), dataset_label, args.limit, len(cases)
     )

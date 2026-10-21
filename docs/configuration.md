@@ -50,16 +50,34 @@
 | `subagent` | 子代理预设使用的模型 |
 | `summarize` | 会话标题生成等摘要任务 |
 
+**统一入口**：模型解析与 LLM provider 构建由 `mcc-config` 包提供，
+CLI 与评测（mcc-eval）调用同一 API，不存在第二份实现：
+
+```python
+from mcc_config import resolve_model, build_llm_provider
+
+model = resolve_model("main", explicit_arg, config=config)   # 解析模型名
+llm = build_llm_provider(base_url=None)                       # 构建 provider
+```
+
 **解析优先级**（每类型独立生效）：
 
 ```
-CLI 显式参数（仅 main 有 --model）
+显式参数（CLI --model / 评测 --model）
   > 环境变量 MODEL
   > settings.json 中该类型的配置
   > settings.json 中的 main 配置（兜底）
+  > DEFAULT_MODEL（与 ModelConfig.main 默认值同源）
 ```
 
 即：`subagent` / `summarize` 未配置（`null`）时一律回落 `main`；设置 `MODEL` 环境变量会同时覆盖三者；`--model` 只覆盖主模型，不影响子代理与摘要。
+
+**provider 构建**（`build_llm_provider`）：显式 `base_url`（CLI
+`--llm-base-url`）或 `MCC_LLM_BASE_URL` 环境变量指向 OpenAI 兼容
+自托管网关（vLLM / SGLang / Ollama 等）时走 OpenAiClient（API key
+缺省占位值——本地网关通常不鉴权）；否则按 `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` 自动探测（Anthropic 优先），均缺失时抛
+RuntimeError。
 
 示例——主对话用 Opus、子代理用便宜的 Haiku：
 

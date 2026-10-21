@@ -472,43 +472,45 @@ def _config(main="claude-opus-4-8", subagent=None, summarize=None):
 
 
 class TestResolveModel:
+    """模型解析统一走 mcc-config.resolve_model（config 对象注入）。"""
+
     def test_explicit_beats_env_and_json(self, monkeypatch):
-        from mcc_cli import _resolve_model
+        from mcc_config import resolve_model
 
         monkeypatch.setenv("MODEL", "env-model")
         cfg = _config(summarize="json-sum")
-        assert _resolve_model(cfg, "summarize", "cli-model") == "cli-model"
+        assert resolve_model("summarize", "cli-model", config=cfg) == "cli-model"
 
     def test_env_beats_json(self, monkeypatch):
-        from mcc_cli import _resolve_model
+        from mcc_config import resolve_model
 
         monkeypatch.setenv("MODEL", "env-model")
         cfg = _config(main="json-main", summarize="json-sum")
-        assert _resolve_model(cfg, "main") == "env-model"
-        assert _resolve_model(cfg, "summarize") == "env-model"
-        assert _resolve_model(cfg, "subagent") == "env-model"
+        assert resolve_model("main", config=cfg) == "env-model"
+        assert resolve_model("summarize", config=cfg) == "env-model"
+        assert resolve_model("subagent", config=cfg) == "env-model"
 
     def test_json_kind_when_env_unset(self, monkeypatch):
-        from mcc_cli import _resolve_model
+        from mcc_config import resolve_model
 
         monkeypatch.delenv("MODEL", raising=False)
         cfg = _config(main="json-main", summarize="json-sum")
-        assert _resolve_model(cfg, "summarize") == "json-sum"
-        assert _resolve_model(cfg, "main") == "json-main"
+        assert resolve_model("summarize", config=cfg) == "json-sum"
+        assert resolve_model("main", config=cfg) == "json-main"
 
     def test_unconfigured_kind_falls_back_to_main(self, monkeypatch):
-        from mcc_cli import _resolve_model
+        from mcc_config import resolve_model
 
         monkeypatch.delenv("MODEL", raising=False)
         cfg = _config(main="the-main")
-        assert _resolve_model(cfg, "summarize") == "the-main"
-        assert _resolve_model(cfg, "subagent") == "the-main"
+        assert resolve_model("summarize", config=cfg) == "the-main"
+        assert resolve_model("subagent", config=cfg) == "the-main"
 
     def test_default_when_nothing_configured(self, monkeypatch):
-        from mcc_cli import _resolve_model
+        from mcc_config import resolve_model
 
         monkeypatch.delenv("MODEL", raising=False)
-        assert _resolve_model(_config(), "main") == "claude-opus-4-8"
+        assert resolve_model("main", config=_config()) == "claude-opus-4-8"
 
 
 class TestBuildSourceModelResolution:
