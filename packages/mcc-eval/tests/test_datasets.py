@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 
 import httpx
@@ -187,3 +188,103 @@ def test_dataset_registry_shape() -> None:
     assert set(DATASETS) == {"swebench-lite", "humaneval", "mbpp"}
     for spec in DATASETS.values():
         assert spec.hf_id and spec.config and spec.split and callable(spec.converter)
+
+
+# ─── 网络重试与异常处理 ───────────────────────────────────────────────────
+
+
+def _pages_payload(rows: list[dict], total: int) -> dict:
+    return {"rows": [{"row": r} for r in rows], "num_rows_total": total}
+
+
+def test_fetch_rows_retries_transient_connection_reset(monkeypatch) -> None:
+    """连接重置后重试成功：瞬时传输错误不终结拉取。"""
+    monkeypatch.setattr("mcc_eval.datasets.time.sleep", lambda _: None)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("[Errno 104] Connection reset by peer")
+        return httpx.Response(200, json=_pages_payload([{"i": 1}], total=1))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with client:
+        rows = fetch_rows(DATASETS["humaneval"], limit=0, client=client)
+
+    assert rows == [{"i": 1}]
+    assert calls["n"] == 2  # 首发 + 1 次重试
+
+
+def test_fetch_rows_retries_5xx_then_succeeds(monkeypatch) -> None:
+    """datasets-server 偶发 502：指数退避后成功。"""
+    monkeypatch.setattr("mcc_eval.datasets.time.sleep", lambda _: None)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return httpx.Response(502, json={"error": "bad gateway"})
+        return httpx.Response(200, json=_pages_payload([{"i": 7}], total=1))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with client:
+        rows = fetch_rows(DATASETS["humaneval"], limit=0, client=client)
+
+    assert rows == [{"i": 7}]
+    assert calls["n"] == 3
+
+
+def test_fetch_rows_exhausted_retries_raises_runtimeerror(monkeypatch) -> None:
+    """持续连接重置：重试耗尽抛 RuntimeError（含请求与次数信息）。"""
+    monkeypatch.setattr("mcc_eval.datasets.time.sleep", lambda _: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 104] Connection reset by peer")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="已重试 3 次"), client:
+        fetch_rows(DATASETS["humaneval"], limit=0, client=client)
+
+
+def test_fetch_rows_does_not_retry_404() -> None:
+    """数据集不存在（404）不重试：立刻失败不空转。"""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(404, json={"error": "dataset not found"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(httpx.HTTPStatusError), client:
+        fetch_rows(DATASETS["humaneval"], limit=0, client=client)
+    assert calls["n"] == 1
+
+
+def test_cli_gather_exit_message_points_to_offline_path(monkeypatch, tmp_path) -> None:
+    """重试耗尽后 CLI 给出离线导出的替代指引，而非裸 traceback。"""
+    from mcc_eval.__main__ import _gather_cases
+
+    monkeypatch.setattr("mcc_eval.datasets.time.sleep", lambda _: None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 104] Connection reset by peer")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    real_fetch = __import__("mcc_eval.datasets", fromlist=["fetch_rows"]).fetch_rows
+
+    def broken_fetch(spec, limit=0, client=None):
+        return real_fetch(spec, limit, client=client)
+
+    monkeypatch.setattr(
+        "mcc_eval.__main__.fetch_rows",
+        lambda spec, limit: broken_fetch(spec, limit, client=client),
+    )
+    args = argparse.Namespace(cases=None, dataset="swebench-lite", limit=5)
+
+    with pytest.raises(SystemExit) as excinfo:
+        _gather_cases(args)
+    msg = str(excinfo.value)
+    assert "拉取 SWE-bench Lite 失败" in msg
+    assert "datasets --dataset swebench-lite --limit 5 --out cases.json" in msg
+    assert "run --cases cases.json" in msg

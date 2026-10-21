@@ -61,7 +61,17 @@ def _gather_cases(args: argparse.Namespace) -> tuple[list[Case], str]:
         raise SystemExit(f"未知数据集 {args.dataset!r}，可选：{', '.join(sorted(DATASETS))}")
     spec = DATASETS[args.dataset]
     print(f"拉取 {spec.title}（{spec.hf_id}）…", file=sys.stderr)
-    records = fetch_rows(spec, args.limit)
+    try:
+        records = fetch_rows(spec, args.limit)
+    except (RuntimeError, OSError) as exc:
+        # 网络不可达 / datasets-server 故障：给出离线替代路径而非裸栈
+        raise SystemExit(
+            f"拉取 {spec.title} 失败：{exc}\n"
+            f"受限网络可先在联网机器导出再离线运行：\n"
+            f"  mcc-eval datasets --dataset {args.dataset}"
+            f"{f' --limit {args.limit}' if args.limit else ''} --out cases.json\n"
+            f"  mcc-eval run --cases cases.json …"
+        ) from exc
     print(f"取得 {len(records)} 条记录", file=sys.stderr)
     return build_cases(args.dataset, records), args.dataset
 

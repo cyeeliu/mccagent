@@ -14,6 +14,9 @@ HumanEval / MBPP 的转换会保留官方测试代码（``check`` 字段），�
 output_contains），语义是「Agent 是否按指令完成了 clone / 修复 /
 自检 / 汇报」，不等价于官方解决率——报告会显式标注。
 
+网络拉取带指数退避重试（datasets-server 偶发 502 / 连接重置）；
+重试耗尽抛 RuntimeError，由 CLI 转成带离线指引的错误退出。
+
 离线场景（受限网络）：先在联网机器导出 ``--out cases.json``，再在
 目标机器用 ``run --cases cases.json`` 运行。
 """
@@ -21,6 +24,8 @@ output_contains），语义是「Agent 是否按指令完成了 clone / 修复 /
 from __future__ import annotations
 
 import json
+import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +35,17 @@ import httpx
 
 ROWS_API = "https://datasets-server.huggingface.co/rows"
 PAGE_SIZE = 100
+FETCH_ATTEMPTS = 3  # 单页请求总尝试次数（1 次首发 + 2 次重试）
+RETRY_BASE_DELAY_S = 1.0
+
+# 瞬时故障：连接重置 / 超时 / 协议错误，重试大概率成功
+RETRYABLE_TRANSPORT_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+)
 
 # mcc 内建工具名（与被测 Agent 的工具注册表一致）
 TOOL_WRITE = "write_file"
@@ -239,25 +255,71 @@ DATASETS: dict[str, DatasetSpec] = {
 }
 
 
+def _retryable(exc: Exception) -> bool:
+    """是否值得重试：瞬时传输错误，或 429 / 5xx 状态码。"""
+    if isinstance(exc, RETRYABLE_TRANSPORT_ERRORS):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (429, 500, 502, 503, 504)
+    return False
+
+
+def _get_with_retry(
+    client: httpx.Client, params: dict[str, Any], *, what: str
+) -> httpx.Response:
+    """单次 rows API 请求：指数退避重试瞬时故障。
+
+    重试耗尽把原始异常包进 RuntimeError（附已尝试的请求与次数），
+    由调用方决定如何呈现——库层不直接退出进程。
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            resp = client.get(ROWS_API, params=params)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:
+            if not _retryable(exc):
+                raise
+            last_exc = exc
+            if attempt < FETCH_ATTEMPTS:
+                delay = RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
+                print(
+                    f"拉取 {what} 第 {attempt} 次失败"
+                    f"（{type(exc).__name__}: {exc}），"
+                    f"{delay:.0f}s 后重试…",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+    raise RuntimeError(
+        f"拉取 {what} 失败（已重试 {FETCH_ATTEMPTS} 次）：{last_exc}"
+    ) from last_exc
+
+
 def fetch_rows(spec: DatasetSpec, limit: int = 0, client: httpx.Client | None = None) -> list[dict]:
-    """分页拉取数据集原始记录；limit=0 表示全量。"""
+    """分页拉取数据集原始记录；limit=0 表示全量。
+
+    每页请求对瞬时网络故障（连接重置 / 超时）与 429 / 5xx 做指数
+    退避重试；重试耗尽抛 RuntimeError——跨国访问 datasets-server
+    连接被重置是常态，不该以裸 traceback 收场。
+    """
     rows: list[dict] = []
     own = client is None
     client = client or httpx.Client(timeout=30.0)
     try:
         offset = 0
         while True:
-            resp = client.get(
-                ROWS_API,
-                params={
+            resp = _get_with_retry(
+                client,
+                {
                     "dataset": spec.hf_id,
                     "config": spec.config,
                     "split": spec.split,
                     "offset": offset,
                     "length": PAGE_SIZE,
                 },
+                what=f"{spec.hf_id}（offset={offset}）",
             )
-            resp.raise_for_status()
             payload = resp.json()
             page = [item["row"] for item in payload.get("rows", [])]
             rows.extend(page)
