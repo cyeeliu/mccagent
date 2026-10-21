@@ -90,6 +90,10 @@ class OpenAiClient:
             ]
         if stream:
             body["stream"] = True
+            # 请求流尾 usage chunk（OpenAI 兼容网关约定：最后一个
+            # chunk choices 为空、携带 usage）。不开的话流式用量
+            # 恒为 0，成本与 token 统计全部失真
+            body["stream_options"] = {"include_usage": True}
         return body
 
     async def complete(self, req: CompleteRequest) -> MessageResponse:
@@ -137,6 +141,14 @@ class OpenAiClient:
                 if payload == "[DONE]":
                     break
                 chunk = json.loads(payload)
+                # usage-only 尾 chunk（include_usage）：choices 为空、
+                # 携带最终用量——先吸收再跳过 choice 解析
+                usage_raw = chunk.get("usage")
+                if usage_raw:
+                    usage = Usage(
+                        input_tokens=usage_raw.get("prompt_tokens", 0),
+                        output_tokens=usage_raw.get("completion_tokens", 0),
+                    )
                 choices = chunk.get("choices", [])
                 if not choices:
                     continue

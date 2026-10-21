@@ -15,7 +15,15 @@ from mcc_core import (
     ToolUseBlock,
     Usage,
 )
-from mcc_core.event import Notice, TextDelta, ToolCallEnd, ToolCallStart, TurnEnd, UserEcho
+from mcc_core.event import (
+    LlmUsage,
+    Notice,
+    TextDelta,
+    ToolCallEnd,
+    ToolCallStart,
+    TurnEnd,
+    UserEcho,
+)
 from mcc_harness import (
     AgentLoop,
     AgentLoopBuilder,
@@ -195,6 +203,43 @@ async def test_tool_use_cycle(ctx, registry, tmp_path):
     assert (tmp_path / "out.txt").read_text() == "hi"
     assert any(isinstance(e, ToolCallStart) and e.name == "write_file" for e in events)
     assert any(isinstance(e, ToolCallEnd) and not e.is_error for e in events)
+
+
+@pytest.mark.asyncio
+async def test_llm_usage_emitted_per_turn(ctx, registry):
+    """每轮 LLM 调用完成后发射 LlmUsage 事件（token 统计权威来源）。"""
+    turn1 = [
+        ToolUseStart(id="t1", name="run_bash"),
+        ToolUseInputDelta(partial_json=json.dumps({"command": "ls"})),
+        MessageStop(stop_reason="tool_use",
+                    usage=Usage(input_tokens=1520, output_tokens=310)),
+    ]
+    turn2 = [
+        TextDelta(text="done"),
+        MessageStop(stop_reason="end_turn",
+                    usage=Usage(input_tokens=2000, output_tokens=90)),
+    ]
+    llm = MockLlm([turn1, turn2])
+    agent = _make_agent(llm, ctx, registry)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    await agent.run_streaming("run ls", queue)
+    events = await _collect_events(queue)
+
+    usages = [e for e in events if isinstance(e, LlmUsage)]
+    assert len(usages) == 2
+    assert usages[0].input_tokens == 1520
+    assert usages[0].output_tokens == 310
+    assert usages[0].iteration == 1  # 主循环 iteration 从 1 起
+    assert usages[0].cost_usd > 0
+    assert usages[1].input_tokens == 2000
+    assert usages[1].iteration == 2
+    # 事件时序：一轮的 usage 在工具执行（ToolCallEnd）之前
+    idx_usage0 = events.index(usages[0])
+    idx_tool_end = next(
+        i for i, e in enumerate(events) if isinstance(e, ToolCallEnd)
+    )
+    assert idx_usage0 < idx_tool_end
 
 
 @pytest.mark.asyncio

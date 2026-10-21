@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from mcc_eval.events import (
     LlmChunk,
     LlmRequest,
+    LlmUsage,
     RunFinished,
     RunStarted,
     Seq,
@@ -85,6 +86,9 @@ class _Translator:
             Error as ErrorEvent,
         )
         from mcc_core.event import (
+            LlmUsage as LlmUsageEvent,
+        )
+        from mcc_core.event import (
             Notice,
             PermissionRequest,
             TextDelta,
@@ -125,6 +129,28 @@ class _Translator:
                     duration_ms=0,
                 )
             ]
+        if isinstance(ev, LlmUsageEvent):
+            # 每轮流完的用量快照：token 统计的权威来源（llm_request
+            # 在请求时机 input_tokens 多半为 0——那时用量还没回来）。
+            # 空产出轮（无文本无工具）此前没有事件触发 llm_request，
+            # 在此补发——轮次标记与用量一并可见。
+            #
+            # 同时复位轮内标记：一轮 LLM 调用以此结束，下一轮产出
+            # 事件重新触发 llm_request（turn 递增）。工具轮循环中
+            # AgentLoop 不发 TurnEnd（其语义是任务结束），若只靠
+            # TurnEnd 复位，第二轮起 llm_request 会静默消失
+            out = self._llm_request()
+            out.append(
+                LlmUsage(
+                    seq=self._seq.next(),
+                    turn=self._call - 1,
+                    input_tokens=ev.input_tokens,
+                    output_tokens=ev.output_tokens,
+                    cost_usd=ev.cost_usd,
+                )
+            )
+            self._request_sent = False
+            return out
         if isinstance(ev, TurnEnd):
             # TurnEnd.cost_usd 是会话累计值，取末轮
             self.cost_usd = ev.cost_usd

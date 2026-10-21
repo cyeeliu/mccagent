@@ -35,6 +35,23 @@ class ToolCallEnd:
 
 
 @dataclass
+class LlmUsage:
+    """一次 LLM 调用完成后的用量快照（流结束时才能拿到）。
+
+    请求发出时 input token 数未知（Anthropic 在 message_start、
+    OpenAI 在流尾 usage chunk 才上报），因此用量在每轮流完后
+    单独发射——事件流上 token 统计的权威来源。
+    """
+
+    iteration: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+@dataclass
 class TurnEnd:
     cost_usd: float
 
@@ -71,6 +88,7 @@ AgentEvent = (
     | TextDelta
     | ToolCallStart
     | ToolCallEnd
+    | LlmUsage
     | TurnEnd
     | Notice
     | Error

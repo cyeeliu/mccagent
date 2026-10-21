@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 from mcc_core.event import Error as ErrorEvent
 from mcc_core.event import (
+    LlmUsage as LlmUsageEvent,
+)
+from mcc_core.event import (
     Notice,
     PermissionRequest,
     TextDelta,
@@ -17,7 +20,15 @@ from mcc_core.event import (
     UserEcho,
 )
 from mcc_eval.adapters import MccAdapter, MockAdapter, RunRequest, _Translator
-from mcc_eval.events import LlmChunk, LlmRequest, RunFinished, RunStarted, ToolCall, ToolResult
+from mcc_eval.events import (
+    LlmChunk,
+    LlmRequest,
+    LlmUsage,
+    RunFinished,
+    RunStarted,
+    ToolCall,
+    ToolResult,
+)
 from mcc_llm import MessageStop, ToolUseInputDelta, ToolUseStart
 from mcc_llm import TextDelta as LlmTextDelta
 from mcc_llm.mock import MockLlm, single_text_turn
@@ -84,6 +95,38 @@ def test_translator_tool_call_args_carry_preview() -> None:
     assert nxt[1].turn == 1
 
 
+def test_translator_llm_usage_carries_tokens() -> None:
+    """AgentLoop 的 LlmUsage 事件转译为轨迹 llm_usage：token 权威来源。"""
+    t = _Translator(_req())
+    # 空产出轮：usage 前没有任何事件，补发 llm_request 一并输出
+    out = t.translate(LlmUsageEvent(
+        iteration=0, input_tokens=1520, output_tokens=310,
+        cache_read_input_tokens=64, cost_usd=0.0123,
+    ))
+    assert [type(e) for e in out] == [LlmRequest, LlmUsage]
+    assert out[0].turn == 0
+    usage = out[1]
+    assert usage.turn == 0  # 第 1 次 LLM 调用
+    assert usage.input_tokens == 1520
+    assert usage.output_tokens == 310
+    assert usage.cost_usd == 0.0123
+
+    # 有产出的轮：llm_request 已发过，usage 单独输出且归到 turn=1
+    first = t.translate(TextDelta(text="hi"))  # 触发 llm_request（turn=1）
+    assert first[0].turn == 1
+    nxt = t.translate(LlmUsageEvent(
+        iteration=1, input_tokens=900, output_tokens=80, cost_usd=0.004,
+    ))
+    assert [type(e) for e in nxt] == [LlmUsage]
+    assert nxt[0].turn == 1
+
+    # usage 复位轮标记：下一轮产出事件重新触发 llm_request（turn=2）
+    # ——工具轮循环中 AgentLoop 不发 TurnEnd，这是唯一的轮边界信号
+    third = t.translate(TextDelta(text="next turn"))
+    assert [type(e) for e in third] == [LlmRequest, LlmChunk]
+    assert third[0].turn == 2
+
+
 @pytest.mark.parametrize(
     "ev",
     [
@@ -131,6 +174,7 @@ def test_adapter_text_only_turn() -> None:
         "RunStarted",
         "LlmRequest",
         "LlmChunk",
+        "LlmUsage",  # 流尾用量快照：MockLlm 单文本轮 usage(10, 5)
         "RunFinished",
     ]
     chunks = [e for e in events if isinstance(e, LlmChunk)]

@@ -14,6 +14,7 @@ from mcc_core.event import (
     Error as ErrorEvent,
 )
 from mcc_core.event import (
+    LlmUsage,
     Notice,
     TextDelta,
     ToolCallEnd,
@@ -267,4 +268,4 @@ async def test_e2e_event_sequence(ctx, registry):
     assert isinstance(events[0], UserEcho)
     assert isinstance(events[-1], TurnEnd)
     for ev in events[1:-1]:
-        assert isinstance(ev, (TextDelta, ToolCallStart, ToolCallEnd, Notice))
+        assert isinstance(ev, (TextDelta, ToolCallStart, ToolCallEnd, Notice, LlmUsage))

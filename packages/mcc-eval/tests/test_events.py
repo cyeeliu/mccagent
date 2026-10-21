@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from mcc_eval.events import (
     LlmChunk,
+    LlmRequest,
+    LlmUsage,
     RunFinished,
     RunStarted,
     Seq,
@@ -28,7 +30,7 @@ def _schema_types() -> set[str]:
 def test_schema_covers_all_event_types() -> None:
     """schema oneOf 与 pydantic 判别式联合必须一一对应。"""
     expected = {"run_started", "llm_request", "llm_chunk", "tool_call", "tool_result",
-                "run_finished"}
+                "llm_usage", "run_finished"}
     assert _schema_types() == expected
 
 
@@ -39,8 +41,11 @@ def test_schema_covers_all_event_types() -> None:
         LlmChunk(seq=1, turn=0, delta="hi"),
         ToolCall(seq=2, turn=0, call_id="x", tool_name="bash", args="pytest"),
         ToolResult(seq=3, call_id="x", output="ok"),
-        RunFinished(seq=4, status="passed", score=1.0),
-        RunFinished(seq=5, status="error", reason="no ANTHROPIC_API_KEY"),
+        LlmRequest(seq=4, turn=0, input_tokens=120),
+        LlmUsage(seq=5, turn=0, input_tokens=120, output_tokens=48,
+                 cost_usd=0.0021),
+        RunFinished(seq=6, status="passed", score=1.0),
+        RunFinished(seq=7, status="error", reason="no ANTHROPIC_API_KEY"),
     ],
     ids=lambda e: type(e).__name__,
 )
@@ -69,3 +74,13 @@ def test_run_finished_reason_optional() -> None:
     assert RunFinished(seq=0, status="passed").reason is None
     with_reason = RunFinished(seq=1, status="error", reason="gateway unreachable")
     assert json.loads(with_reason.model_dump_json())["reason"] == "gateway unreachable"
+
+
+def test_llm_usage_defaults() -> None:
+    """llm_usage 默认值：token 与 cost 缺省 0 / None（流尾才可得）。"""
+    ev = LlmUsage(seq=0, turn=2)
+    assert ev.input_tokens == 0
+    assert ev.output_tokens == 0
+    assert ev.cost_usd is None
+    raw = json.loads(ev.model_dump_json())
+    assert raw["type"] == "llm_usage" and raw["turn"] == 2

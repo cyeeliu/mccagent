@@ -53,7 +53,7 @@ eval-runs/<时间戳>-<数据集>-<数量>/
   progress.json             # 实时进度（每轮 loop / 每 case 状态迁移即原子重写）
   results.json              # 机器读汇总（含 case 级 k/N 与 flaky 统计）
   report.md                 # 人读报告（明细 + case 级聚合 + 失败理由）
-  runs/<case>-a<N>.jsonl    # 每次采样的完整轨迹（六类事件，逐事件落盘）
+  runs/<case>-a<N>.jsonl    # 每次采样的完整轨迹（七类事件，逐事件落盘；token 用量看 llm_usage）
   work/<case>-a<N>/         # 每次采样的 Agent 工作目录（保留现场）
 ```
 

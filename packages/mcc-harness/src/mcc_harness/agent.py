@@ -22,6 +22,7 @@ from mcc_core import (
 )
 from mcc_core.event import (
     AgentEvent,
+    LlmUsage,
     Notice,
     TextDelta,
     ToolCallEnd,
@@ -232,6 +233,20 @@ class AgentLoop:
                 turn_cost = price_usd(self.model, turn_usage)
                 total_cost += turn_cost
                 total_usage = total_usage + turn_usage
+                # 用量在流结束才可得（请求时未知），流完即刻上事件流——
+                # 评测轨迹与 TUI 的 token 统计以此为权威来源
+                await tx.put(
+                    LlmUsage(
+                        iteration=iteration,
+                        input_tokens=turn_usage.input_tokens,
+                        output_tokens=turn_usage.output_tokens,
+                        cache_read_input_tokens=turn_usage.cache_read_input_tokens,
+                        cache_creation_input_tokens=(
+                            turn_usage.cache_creation_input_tokens
+                        ),
+                        cost_usd=turn_cost,
+                    )
+                )
                 messages.append(Message(role=Role.assistant, content=blocks))
 
                 if stop_reason in ("end_turn", "stop_sequence", None):

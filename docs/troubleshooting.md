@@ -108,3 +108,16 @@
 ### 版本号解析的 rc 段陷阱
 
 `"0.1.0rc1"` 的第三段若提取段内**所有**数字会得到 `1`（`rc1` 的 1），导致 `(0, 1, 1)` 与 `(0, 1, 0)` 误判为不同版本。每段只取**前导数字**（`re.match(r"\d+", seg)`），`rc` 后缀自然归零。
+
+## 评测轨迹 input_tokens 恒为 0
+
+**现象**：SWE-bench 轨迹里 `llm_request` 事件 `"input_tokens": 0`，token 用量无从统计；流式跑 OpenAI 兼容网关时成本也恒 0。
+
+**根因**（两层）：
+
+1. 请求发出时 input token 数确实未知——Anthropic 在 `message_start`、OpenAI 在流尾 usage chunk 才上报，`llm_request` 在请求时机只能填 0；且用量此前根本不上事件流。
+2. `OpenAiClient.stream` 未设 `stream_options.include_usage`，且 `choices` 为空的 usage-only 尾 chunk 被 `continue` 跳过——网关（vLLM/SGLang 等）的用量从未被吸收。
+
+**修复**：三层贯通——OpenAiClient 流式请求开 `include_usage` 并解析尾 chunk；AgentLoop 每轮流完发射 `LlmUsage` 事件（iteration/tokens/cost）；评测轨迹新增 `llm_usage` 事件（token 统计的权威来源）。顺带修复：工具轮之间 AgentLoop 不发 TurnEnd（其语义是任务结束），`_request_sent` 永不复位导致第二轮起 `llm_request` 静默消失——以 `llm_usage` 为轮边界复位。
+
+**教训**：流式协议里"请求边界事件"与"用量事件"天然不同步——用量只能在响应尾拿到，append-only 轨迹的正确形态是请求时标记 + 流尾补用量事件，而不是试图在请求时机填入未来才可知的值。
