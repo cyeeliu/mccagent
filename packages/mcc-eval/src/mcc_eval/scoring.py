@@ -62,6 +62,42 @@ class TraceSnapshot:
     turns: int = 0
 
 
+# 基础设施类错误特征（保守白名单）：命中即归 infra，不计入
+# no_tool_errors 的过程分。受限网络（clone / pip 全超时）与
+# 环境清洗后的裸系统 python（依赖未预置）是评测环境的问题，
+# 不是被测 Agent 的操作失误——混在一起会把环境故障记成
+# Agent 的过程性缺陷
+INFRA_ERROR_PATTERNS: tuple[str, ...] = (
+    "command timed out after",   # run_bash 超时（网络或长任务未在预算内完成）
+    "timed out",                 # 网络操作超时（git/pip 的 Operation timed out 等）
+    "could not resolve host",
+    "network is unreachable",
+    "connection reset by peer",
+    "connection timed out",
+    "failed to connect",
+    "modulenotfounderror",       # 环境未预置依赖（traceback 形态）
+    "no module named",           # 同上（解释器直出的简形态）
+)
+
+
+def classify_tool_error(output: str) -> str:
+    """把一条 is_error 的工具结果分类为基础设施故障或 Agent 操作失误。
+
+    - ``"infra"``：网络不可达 / 超时 / 依赖未预置——环境问题，
+      默认不扣过程分
+    - ``"agent"``：其余（参数错误、语法错误、命令失败、逻辑
+      错误）——被测 Agent 的真实操作失误
+
+    白名单刻意保守：`command not found` 这类有歧义的（敲错命令名
+    vs 环境缺工具）一律归 agent，宁可漏判 infra 也不放过真正的
+    操作失误。
+    """
+    lowered = output.lower()
+    if any(p in lowered for p in INFRA_ERROR_PATTERNS):
+        return "infra"
+    return "agent"
+
+
 @dataclass
 class ScoreResult:
     """一次评分的完整结论。"""
@@ -144,10 +180,7 @@ def score_assertions(
         elif etype == "output_contains":
             ok, why = _check_output_contains(snapshot, exp)
         elif etype == "no_tool_errors":
-            ok, why = (
-                not snapshot.had_error,
-                ("no tool errors" if not snapshot.had_error else "had tool errors"),
-            )
+            ok, why = _check_no_tool_errors(snapshot, exp)
         elif etype == "tool_call_count":
             ok, why = _check_tool_count(snapshot, exp)
         elif etype == "no_loops":
@@ -216,6 +249,47 @@ def _check_output_contains(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bo
         return ok, f"regex /{pattern_str}/ {'found' if ok else 'not found'}"
     ok = pattern_str.lower() in full_text.lower()
     return ok, f"'{pattern_str}' {'found' if ok else 'not found'} in output"
+
+
+ERROR_SAMPLE_CHARS = 80
+
+
+def _check_no_tool_errors(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bool, str]:
+    """验证无 Agent 操作失误类工具错误（默认忽略基础设施故障）。
+
+    错误分类见 ``classify_tool_error``：网络不可达 / 超时 / 依赖
+    未预置归 infra——受限网络评测环境的问题，不该记成被测
+    Agent 的过程性缺陷；断言参数 ``ignore_infra``（默认 True）
+    置 False 时两类都计。
+    """
+    ignore_infra = bool(exp.get("ignore_infra", True))
+    if ignore_infra:
+        agent_errors = [
+            r for r in snap.tool_results
+            if r.is_error and classify_tool_error(r.output) == "agent"
+        ]
+        infra_errors = [
+            r for r in snap.tool_results
+            if r.is_error and classify_tool_error(r.output) == "infra"
+        ]
+    else:
+        agent_errors = [r for r in snap.tool_results if r.is_error]
+        infra_errors = []
+
+    if not agent_errors:
+        if infra_errors:
+            sample = infra_errors[0].output[:ERROR_SAMPLE_CHARS].replace("\n", " ")
+            return True, (
+                f"no agent tool errors "
+                f"({len(infra_errors)} infra error(s) ignored, e.g. {sample!r})"
+            )
+        return True, "no tool errors"
+
+    sample = agent_errors[0].output[:ERROR_SAMPLE_CHARS].replace("\n", " ")
+    infra_note = f", {len(infra_errors)} infra ignored" if infra_errors else ""
+    return False, (
+        f"had {len(agent_errors)} agent tool error(s){infra_note}, e.g. {sample!r}"
+    )
 
 
 def _check_tool_count(snap: TraceSnapshot, exp: dict[str, Any]) -> tuple[bool, str]:

@@ -95,7 +95,7 @@ case 补齐 setup 后即可表达「给定环境快照，改出正确终态」�
 | --- | --- | --- |
 | `tool_called` | `tool` / `args_regex` / `after_tool` | 工具是否被调用（可约束参数与顺序） |
 | `tool_call_count` | `tool` / `min` / `max` | 调用次数区间 |
-| `no_tool_errors` | — | 无工具执行错误 |
+| `no_tool_errors` | `ignore_infra`（默认 true） | 无 Agent 操作失误类工具错误；网络不可达/超时/依赖未预置归 infra 默认忽略（环境故障不污染过程分） |
 | `no_loops` | `max_repeat`（默认 3） | 无连续相同调用（循环检测） |
 | `cost_budget` | `max_usd` | 单 run 成本上限 |
 | `turns_budget` | `max_turns` | LLM 轮次上限 |

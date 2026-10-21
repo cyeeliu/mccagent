@@ -6,6 +6,7 @@ import pytest
 from mcc_eval.events import ToolCall, ToolResult
 from mcc_eval.scoring import (
     TraceSnapshot,
+    classify_tool_error,
     run_execution_check,
     score_assertions,
     score_case,
@@ -88,7 +89,8 @@ def test_tool_error_fails_no_tool_errors() -> None:
     snap = _snap(tool_results=[ToolResult(seq=3, call_id="a", output="boom", is_error=True)])
     result = score_assertions(snap, [{"type": "no_tool_errors", "weight": 1.0}])
     assert result.status == "failed"
-    assert "had tool errors" in result.reason
+    assert "1 agent tool error(s)" in result.reason
+    assert "'boom'" in result.reason  # 附样例便于归因
 
 
 def test_output_contains_regex_mode() -> None:
@@ -242,3 +244,99 @@ def test_turns_budget(turns: int, max_turns: int, ok: bool) -> None:
     )
     assert (result.status == "passed") is ok
     assert "turns" in result.reason
+
+
+# ─── 工具错误分类（infra vs agent）─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "command timed out after 300s: git clone https://github.com/astropy/astropy.git repo",
+        "fatal: unable to access 'https://github.com/': Operation timed out",
+        "curl: (6) Could not resolve host: github.com",
+        "curl: (7) Failed to connect to api.github.com port 443: Network is unreachable",
+        "git clone: Connection reset by peer",
+        "/usr/bin/python3: No module named pytest",
+        "Traceback ... ModuleNotFoundError: No module named 'astropy'",
+    ],
+    ids=["runbash-timeout", "git-timeout", "resolve-host", "network-unreachable",
+         "conn-reset", "no-pytest", "no-astropy"],
+)
+def test_classify_infra_errors(output: str) -> None:
+    """网络不可达 / 超时 / 依赖未预置归 infra——环境问题不记 Agent 头上。"""
+    assert classify_tool_error(output) == "infra"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "exit 1\nTraceback: SyntaxError: invalid syntax",
+        "exit 2\nusage: grep [OPTION]... PATTERN",
+        "bash: foo-bar: command not found",
+        "exit 1\nAssertionError: expected 42",
+        "edit_file: old_text not found in file",
+    ],
+    ids=["syntax", "bad-usage", "typo-cmd", "assert", "edit-miss"],
+)
+def test_classify_agent_errors(output: str) -> None:
+    """操作失误（含 command not found——敲错命令名 vs 缺工具有歧义，
+    保守归 agent，宁可漏判 infra 也不放过真失误）。"""
+    assert classify_tool_error(output) == "agent"
+
+
+def _snap_with_errors(outputs: list[tuple[str, bool]]) -> TraceSnapshot:
+    return TraceSnapshot(tool_results=[
+        ToolResult(seq=i, call_id=f"c{i}", output=text, is_error=err)
+        for i, (text, err) in enumerate(outputs)
+    ])
+
+
+def test_no_tool_errors_ignores_infra_by_default() -> None:
+    """默认 ignore_infra=True：纯环境故障（用户实测的 clone 超时 +
+    ModuleNotFoundError）不再扣过程分，details 标注被忽略的样例。"""
+    snap = _snap_with_errors([
+        ("command timed out after 300s: git clone …", True),
+        ("/usr/bin/python3: No module named pytest", True),
+        ("ok output", False),
+    ])
+    result = score_assertions(snap, [{"type": "no_tool_errors", "weight": 1.0}])
+    assert result.status == "passed"
+    assert result.score == 1.0
+    assert "2 infra error(s) ignored" in result.details[0]
+    assert "command timed out" in result.details[0]
+
+
+def test_no_tool_errors_fails_on_agent_errors() -> None:
+    """Agent 操作失误照常扣分；混合时附 infra 被忽略的计数。"""
+    snap = _snap_with_errors([
+        ("command timed out after 300s: git clone …", True),
+        ("exit 1\nSyntaxError: invalid syntax", True),
+    ])
+    result = score_assertions(snap, [{"type": "no_tool_errors", "weight": 1.0}])
+    assert result.status == "failed"
+    assert result.score == 0.0
+    detail = result.details[0]
+    assert "1 agent tool error(s)" in detail
+    assert "1 infra ignored" in detail
+    assert "SyntaxError" in detail
+
+
+def test_no_tool_errors_count_infra_when_disabled() -> None:
+    """ignore_infra=False：环境错误也计（显式要求全算的语义）。"""
+    snap = _snap_with_errors([
+        ("command timed out after 300s: git clone …", True),
+    ])
+    result = score_assertions(
+        snap, [{"type": "no_tool_errors", "ignore_infra": False, "weight": 1.0}]
+    )
+    assert result.status == "failed"
+    assert "1 agent tool error(s)" in result.details[0]
+
+
+def test_no_tool_errors_clean_run_unaffected() -> None:
+    """无错误轨迹：行为与旧语义一致。"""
+    snap = _snap_with_errors([("ok", False), ("fine", False)])
+    result = score_assertions(snap, [{"type": "no_tool_errors", "weight": 1.0}])
+    assert result.status == "passed"
+    assert result.details[0] == "✓ no_tool_errors: no tool errors"
