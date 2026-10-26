@@ -97,6 +97,8 @@ class PermissionConfig(BaseModel):
 class BudgetConfig(BaseModel):
     max_usd_per_session: float = 2.0
     max_iterations: int = 40
+    warn_threshold: float = 0.8
+    max_usd_per_turn: float = 0.0
 
 
 class ObservabilityConfig(BaseModel):

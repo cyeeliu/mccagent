@@ -10,6 +10,7 @@ import pytest
 from mcc_config import PermissionConfig
 from mcc_core import (
     AgentError,
+    CacheControl,
     TextBlock,
     ToolContext,
     ToolUseBlock,
@@ -29,6 +30,8 @@ from mcc_harness import (
     AgentLoopBuilder,
     AgentRun,
     PermissionChecker,
+    TurnCost,
+    cache_hit_rate,
     permission_request_for,
 )
 from mcc_harness.permission import BashAction, Deny, PathAction, PermissionRequest
@@ -437,3 +440,137 @@ async def test_retry_exhausted_raises(ctx, registry):
     agent = _make_agent(llm, ctx, registry)
     with pytest.raises(RuntimeError, match="429"):
         await agent.run("test")
+
+
+# ---------- Prompt cache system blocks ----------
+
+
+def test_build_system_blocks_with_cache(ctx, registry):
+    """enable_prompt_cache 时 system 包成带 cache_control 的 TextBlock。"""
+    llm = MockLlm([single_text_turn("hi")])
+    agent = _make_agent(llm, ctx, registry, system="You are helpful.")
+    blocks = agent._build_system_blocks()
+    assert isinstance(blocks, list)
+    assert len(blocks) == 1
+    assert blocks[0].text == "You are helpful."
+    assert blocks[0].cache_control is not None
+    assert blocks[0].cache_control.kind == "ephemeral"
+
+
+def test_build_system_blocks_disabled(ctx, registry):
+    """enable_prompt_cache=False 时返回纯字符串。"""
+    llm = MockLlm([single_text_turn("hi")])
+    agent = _make_agent(
+        llm, ctx, registry, system="You are helpful.", enable_prompt_cache=False
+    )
+    assert agent._build_system_blocks() == "You are helpful."
+
+
+def test_build_system_blocks_empty(ctx, registry):
+    """空 system 返回 None。"""
+    llm = MockLlm([single_text_turn("hi")])
+    agent = _make_agent(llm, ctx, registry)
+    assert agent._build_system_blocks() is None
+
+
+# ---------- 预算告警阈值 ----------
+
+
+@pytest.mark.asyncio
+async def test_budget_warn_threshold_emits_notice(ctx, registry):
+    """达告警阈值时发 Notice 但不中断，后续超硬限才 raise。"""
+    turn1 = [
+        ToolUseStart(id="t1", name="run_bash"),
+        ToolUseInputDelta(partial_json=json.dumps({"command": "echo hi"})),
+        MessageStop(
+            stop_reason="tool_use",
+            usage=Usage(input_tokens=10_000_000, output_tokens=0),
+        ),
+    ]
+    turn2 = single_text_turn("done")
+    llm = MockLlm([turn1, turn2])
+    agent = _make_agent(
+        llm, ctx, registry, max_cost_usd=0.01, warn_threshold=0.5
+    )
+    queue: asyncio.Queue = asyncio.Queue()
+    with pytest.raises(AgentError, match="cost"):
+        await agent.run_streaming("test", queue)
+    events = await _collect_events(queue)
+    notices = [e.text for e in events if isinstance(e, Notice)]
+    assert any("Budget warning" in n for n in notices)
+
+
+@pytest.mark.asyncio
+async def test_max_cost_per_turn_emits_notice(ctx, registry):
+    """单轮成本超限时发 Notice，不中断运行。"""
+    turn1 = [
+        ToolUseStart(id="t1", name="run_bash"),
+        ToolUseInputDelta(partial_json=json.dumps({"command": "echo hi"})),
+        MessageStop(
+            stop_reason="tool_use",
+            usage=Usage(input_tokens=10_000_000, output_tokens=0),
+        ),
+    ]
+    turn2 = single_text_turn("done")
+    llm = MockLlm([turn1, turn2])
+    agent = _make_agent(llm, ctx, registry, max_cost_per_turn=0.01)
+    queue: asyncio.Queue = asyncio.Queue()
+    await agent.run_streaming("test", queue)
+    events = await _collect_events(queue)
+    notices = [e.text for e in events if isinstance(e, Notice)]
+    assert any("per-turn limit" in n for n in notices)
+
+
+# ---------- 成本归因 ----------
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_rate_and_cost_breakdown(ctx, registry):
+    """AgentRun 返回 cache_hit_rate 与逐轮 cost_breakdown。"""
+    turn1 = [
+        ToolUseStart(id="t1", name="run_bash"),
+        ToolUseInputDelta(partial_json=json.dumps({"command": "echo hi"})),
+        MessageStop(
+            stop_reason="tool_use",
+            usage=Usage(
+                input_tokens=100,
+                output_tokens=50,
+                cache_read_input_tokens=500,
+                cache_creation_input_tokens=200,
+            ),
+        ),
+    ]
+    turn2 = [
+        TextDelta(text="done"),
+        MessageStop(
+            stop_reason="end_turn",
+            usage=Usage(
+                input_tokens=200,
+                output_tokens=80,
+                cache_read_input_tokens=800,
+            ),
+        ),
+    ]
+    llm = MockLlm([turn1, turn2])
+    agent = _make_agent(llm, ctx, registry)
+    run = await agent.run("test")
+
+    assert run.cache_hit_rate == pytest.approx(1300 / 1800)
+    assert len(run.cost_breakdown) == 2
+    assert run.cost_breakdown[0].iteration == 1
+    assert run.cost_breakdown[0].cache_read_input_tokens == 500
+    assert run.cost_breakdown[0].cache_creation_input_tokens == 200
+    assert run.cost_breakdown[1].iteration == 2
+    assert run.cost_breakdown[1].cache_read_input_tokens == 800
+    assert all(isinstance(tc, TurnCost) for tc in run.cost_breakdown)
+
+
+def test_cache_hit_rate_helper():
+    """cache_hit_rate helper 正确处理边界。"""
+    u = Usage(
+        input_tokens=100,
+        cache_read_input_tokens=300,
+        cache_creation_input_tokens=100,
+    )
+    assert cache_hit_rate(u) == pytest.approx(300 / 500)
+    assert cache_hit_rate(Usage()) == 0.0

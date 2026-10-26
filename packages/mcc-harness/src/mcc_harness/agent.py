@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from mcc_core import (
     AgentError,
+    CacheControl,
     ContentBlock,
     Message,
     PermissionDecision,
@@ -70,6 +71,18 @@ from .permission import (
 
 
 @dataclass
+class TurnCost:
+    """单轮 LLM 调用的成本归因快照。"""
+
+    iteration: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    cost_usd: float
+
+
+@dataclass
 class AgentRun:
     """单次 agent 运行的最终结果。"""
 
@@ -77,6 +90,8 @@ class AgentRun:
     iterations: int
     total_usage: Usage
     cost_usd: float
+    cache_hit_rate: float = 0.0
+    cost_breakdown: list[TurnCost] = field(default_factory=list)
 
 
 def model_price_per_1m(model: str) -> tuple[float, float]:
@@ -102,6 +117,18 @@ def price_usd(model: str, usage: Usage) -> float:
     return (usage.input_tokens / 1_000_000.0) * in_m + (
         usage.output_tokens / 1_000_000.0
     ) * out_m
+
+
+def cache_hit_rate(usage: Usage) -> float:
+    """缓存命中率 = cache_read / (input + cache_read + cache_creation)。"""
+    total_input = (
+        usage.input_tokens
+        + usage.cache_read_input_tokens
+        + usage.cache_creation_input_tokens
+    )
+    if total_input <= 0:
+        return 0.0
+    return usage.cache_read_input_tokens / total_input
 
 
 def permission_request_for(tool_name: str, input: dict[str, Any]) -> PermissionRequest:
@@ -158,6 +185,9 @@ class AgentLoop:
         temperature: float = 0.0,
         permission: PermissionChecker | None = None,
         max_cost_usd: float = 0.0,
+        warn_threshold: float = 0.8,
+        max_cost_per_turn: float = 0.0,
+        enable_prompt_cache: bool = True,
         hooks: HookRegistry | None = None,
         permission_responses: asyncio.Queue[PermissionDecision] | None = None,
         permission_timeout_secs: float = 120.0,
@@ -176,6 +206,9 @@ class AgentLoop:
         self.temperature = temperature
         self.permission = permission
         self.max_cost_usd = max_cost_usd
+        self.warn_threshold = warn_threshold
+        self.max_cost_per_turn = max_cost_per_turn
+        self.enable_prompt_cache = enable_prompt_cache
         self.hooks = hooks
         self.permission_responses = permission_responses
         self.permission_timeout_secs = permission_timeout_secs
@@ -187,6 +220,24 @@ class AgentLoop:
             # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
             # 与 LLM 解耦（纯消息操作可独立测试）
             self.compactor.attach_summarize(self._summarize_history)
+
+    def _build_system_blocks(self) -> str | list[ContentBlock] | None:
+        """构造 system prompt，按需在末尾打 prompt cache 标记。
+
+        Anthropic prompt caching 要求 cache_control 挂在 ContentBlock 上，
+        因此把纯字符串 system 包成 TextBlock 列表再标记最后一个块。
+        OpenAI 端不认 cache_control，provider 会剥离成纯文本。
+        """
+        if not self.system:
+            return None
+        if not self.enable_prompt_cache:
+            return self.system
+        return [
+            TextBlock(
+                text=self.system,
+                cache_control=CacheControl(kind="ephemeral"),
+            )
+        ]
 
     async def _summarize_history(
         self, system: str, messages: list[Message]
@@ -216,9 +267,25 @@ class AgentLoop:
         messages: list[Message] = [*self.history, Message.user(user_input)]
         total_usage = Usage()
         total_cost = 0.0
+        cost_breakdown: list[TurnCost] = []
+        budget_warned = False
+        system_blocks = self._build_system_blocks()
 
         try:
             for iteration in range(1, self.max_iterations + 1):
+                if (
+                    self.max_cost_usd > 0
+                    and not budget_warned
+                    and total_cost >= self.max_cost_usd * self.warn_threshold
+                ):
+                    budget_warned = True
+                    await tx.put(
+                        Notice(
+                            text=f"Budget warning: ${total_cost:.4} / "
+                            f"${self.max_cost_usd:.4} "
+                            f"({total_cost / self.max_cost_usd:.0%})"
+                        )
+                    )
                 if self.max_cost_usd > 0 and total_cost >= self.max_cost_usd:
                     await tx.put(
                         Notice(
@@ -260,7 +327,7 @@ class AgentLoop:
                         model=self.model,
                         max_tokens=self.max_tokens,
                         messages=request_snapshot,
-                        system=self.system or None,
+                        system=system_blocks,
                         temperature=self.temperature,
                         tools=self.registry.as_api_schema(),
                     )
@@ -289,6 +356,29 @@ class AgentLoop:
                 turn_cost = price_usd(self.model, turn_usage)
                 total_cost += turn_cost
                 total_usage = total_usage + turn_usage
+                cost_breakdown.append(
+                    TurnCost(
+                        iteration=iteration,
+                        input_tokens=turn_usage.input_tokens,
+                        output_tokens=turn_usage.output_tokens,
+                        cache_read_input_tokens=turn_usage.cache_read_input_tokens,
+                        cache_creation_input_tokens=(
+                            turn_usage.cache_creation_input_tokens
+                        ),
+                        cost_usd=turn_cost,
+                    )
+                )
+                if (
+                    self.max_cost_per_turn > 0
+                    and turn_cost > self.max_cost_per_turn
+                ):
+                    await tx.put(
+                        Notice(
+                            text=f"Turn {iteration} cost ${turn_cost:.4} "
+                            f"exceeds per-turn limit "
+                            f"${self.max_cost_per_turn:.4}"
+                        )
+                    )
                 # 用量在流结束才可得（请求时未知），流完即刻上事件流——
                 # 评测轨迹与 TUI 的 token 统计以此为权威来源
                 await tx.put(
@@ -336,7 +426,14 @@ class AgentLoop:
                     self.history = list(messages)
                     if self.recorder:
                         await self.recorder.finalize("ended")
-                    return AgentRun(final_text, iteration, total_usage, total_cost)
+                    return AgentRun(
+                        final_text,
+                        iteration,
+                        total_usage,
+                        total_cost,
+                        cache_hit_rate=cache_hit_rate(total_usage),
+                        cost_breakdown=cost_breakdown,
+                    )
 
                 if stop_reason == "tool_use":
                     tool_results = await self._execute_tools(blocks, tx, iteration)
@@ -662,6 +759,9 @@ class AgentLoopBuilder:
         self._temperature = 0.0
         self._permission: PermissionChecker | None = None
         self._max_cost_usd = 0.0
+        self._warn_threshold = 0.8
+        self._max_cost_per_turn = 0.0
+        self._enable_prompt_cache = True
         self._hooks: HookRegistry | None = None
         self._permission_responses: asyncio.Queue[PermissionDecision] | None = None
         self._permission_timeout_secs = 120.0
@@ -696,6 +796,18 @@ class AgentLoopBuilder:
 
     def max_cost_usd(self, usd: float) -> AgentLoopBuilder:
         self._max_cost_usd = usd
+        return self
+
+    def warn_threshold(self, t: float) -> AgentLoopBuilder:
+        self._warn_threshold = t
+        return self
+
+    def max_cost_per_turn(self, usd: float) -> AgentLoopBuilder:
+        self._max_cost_per_turn = usd
+        return self
+
+    def enable_prompt_cache(self, b: bool) -> AgentLoopBuilder:
+        self._enable_prompt_cache = b
         return self
 
     def hooks(self, h: HookRegistry) -> AgentLoopBuilder:
@@ -741,6 +853,9 @@ class AgentLoopBuilder:
             temperature=self._temperature,
             permission=self._permission,
             max_cost_usd=self._max_cost_usd,
+            warn_threshold=self._warn_threshold,
+            max_cost_per_turn=self._max_cost_per_turn,
+            enable_prompt_cache=self._enable_prompt_cache,
             hooks=self._hooks,
             permission_responses=self._permission_responses,
             permission_timeout_secs=self._permission_timeout_secs,

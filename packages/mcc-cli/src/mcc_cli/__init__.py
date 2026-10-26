@@ -216,6 +216,8 @@ def _build_source(
 
     builder = builder.max_cost_usd(config.budget.max_usd_per_session)
     builder = builder.max_iterations(config.budget.max_iterations)
+    builder = builder.warn_threshold(config.budget.warn_threshold)
+    builder = builder.max_cost_per_turn(config.budget.max_usd_per_turn)
 
     if history:
         builder = builder.history(history)

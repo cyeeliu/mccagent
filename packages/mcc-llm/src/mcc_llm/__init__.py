@@ -59,7 +59,7 @@ class CompleteRequest:
     model: str
     max_tokens: int
     messages: list[Message]
-    system: str | None = None
+    system: str | list[ContentBlock] | None = None
     temperature: float | None = None
     tools: list[dict[str, Any]] | None = None
 

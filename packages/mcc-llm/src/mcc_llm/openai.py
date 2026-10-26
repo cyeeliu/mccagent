@@ -61,7 +61,15 @@ class OpenAiClient:
     def _build_body(self, req: CompleteRequest, stream: bool) -> dict:
         messages: list[dict] = []
         if req.system:
-            messages.append({"role": "system", "content": req.system})
+            sys_text = (
+                req.system
+                if isinstance(req.system, str)
+                else "\n\n".join(
+                    b.text for b in req.system if isinstance(b, TextBlock)
+                )
+            )
+            if sys_text:
+                messages.append({"role": "system", "content": sys_text})
         for m in req.messages:
             converted = _message_to_oai(m)
             if isinstance(converted, list):

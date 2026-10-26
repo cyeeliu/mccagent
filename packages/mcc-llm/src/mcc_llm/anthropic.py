@@ -53,7 +53,13 @@ class AnthropicClient:
             "messages": [m.model_dump() for m in req.messages],
         }
         if req.system:
-            body["system"] = req.system
+            if isinstance(req.system, str):
+                body["system"] = req.system
+            else:
+                body["system"] = [
+                    b.model_dump(by_alias=True, exclude_none=True)
+                    for b in req.system
+                ]
         if req.temperature is not None:
             body["temperature"] = req.temperature
         if req.tools:

@@ -50,7 +50,9 @@
   },
   "budget": {
     "max_usd_per_session": 2.0,
-    "max_iterations": 40
+    "max_iterations": 40,
+    "warn_threshold": 0.8,
+    "max_usd_per_turn": 0.0
   },
   "observability": {
     "log_format": "json",
@@ -146,6 +148,8 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 |---|---|---|
 | `max_usd_per_session` | `2.0` | 单次会话成本上限（USD），超限熔断 |
 | `max_iterations` | `40` | 单次运行最大迭代轮数 |
+| `warn_threshold` | `0.8` | 告警阈值（0~1），达 `max_usd_per_session * warn_threshold` 时发 Notice |
+| `max_usd_per_turn` | `0.0` | 单轮成本上限（USD），0.0 表示不限；超限发 Notice |
 
 ## Hooks 配置
 
