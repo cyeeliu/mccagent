@@ -129,6 +129,34 @@ def _build_source(
         asyncio.run(mcp_manager.connect_all(servers))
         mcp_manager.register_all(registry)
 
+    # todo_write：会话内轻量任务清单
+    todo_manager = None
+    if config.todo.enabled:
+        from mcc_tools import TodoManager, TodoWriteTool
+
+        todo_manager = TodoManager()
+        registry.register(TodoWriteTool(todo_manager))
+
+    # task 工具集：持久化任务记录与依赖图
+    if config.tasks.enabled:
+        from mcc_tools import (
+            ClaimTaskTool,
+            CompleteTaskTool,
+            CreateTaskTool,
+            GetTaskTool,
+            ListTasksTool,
+            TaskStore,
+            UpdateTaskTool,
+        )
+
+        task_store = TaskStore(work_dir / ".tasks")
+        registry.register(CreateTaskTool(task_store))
+        registry.register(UpdateTaskTool(task_store))
+        registry.register(ListTasksTool(task_store))
+        registry.register(GetTaskTool(task_store))
+        registry.register(ClaimTaskTool(task_store))
+        registry.register(CompleteTaskTool(task_store))
+
     system = _system_prompt()
     store = MarkdownMemoryStore()
     for tool in memory_tools(store):
@@ -247,6 +275,12 @@ def _build_source(
         )
         builder = builder.goal(goal_controller)
         builder = builder.evaluator_model(evaluator_model)
+
+    if todo_manager is not None:
+        builder = builder.todo(todo_manager)
+        builder = builder.todo_reminder_interval(config.todo.reminder_interval)
+    if config.tasks.enabled:
+        builder = builder.tasks_enabled(True)
 
     agent = builder.build()
     return AgentEventSource(

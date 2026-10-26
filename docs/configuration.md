@@ -67,6 +67,13 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
     }
+  },
+  "todo": {
+    "enabled": true,
+    "reminder_interval": 3
+  },
+  "tasks": {
+    "enabled": true
   }
 }
 ```
@@ -197,6 +204,33 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 | `env` | `dict[str,str]` | 额外环境变量 |
 
 工具注册名格式 `mcp__<server>__<tool>`，与 Claude Code 兼容。home 与 project 配置浅合并（project 覆盖同名 server）。
+
+## Todo 配置
+
+见 [todo.md](todo.md)。
+
+```json
+{"todo": {"enabled": true, "reminder_interval": 3}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭时不注册 todo_write、不注入 reminder |
+| `reminder_interval` | `3` | 连续多少轮未更新触发提醒 |
+
+## Task 配置
+
+见 [tasks.md](tasks.md)。
+
+```json
+{"tasks": {"enabled": true}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭时不注册 6 个 task 工具 |
+
+`.tasks/` 已 gitignore。
 
 ## .env
 

@@ -139,6 +139,26 @@ class GoalConfig(BaseModel):
     max_goal_length: int = 4000
 
 
+class TodoConfig(BaseModel):
+    """todo_write 配置：会话内轻量任务清单。
+
+    ``enabled`` 关闭时不注册 todo_write 工具、不注入 reminder 逻辑。
+    ``reminder_interval`` 轮未更新 todo 时追加提醒。
+    """
+
+    enabled: bool = True
+    reminder_interval: int = 3
+
+
+class TaskConfig(BaseModel):
+    """task 工具集配置：持久化任务记录与依赖图。
+
+    ``enabled`` 关闭时不注册 6 个 task 工具、不创建 .tasks/ 目录。
+    """
+
+    enabled: bool = True
+
+
 class McpServerConfig(BaseModel):
     """单个 MCP server 的启动配置（stdio transport）。
 
@@ -162,4 +182,6 @@ class Config(BaseModel):
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     goal: GoalConfig = Field(default_factory=GoalConfig)
+    todo: TodoConfig = Field(default_factory=TodoConfig)
+    tasks: TaskConfig = Field(default_factory=TaskConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)

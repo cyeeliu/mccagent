@@ -18,6 +18,8 @@
 - **成本优化** — Prompt Caching 降本（system 标记 ephemeral）、三层预算护栏（告警阈值 / 单轮预算 / 会话硬熔断）、逐轮成本归因与缓存命中率
 - **Goal Loop** — `/goal <condition>` 设完成条件，模型想停时由独立 evaluator 判断是否满足，未满足继续循环；block_cap 防死循环
 - **MCP** — stdio JSON-RPC 2.0 连接外部 MCP server，工具适配成 `mcp__<server>__<tool>` 注册到 ToolRegistry，AgentLoop 零改动透明使用
+- **Todo** — `todo_write` 会话内任务清单，替换式更新，连续多轮未更新时 harness 注入提醒
+- **Task** — 持久化任务记录（`.tasks/`）与依赖图，6 工具管理 pending→claim→complete 生命周期，环检测防循环依赖
 - **开箱即用** — pipx/uv 一键安装、Docker 镜像、shell 补全、首次运行引导；无遥测
 
 ## 架构
@@ -135,6 +137,8 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [成本优化](docs/cost.md) | Prompt Caching、预算护栏、成本归因 |
 | [Goal Loop](docs/goal-loop.md) | 完成条件 evaluator、/goal 命令、block_cap |
 | [MCP](docs/mcp.md) | 外部 MCP server 接入、stdio JSON-RPC、工具命名 |
+| [Todo](docs/todo.md) | 会话内任务清单、todo_write 工具、reminder 机制 |
+| [Task](docs/tasks.md) | 持久化任务与依赖图、6 工具、生命周期 |
 | [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
 | [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |

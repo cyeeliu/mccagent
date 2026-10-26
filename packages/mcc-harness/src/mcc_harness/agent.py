@@ -52,6 +52,7 @@ from mcc_session import (
     maybe_generate_title,
 )
 from mcc_tools import ToolRegistry
+from mcc_tools.todo import TodoManager
 
 from mcc_harness.compactor import (
     CompactionReport,
@@ -199,6 +200,9 @@ class AgentLoop:
         history: list[Message] | None = None,
         summarize_model: str | None = None,
         compactor: ContextCompactor | None = None,
+        todo: TodoManager | None = None,
+        todo_reminder_interval: int = 3,
+        tasks_enabled: bool = False,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -221,6 +225,9 @@ class AgentLoop:
         self.recorder = recorder
         self.summarize_model = summarize_model
         self.compactor = compactor
+        self.todo = todo
+        self.todo_reminder_interval = todo_reminder_interval
+        self.tasks_enabled = tasks_enabled
         self.history: list[Message] = list(history) if history else []
         if self.compactor is not None:
             # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
@@ -234,16 +241,36 @@ class AgentLoop:
         因此把纯字符串 system 包成 TextBlock 列表再标记最后一个块。
         OpenAI 端不认 cache_control，provider 会剥离成纯文本。
         """
-        if not self.system:
+        system = self.system
+        guidance = self._system_guidance()
+        if guidance:
+            system = f"{system}\n\n{guidance}" if system else guidance
+        if not system:
             return None
         if not self.enable_prompt_cache:
-            return self.system
+            return system
         return [
             TextBlock(
-                text=self.system,
+                text=system,
                 cache_control=CacheControl(kind="ephemeral"),
             )
         ]
+
+    def _system_guidance(self) -> str:
+        """todo / task 工具的使用引导语。"""
+        parts: list[str] = []
+        if self.todo is not None:
+            parts.append(
+                "Before starting any multi-step task, use todo_write to "
+                "plan your steps. Update status as you go."
+            )
+        if self.tasks_enabled:
+            parts.append(
+                "Use task tools to track dependencies. Create all task "
+                "nodes first; after create_task returns IDs, use "
+                "update_task with those exact IDs to add dependencies."
+            )
+        return "\n\n".join(parts)
 
     async def _summarize_history(
         self, system: str, messages: list[Message]
@@ -276,6 +303,7 @@ class AgentLoop:
         cost_breakdown: list[TurnCost] = []
         budget_warned = False
         system_blocks = self._build_system_blocks()
+        rounds_since_todo = 0
 
         try:
             for iteration in range(1, self.max_iterations + 1):
@@ -518,6 +546,25 @@ class AgentLoop:
                                     "(model-requested)"
                                 )
                             )
+                    if self.todo is not None:
+                        used_todo = any(
+                            isinstance(b, ToolUseBlock) and b.name == "todo_write"
+                            for b in blocks
+                        )
+                        if used_todo:
+                            rounds_since_todo = 0
+                        else:
+                            rounds_since_todo += 1
+                        if (
+                            rounds_since_todo >= self.todo_reminder_interval
+                            and self.todo.has_items
+                        ):
+                            messages.append(
+                                Message.user(
+                                    "<reminder>Update your todos.</reminder>"
+                                )
+                            )
+                            rounds_since_todo = 0
                 else:
                     if self.hooks:
                         ctx = HookContext(
@@ -822,6 +869,9 @@ class AgentLoopBuilder:
         self._history: list[Message] | None = None
         self._summarize_model: str | None = None
         self._compactor: ContextCompactor | None = None
+        self._todo: TodoManager | None = None
+        self._todo_reminder_interval: int = 3
+        self._tasks_enabled: bool = False
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -902,6 +952,18 @@ class AgentLoopBuilder:
         self._summarize_model = m
         return self
 
+    def todo(self, t: TodoManager) -> AgentLoopBuilder:
+        self._todo = t
+        return self
+
+    def todo_reminder_interval(self, n: int) -> AgentLoopBuilder:
+        self._todo_reminder_interval = n
+        return self
+
+    def tasks_enabled(self, b: bool) -> AgentLoopBuilder:
+        self._tasks_enabled = b
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -926,4 +988,7 @@ class AgentLoopBuilder:
             history=self._history,
             summarize_model=self._summarize_model,
             compactor=self._compactor,
+            todo=self._todo,
+            todo_reminder_interval=self._todo_reminder_interval,
+            tasks_enabled=self._tasks_enabled,
         )

@@ -21,6 +21,8 @@ from mcc_config.models import (
     PermissionConfig,
     SandboxConfig,
     SkillsConfig,
+    TaskConfig,
+    TodoConfig,
 )
 
 _DEFAULT_CONFIG = Config(
@@ -106,6 +108,10 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.skills = project.skills
     if project.goal != GoalConfig():
         base.goal = project.goal
+    if project.todo != TodoConfig():
+        base.todo = project.todo
+    if project.tasks != TaskConfig():
+        base.tasks = project.tasks
     if project.mcp_servers:
         base.mcp_servers = project.mcp_servers
 

@@ -17,6 +17,16 @@ from .list_dir import ListDirTool
 from .load_skill import LoadSkillTool
 from .read_file import ReadFileTool
 from .run_bash import RunBashTool
+from .task import (
+    ClaimTaskTool,
+    CompleteTaskTool,
+    CreateTaskTool,
+    GetTaskTool,
+    ListTasksTool,
+    TaskStore,
+    UpdateTaskTool,
+)
+from .todo import TodoManager, TodoWriteTool
 from .write_file import WriteFileTool
 
 
@@ -73,15 +83,24 @@ def default_registry() -> ToolRegistry:
 
 
 __all__ = [
+    "ClaimTaskTool",
     "CompactTool",
+    "CompleteTaskTool",
+    "CreateTaskTool",
     "EditFileTool",
+    "GetTaskTool",
     "GlobTool",
     "GrepTool",
     "ListDirTool",
+    "ListTasksTool",
     "LoadSkillTool",
     "ReadFileTool",
     "RunBashTool",
+    "TaskStore",
+    "TodoManager",
+    "TodoWriteTool",
     "ToolRegistry",
+    "UpdateTaskTool",
     "WriteFileTool",
     "default_registry",
 ]

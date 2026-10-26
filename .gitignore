@@ -12,3 +12,6 @@ node_modules/
 
 # mcc-eval 评测产物（轨迹/报告/结果缓存）
 eval-runs/
+
+# task 工具集持久化任务记录（运行时状态）
+.tasks/
