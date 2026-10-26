@@ -21,6 +21,7 @@ mcc-harness = { workspace = true }
 mcc-tui = { workspace = true }
 mcc-cli = { workspace = true }
 mcc-eval = { workspace = true }
+mcc-skills = { workspace = true }
 
 [dependency-groups]
 dev = [

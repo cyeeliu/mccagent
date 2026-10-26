@@ -90,6 +90,7 @@ def _build_source(
     history: list | None = None,
     session_id: str | None = None,
     no_compact: bool = False,
+    no_skills: bool = False,
     llm_base_url: str | None = None,
 ) -> EventSource:
     """构建事件源：mock 模式用 MockLlm，否则用真实 LLM。
@@ -126,6 +127,35 @@ def _build_source(
     index = store.index_text()
     if index:
         system = f"{system}\n\n# Memory Index\n{index}"
+
+    slash_resolver = None
+    if config.skills.enabled and not no_skills:
+        from functools import partial
+
+        from mcc_skills import (
+            SkillRouter,
+            load_commands_merged,
+            load_skills_merged,
+            resolve_slash,
+        )
+        from mcc_tools import LoadSkillTool
+
+        skills = load_skills_merged(
+            Path.home() / ".mcc" / "skills",
+            work_dir / "skills",
+        )
+        if skills:
+            catalog = SkillRouter(skills).catalog_for_prompt()
+            if catalog:
+                system = f"{system}\n\n{catalog}"
+            registry.register(LoadSkillTool(skills))
+
+        commands = load_commands_merged(
+            Path.home() / ".mcc" / "commands",
+            work_dir / "commands",
+        )
+        if commands:
+            slash_resolver = partial(resolve_slash, commands)
 
     if mock or mock_script:
         from mcc_llm.mock import MockLlm
@@ -194,7 +224,7 @@ def _build_source(
         builder = builder.hooks(hook_registry)
 
     agent = builder.build()
-    return AgentEventSource(agent)
+    return AgentEventSource(agent, slash_resolver=slash_resolver)
 
 
 def _parse_mock_script(path: str) -> list:
@@ -452,6 +482,7 @@ def _run_resume_cmd(
     mock_script: str | None,
     llm_base_url: str | None = None,
     no_compact: bool = False,
+    no_skills: bool = False,
 ) -> None:
     """resume 子命令：加载历史会话并继续对话。"""
     from mcc_session import SessionNotFoundError, load_session
@@ -484,6 +515,7 @@ def _run_resume_cmd(
         session_id=meta.id,
         llm_base_url=llm_base_url,
         no_compact=no_compact,
+        no_skills=no_skills,
     )
     replay = _history_events(history, cost_usd=meta.cost_usd)
     sys.exit(
@@ -508,6 +540,12 @@ def _run_resume_cmd(
     "no_compact",
     is_flag=True,
     help="禁用上下文自动压缩（长会话可能因上下文超限失败）",
+)
+@click.option(
+    "--no-skills",
+    "no_skills",
+    is_flag=True,
+    help="禁用技能与 slash 命令加载",
 )
 @click.option(
     "--llm-base-url",
@@ -541,6 +579,7 @@ def main(
     mock_script: str | None,
     llm_base_url: str | None,
     no_compact: bool,
+    no_skills: bool,
     older_than: str | None,
     args: tuple[str, ...],
 ) -> None:
@@ -575,7 +614,7 @@ def main(
 
     if cmd == "resume":
         _run_resume_cmd(args, work_dir, model, mock, mock_script, llm_base_url,
-                         no_compact)
+                         no_compact, no_skills)
         return
 
     has_llm = bool(
@@ -586,7 +625,8 @@ def main(
 
     if has_llm:
         source = _build_source(work_dir, model, mock, mock_script,
-                               llm_base_url=llm_base_url, no_compact=no_compact)
+                               llm_base_url=llm_base_url,
+                               no_compact=no_compact, no_skills=no_skills)
     elif prompt is not None:
         _print_onboarding()
         sys.exit(2)

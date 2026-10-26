@@ -7,12 +7,14 @@ license = "MIT"
 dependencies = [
     "mcc-core",
     "mcc-config",
+    "mcc-skills",
     "pydantic>=2.9",
     "pathspec>=0.12",
 ]
 
 [tool.uv.sources]
 mcc-config = { workspace = true }
+mcc-skills = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

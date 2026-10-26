@@ -114,6 +114,16 @@ class HooksConfig(BaseModel):
     post_tool_use: list[HookEntry] = Field(default_factory=list)
 
 
+class SkillsConfig(BaseModel):
+    """技能与 slash 命令加载配置。
+
+    ``enabled`` 关闭时不扫描 skills/commands 目录、不注入 catalog、
+    不注册 load_skill 工具（行为与历史版本一致）。
+    """
+
+    enabled: bool = True
+
+
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -123,3 +133,4 @@ class Config(BaseModel):
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)

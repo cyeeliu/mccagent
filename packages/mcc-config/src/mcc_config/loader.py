@@ -19,6 +19,7 @@ from mcc_config.models import (
     ModelConfig,
     PermissionConfig,
     SandboxConfig,
+    SkillsConfig,
 )
 
 _DEFAULT_CONFIG = Config(
@@ -100,6 +101,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.sandbox = project.sandbox
     if project.context != ContextConfig():
         base.context = project.context
+    if project.skills != SkillsConfig():
+        base.skills = project.skills
 
     return base
 

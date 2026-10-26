@@ -1,0 +1,13 @@
+[project]
+name = "mcc-skills"
+version = "0.1.0"
+description = "Skill 与 Slash Command 加载（懒加载 catalog + load_skill 工具）"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

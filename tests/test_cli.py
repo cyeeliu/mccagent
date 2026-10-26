@@ -612,3 +612,97 @@ class TestBuildSourceSubagent:
         tool = source.agent.registry.get("spawn_subagent")
         assert tool.presets["code_explorer"].model == "proj-sub"
         assert tool.presets["summarizer"].model == "proj-sum"
+
+
+class TestBuildSourceSkills:
+    """skills 加载与 slash 命令接入 _build_source。"""
+
+    @staticmethod
+    def _write_skill(root: Path, name: str, desc: str = "d") -> None:
+        d = root / "skills" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {desc}\n---\n# {name}\nbody",
+            encoding="utf-8",
+        )
+
+    def test_catalog_injected_into_system(self, tmp_path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        self._write_skill(tmp_path, "reviewer", "review code")
+        source = _build_source(tmp_path, None, True, None)
+        assert "Available Skills" in source.agent.system
+        assert "reviewer" in source.agent.system
+
+    def test_load_skill_registered(self, tmp_path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        self._write_skill(tmp_path, "x")
+        source = _build_source(tmp_path, None, True, None)
+        assert source.agent.registry.get("load_skill") is not None
+
+    def test_no_skills_flag_skips_loading(self, tmp_path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        self._write_skill(tmp_path, "x")
+        source = _build_source(tmp_path, None, True, None, no_skills=True)
+        assert "Available Skills" not in source.agent.system
+        assert source.agent.registry.get("load_skill") is None
+
+    def test_empty_skills_dir_no_catalog(self, tmp_path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        source = _build_source(tmp_path, None, True, None)
+        assert "Available Skills" not in source.agent.system
+        assert source.agent.registry.get("load_skill") is None
+
+    def test_slash_resolver_attached(self, tmp_path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        cmds = tmp_path / "commands"
+        cmds.mkdir()
+        (cmds / "test.md").write_text(
+            "---\ncommand: /test\ndescription: d\n---\nrun pytest",
+            encoding="utf-8",
+        )
+        source = _build_source(tmp_path, None, True, None)
+        assert source._slash_resolver is not None
+        assert source._slash_resolver("/test") == "run pytest"
+
+    def test_slash_resolver_passes_through_unknown(self, tmp_path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        cmds = tmp_path / "commands"
+        cmds.mkdir()
+        (cmds / "test.md").write_text(
+            "---\ncommand: /test\ndescription: d\n---\nbody", encoding="utf-8"
+        )
+        source = _build_source(tmp_path, None, True, None)
+        assert source._slash_resolver("/unknown") is None
+
+    def test_no_slash_resolver_when_disabled(self, tmp_path, monkeypatch):
+        from mcc_cli import _build_source
+
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        cmds = tmp_path / "commands"
+        cmds.mkdir()
+        (cmds / "test.md").write_text(
+            "---\ncommand: /test\ndescription: d\n---\nbody", encoding="utf-8"
+        )
+        source = _build_source(tmp_path, None, True, None, no_skills=True)
+        assert source._slash_resolver is None
+
+    def test_home_skills_loaded(self, tmp_path, monkeypatch):
+        from mcc_cli import _build_source
+
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        self._write_skill(home / ".mcc", "global-skill", "global")
+        source = _build_source(tmp_path, None, True, None)
+        assert "global-skill" in source.agent.system

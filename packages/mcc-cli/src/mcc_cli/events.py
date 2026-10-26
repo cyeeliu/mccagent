@@ -7,7 +7,7 @@ EventSource 协议定义 Agent 事件流的统一接口，
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Protocol, runtime_checkable
 
 from mcc_core import AgentEvent, Notice, TextDelta, ToolCallEnd, ToolCallStart, TurnEnd, UserEcho
@@ -55,10 +55,19 @@ class AgentEventSource(EventSource):
     与 EventSource.run 的 pull 模型（async generator）。
     """
 
-    def __init__(self, agent: object) -> None:
+    def __init__(
+        self,
+        agent: object,
+        slash_resolver: Callable[[str], str | None] | None = None,
+    ) -> None:
         self.agent = agent
+        self._slash_resolver = slash_resolver
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
+        if self._slash_resolver is not None:
+            resolved = self._slash_resolver(prompt)
+            if resolved is not None:
+                prompt = resolved
         queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
 
         async def worker() -> None:

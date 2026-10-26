@@ -14,6 +14,7 @@ from .edit_file import EditFileTool
 from .glob_tool import GlobTool
 from .grep import GrepTool
 from .list_dir import ListDirTool
+from .load_skill import LoadSkillTool
 from .read_file import ReadFileTool
 from .run_bash import RunBashTool
 from .write_file import WriteFileTool
@@ -77,6 +78,7 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "ListDirTool",
+    "LoadSkillTool",
     "ReadFileTool",
     "RunBashTool",
     "ToolRegistry",

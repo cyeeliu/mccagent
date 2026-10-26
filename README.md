@@ -12,6 +12,7 @@
 - **Hooks** — pre/post-tool 外部脚本钩子，可阻止工具执行或改写输入输出
 - **会话持久化** — JSONL 逐轮快照落盘，`resume` 恢复上下文继续对话，自动生成会话标题
 - **长期记忆** — Markdown 记忆库 + 记忆索引注入 system prompt
+- **Skills 与 Slash Commands** — 懒加载技能包：system prompt 注入轻量 catalog，模型按需 `load_skill` 读取完整指令；`/xxx` slash 命令进 AgentLoop 前替换
 - **子代理并行执行** — 预设角色（代码探索 / 测试运行 / 摘要），信号量并发上限 + 超时 + token 预算三重护栏
 - **多 provider** — Anthropic 原生 API + OpenAI 兼容端点（DeepSeek / Kimi / Qwen / Groq / vLLM / OpenRouter），`--llm-base-url` 一键接入企业自托管网关
 - **成本追踪** — 按模型定价表计算 USD 成本，会话级预算熔断
@@ -19,7 +20,7 @@
 
 ## 架构
 
-8 个 package，职责单一，自底向上：
+9 个 package，职责单一，自底向上：
 
 ```
           mcc-cli
@@ -31,12 +32,14 @@
         ┌───────────┼───────────┐
         │           │           │
     mcc-tools   mcc-session   mcc-llm
-        │           │           │
-        └───────────┴─────┬─────┘
-                          │
-                      mcc-core
-                          │
-                      mcc-config
+     │ │           │           │
+     │ └───────────┴─────┬─────┘
+     │                   │
+     │               mcc-core
+     │                   │
+     │               mcc-config
+     │
+  mcc-skills
 ```
 
 | package | 职责 |
@@ -44,7 +47,8 @@
 | `mcc-core` | 核心类型：Message / ContentBlock / Tool / AgentEvent / AgentError |
 | `mcc-config` | 配置加载（settings.json，home + project 合并） |
 | `mcc-llm` | LLM provider 抽象与实现（Anthropic / OpenAI 兼容 / Mock） |
-| `mcc-tools` | 内建工具集合（read / write / edit / bash / grep / glob / list） |
+| `mcc-tools` | 内建工具集合（read / write / edit / bash / grep / glob / list / load_skill） |
+| `mcc-skills` | Skill 与 Slash Command 加载（懒加载 catalog） |
 | `mcc-session` | 会话持久化 + 长期记忆（JSONL / Markdown） |
 | `mcc-harness` | Agent 主循环、权限、hooks、子代理 |
 | `mcc-tui` | Rich/Textual 终端 UI |
@@ -109,6 +113,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | `mcc resume <id>` | 恢复历史会话继续对话 |
 | `mcc completion <bash\|zsh\|fish>` | 输出 shell 补全脚本 |
 | `mcc update` | 检查 PyPI 新版本并提示升级 |
+| `mcc --no-skills` | 禁用技能与 slash 命令加载 |
 | `mcc version` | 版本号 |
 
 ## 文档
@@ -123,6 +128,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [会话与记忆](docs/sessions.md) | JSONL 快照、resume、Markdown 记忆库 |
 | [上下文压缩](docs/context-compaction.md) | 四步管线、compact 工具、reactive 补救 |
 | [子代理](docs/subagents.md) | 预设角色、并发护栏、fan-out 用法 |
+| [Skills](docs/skills.md) | 技能包与 slash 命令、懒加载 catalog、load_skill 工具 |
 | [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
 | [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |

@@ -17,6 +17,7 @@ from mcc_config.models import (
     ObservabilityConfig,
     PermissionConfig,
     SandboxConfig,
+    SkillsConfig,
 )
 from mcc_config.resolve import DEFAULT_MODEL, build_llm_provider, resolve_model
 
@@ -35,6 +36,7 @@ __all__ = [
     "LlmConfig",
     "ModelConfig",
     "SandboxConfig",
+    "SkillsConfig",
     "ObservabilityConfig",
     "PermissionConfig",
 ]
