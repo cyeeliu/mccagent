@@ -22,6 +22,7 @@ from mcc_config.models import (
     SandboxConfig,
     SkillsConfig,
     TaskConfig,
+    TeamConfig,
     TodoConfig,
 )
 
@@ -114,6 +115,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.tasks = project.tasks
     if project.mcp_servers:
         base.mcp_servers = project.mcp_servers
+    if project.team != TeamConfig():
+        base.team = project.team
 
     return base
 

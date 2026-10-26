@@ -138,6 +138,7 @@ def _build_source(
         registry.register(TodoWriteTool(todo_manager))
 
     # task 工具集：持久化任务记录与依赖图
+    task_store = None
     if config.tasks.enabled:
         from mcc_tools import (
             ClaimTaskTool,
@@ -251,6 +252,33 @@ def _build_source(
     checker = PermissionChecker(config.permissions)
     builder = builder.permission(checker)
 
+    # 多 Agent 团队：长驻 teammate 协作
+    team_manager = None
+    if config.team.enabled:
+        from mcc_harness import (
+            MessageBus,
+            PlanStore,
+            TeammateManager,
+            register_team_tools,
+        )
+
+        bus = MessageBus(work_dir)
+        plan_store = PlanStore()
+        team_manager = TeammateManager(
+            llm=llm,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            base_dir=work_dir,
+            worktree_enabled=config.team.worktree_enabled,
+            max_teammates=config.team.max_teammates,
+            default_model=resolve_model("subagent", config=config),
+            hooks=hook_registry,
+            permission=checker,
+        )
+        register_team_tools(registry, team_manager)
+
     builder = builder.max_cost_usd(config.budget.max_usd_per_session)
     builder = builder.max_iterations(config.budget.max_iterations)
     builder = builder.warn_threshold(config.budget.warn_threshold)
@@ -287,6 +315,7 @@ def _build_source(
         agent,
         slash_resolver=slash_resolver,
         goal_controller=goal_controller,
+        team_manager=team_manager,
     )
 
 
@@ -385,6 +414,13 @@ async def _run_tui_mode(
                 from mcc_core import Error as ErrorEvent
 
                 await event_queue.put(ErrorEvent(text=str(exc)))
+            team_mgr = getattr(source, "team_manager", None)
+            if team_mgr is not None:
+                inbox = await team_mgr.consume_lead_inbox()
+                if inbox:
+                    from mcc_harness import format_team_events
+
+                    input_queue.put_nowait(format_team_events(inbox))
 
     worker = asyncio.create_task(agent_worker())
     try:

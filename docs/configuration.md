@@ -232,6 +232,23 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 
 `.tasks/` 已 gitignore。
 
+## 多 Agent 团队配置
+
+见 [agent-team.md](agent-team.md)。
+
+```json
+{"team": {"enabled": true, "max_teammates": 4, "default_model": "claude-haiku-4-5", "worktree_enabled": false}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 关闭时不注册团队工具、不创建 TeammateManager |
+| `max_teammates` | `4` | 同时活跃的 teammate 上限 |
+| `default_model` | `claude-haiku-4-5` | teammate 默认模型 |
+| `worktree_enabled` | `false` | 为 teammate 开启 git worktree 隔离 |
+
+`.mailboxes/` 和 `.worktrees/` 已 gitignore。
+
 ## .env
 
 项目根目录的 `.env` 自动加载（参考 [.env.example](../.env.example)），已存在的环境变量不会被覆盖。

@@ -35,6 +35,7 @@ from mcc_harness.hooks import (
     PythonHook,
     ShellHook,
 )
+from mcc_harness.mailbox import Message, MessageBus
 from mcc_harness.permission import (
     Action,
     Allow,
@@ -47,6 +48,7 @@ from mcc_harness.permission import (
     PermissionRequest,
     bash_word_match,
 )
+from mcc_harness.plan import PlanError, PlanRequest, PlanStore
 from mcc_harness.subagent import (
     SpawnSubagentTool,
     SubagentResult,
@@ -54,6 +56,27 @@ from mcc_harness.subagent import (
     SubagentSpec,
     default_presets,
     token_budget_to_usd,
+)
+from mcc_harness.teammate import (
+    CreateWorktreeTool,
+    ListTeammatesTool,
+    RequestShutdownTool,
+    ReviewPlanTool,
+    SendTeammateMessageTool,
+    SendToLeadTool,
+    SpawnTeammateTool,
+    SubmitPlanTool,
+    TeammateInfo,
+    TeammateManager,
+    TeammateRuntime,
+    TeammateSpec,
+    format_team_events,
+    register_team_tools,
+)
+from mcc_harness.worktree import (
+    WorktreeError,
+    create_worktree,
+    remove_worktree,
 )
 
 __all__ = [
@@ -65,6 +88,7 @@ __all__ = [
     "AgentRun",
     "TurnCost",
     "cache_hit_rate",
+    "CreateWorktreeTool",
     "GoalController",
     "GoalError",
     "GoalEvaluation",
@@ -83,20 +107,41 @@ __all__ = [
     "HookRegistry",
     "HookResult",
     "HookType",
+    "ListTeammatesTool",
+    "Message",
+    "MessageBus",
     "PathAction",
     "PermissionChecker",
     "PermissionRequest",
+    "PlanError",
+    "PlanRequest",
+    "PlanStore",
     "PythonHook",
+    "RequestShutdownTool",
+    "ReviewPlanTool",
+    "SendToLeadTool",
+    "SendTeammateMessageTool",
     "ShellHook",
     "SpawnSubagentTool",
+    "SpawnTeammateTool",
     "SubagentResult",
     "SubagentRunner",
     "SubagentSpec",
+    "SubmitPlanTool",
+    "TeammateInfo",
+    "TeammateManager",
+    "TeammateRuntime",
+    "TeammateSpec",
+    "WorktreeError",
     "bash_word_match",
+    "create_worktree",
     "default_presets",
+    "format_team_events",
     "model_price_per_1m",
     "permission_request_for",
     "price_usd",
+    "register_team_tools",
+    "remove_worktree",
     "token_budget_to_usd",
 ]
 __version__ = "0.1.0"

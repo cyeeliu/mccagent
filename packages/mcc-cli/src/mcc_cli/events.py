@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from mcc_core import (
     AgentEvent,
@@ -70,10 +70,12 @@ class AgentEventSource(EventSource):
         agent: object,
         slash_resolver: Callable[[str], str | None] | None = None,
         goal_controller: GoalController | None = None,
+        team_manager: Any | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
         self._goal_controller = goal_controller
+        self.team_manager = team_manager
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
         if self._goal_controller is not None:

@@ -171,6 +171,19 @@ class McpServerConfig(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
 
 
+class TeamConfig(BaseModel):
+    """多 Agent 团队配置：长驻 teammate 协作。
+
+    ``enabled`` 关闭时不注册团队工具、不创建 TeammateManager。
+    ``worktree_enabled`` 为 teammate 开启 git worktree 隔离。
+    """
+
+    enabled: bool = False
+    max_teammates: int = 4
+    default_model: str = "claude-haiku-4-5"
+    worktree_enabled: bool = False
+
+
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -185,3 +198,4 @@ class Config(BaseModel):
     todo: TodoConfig = Field(default_factory=TodoConfig)
     tasks: TaskConfig = Field(default_factory=TaskConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+    team: TeamConfig = Field(default_factory=TeamConfig)

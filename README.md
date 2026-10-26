@@ -20,6 +20,7 @@
 - **MCP** — stdio JSON-RPC 2.0 连接外部 MCP server，工具适配成 `mcp__<server>__<tool>` 注册到 ToolRegistry，AgentLoop 零改动透明使用
 - **Todo** — `todo_write` 会话内任务清单，替换式更新，连续多轮未更新时 harness 注入提醒
 - **Task** — 持久化任务记录（`.tasks/`）与依赖图，6 工具管理 pending→claim→complete 生命周期，环检测防循环依赖
+- **多 Agent 团队** — 长驻 teammate 协作：MessageBus 文件持久化通信、Plan approval 审批、git worktree 隔离、idle task 自动 claim、lead wake 消息注入
 - **开箱即用** — pipx/uv 一键安装、Docker 镜像、shell 补全、首次运行引导；无遥测
 
 ## 架构
@@ -139,6 +140,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [MCP](docs/mcp.md) | 外部 MCP server 接入、stdio JSON-RPC、工具命名 |
 | [Todo](docs/todo.md) | 会话内任务清单、todo_write 工具、reminder 机制 |
 | [Task](docs/tasks.md) | 持久化任务与依赖图、6 工具、生命周期 |
+| [多 Agent 团队](docs/agent-team.md) | 长驻 teammate、MessageBus、Plan approval、Worktree 隔离 |
 | [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
 | [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |
