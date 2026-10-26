@@ -16,6 +16,7 @@ from mcc_config.models import (
     BudgetConfig,
     Config,
     ContextConfig,
+    GoalConfig,
     ModelConfig,
     PermissionConfig,
     SandboxConfig,
@@ -103,6 +104,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.context = project.context
     if project.skills != SkillsConfig():
         base.skills = project.skills
+    if project.goal != GoalConfig():
+        base.goal = project.goal
 
     return base
 

@@ -16,6 +16,16 @@ from mcc_harness.agent import (
     price_usd,
 )
 from mcc_harness.compactor import CompactionReport, ContextCompactor
+from mcc_harness.goal import (
+    GoalController,
+    GoalError,
+    GoalEvaluation,
+    GoalEvent,
+    GoalState,
+    PromptGoalEvaluator,
+    StopDecision,
+    transcript_text,
+)
 from mcc_harness.hooks import (
     Hook,
     HookContext,
@@ -55,6 +65,14 @@ __all__ = [
     "AgentRun",
     "TurnCost",
     "cache_hit_rate",
+    "GoalController",
+    "GoalError",
+    "GoalEvaluation",
+    "GoalEvent",
+    "GoalState",
+    "PromptGoalEvaluator",
+    "StopDecision",
+    "transcript_text",
     "Allow",
     "Ask",
     "BashAction",

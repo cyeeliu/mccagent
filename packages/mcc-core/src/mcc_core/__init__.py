@@ -14,6 +14,7 @@ from mcc_core.error import (
 from mcc_core.event import (
     AgentEvent,
     Error,
+    GoalStatus,
     Notice,
     PermissionDecision,
     PermissionRequest,
@@ -44,6 +45,7 @@ __all__ = [
     "ToolError",
     "AgentEvent",
     "Error",
+    "GoalStatus",
     "Notice",
     "PermissionDecision",
     "PermissionRequest",

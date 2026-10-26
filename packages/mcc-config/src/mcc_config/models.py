@@ -126,6 +126,19 @@ class SkillsConfig(BaseModel):
     enabled: bool = True
 
 
+class GoalConfig(BaseModel):
+    """Goal Loop 配置：模型想停时由独立 evaluator 判断完成条件。
+
+    ``enabled`` 关闭时完全不注入 GoalController（行为与历史版本一致）。
+    ``evaluator_model`` 未配时回落 summarize_model → main model。
+    """
+
+    enabled: bool = True
+    evaluator_model: str | None = None
+    block_cap: int = 8
+    max_goal_length: int = 4000
+
+
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -136,3 +149,4 @@ class Config(BaseModel):
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    goal: GoalConfig = Field(default_factory=GoalConfig)

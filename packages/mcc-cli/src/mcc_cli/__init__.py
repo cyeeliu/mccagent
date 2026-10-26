@@ -225,8 +225,26 @@ def _build_source(
     if hook_registry is not None:
         builder = builder.hooks(hook_registry)
 
+    goal_controller = None
+    if config.goal.enabled:
+        from mcc_harness import GoalController, PromptGoalEvaluator
+
+        evaluator_model = config.goal.evaluator_model or summarize_model
+        evaluator = PromptGoalEvaluator(llm=llm, model=evaluator_model)
+        goal_controller = GoalController(
+            evaluator=evaluator,
+            block_cap=config.goal.block_cap,
+            max_goal_length=config.goal.max_goal_length,
+        )
+        builder = builder.goal(goal_controller)
+        builder = builder.evaluator_model(evaluator_model)
+
     agent = builder.build()
-    return AgentEventSource(agent, slash_resolver=slash_resolver)
+    return AgentEventSource(
+        agent,
+        slash_resolver=slash_resolver,
+        goal_controller=goal_controller,
+    )
 
 
 def _parse_mock_script(path: str) -> list:

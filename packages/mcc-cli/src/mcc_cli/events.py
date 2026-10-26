@@ -10,7 +10,17 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from typing import Protocol, runtime_checkable
 
-from mcc_core import AgentEvent, Notice, TextDelta, ToolCallEnd, ToolCallStart, TurnEnd, UserEcho
+from mcc_core import (
+    AgentEvent,
+    GoalStatus,
+    Notice,
+    TextDelta,
+    ToolCallEnd,
+    ToolCallStart,
+    TurnEnd,
+    UserEcho,
+)
+from mcc_harness.goal import CLEAR_ALIASES, GoalController
 
 
 @runtime_checkable
@@ -59,11 +69,42 @@ class AgentEventSource(EventSource):
         self,
         agent: object,
         slash_resolver: Callable[[str], str | None] | None = None,
+        goal_controller: GoalController | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
+        self._goal_controller = goal_controller
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
+        if self._goal_controller is not None:
+            stripped = prompt.strip()
+            if stripped == "/goal":
+                yield GoalStatus(
+                    action="status",
+                    condition="",
+                    reason=self._goal_controller.status(),
+                    iterations=0,
+                )
+                return
+            if stripped.startswith("/goal "):
+                arg = stripped[6:].strip()
+                if arg.lower() in CLEAR_ALIASES:
+                    self._goal_controller.clear()
+                    yield GoalStatus(
+                        action="cleared",
+                        condition="",
+                        reason="goal cleared",
+                        iterations=0,
+                    )
+                    return
+                self._goal_controller.set_goal(arg)
+                yield GoalStatus(
+                    action="set",
+                    condition=arg,
+                    reason="goal set",
+                    iterations=0,
+                )
+                prompt = arg
         if self._slash_resolver is not None:
             resolved = self._slash_resolver(prompt)
             if resolved is not None:

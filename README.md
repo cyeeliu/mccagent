@@ -16,6 +16,7 @@
 - **子代理并行执行** — 预设角色（代码探索 / 测试运行 / 摘要），信号量并发上限 + 超时 + token 预算三重护栏
 - **多 provider** — Anthropic 原生 API + OpenAI 兼容端点（DeepSeek / Kimi / Qwen / Groq / vLLM / OpenRouter），`--llm-base-url` 一键接入企业自托管网关
 - **成本优化** — Prompt Caching 降本（system 标记 ephemeral）、三层预算护栏（告警阈值 / 单轮预算 / 会话硬熔断）、逐轮成本归因与缓存命中率
+- **Goal Loop** — `/goal <condition>` 设完成条件，模型想停时由独立 evaluator 判断是否满足，未满足继续循环；block_cap 防死循环
 - **开箱即用** — pipx/uv 一键安装、Docker 镜像、shell 补全、首次运行引导；无遥测
 
 ## 架构
@@ -130,6 +131,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [子代理](docs/subagents.md) | 预设角色、并发护栏、fan-out 用法 |
 | [Skills](docs/skills.md) | 技能包与 slash 命令、懒加载 catalog、load_skill 工具 |
 | [成本优化](docs/cost.md) | Prompt Caching、预算护栏、成本归因 |
+| [Goal Loop](docs/goal-loop.md) | 完成条件 evaluator、/goal 命令、block_cap |
 | [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
 | [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |

@@ -23,6 +23,7 @@ from mcc_core import (
 )
 from mcc_core.event import (
     AgentEvent,
+    GoalStatus,
     LlmUsage,
     Notice,
     TextDelta,
@@ -58,6 +59,7 @@ from mcc_harness.compactor import (
     is_too_long_error,
 )
 
+from .goal import GoalController
 from .hooks import HookContext, HookRegistry, HookType
 from .permission import (
     Allow,
@@ -188,6 +190,8 @@ class AgentLoop:
         warn_threshold: float = 0.8,
         max_cost_per_turn: float = 0.0,
         enable_prompt_cache: bool = True,
+        goal: GoalController | None = None,
+        evaluator_model: str | None = None,
         hooks: HookRegistry | None = None,
         permission_responses: asyncio.Queue[PermissionDecision] | None = None,
         permission_timeout_secs: float = 120.0,
@@ -209,6 +213,8 @@ class AgentLoop:
         self.warn_threshold = warn_threshold
         self.max_cost_per_turn = max_cost_per_turn
         self.enable_prompt_cache = enable_prompt_cache
+        self.goal = goal
+        self.evaluator_model = evaluator_model
         self.hooks = hooks
         self.permission_responses = permission_responses
         self.permission_timeout_secs = permission_timeout_secs
@@ -399,6 +405,51 @@ class AgentLoop:
                     final_text = "\n".join(
                         b.text for b in blocks if isinstance(b, TextBlock)
                     )
+                    if self.goal is not None:
+                        decision = await self.goal.evaluate_after_turn(
+                            messages
+                        )
+                        cond = (
+                            self.goal.active.condition
+                            if self.goal.active
+                            else ""
+                        )
+                        iters = (
+                            self.goal.active.iterations
+                            if self.goal.active
+                            else 0
+                        )
+                        await tx.put(
+                            GoalStatus(
+                                action=decision.action,
+                                condition=cond,
+                                reason=decision.reason,
+                                iterations=iters,
+                            )
+                        )
+                        if (
+                            decision.action == "block"
+                            and self.goal.active is not None
+                        ):
+                            await self._record_turn(
+                                tx,
+                                iteration,
+                                request_snapshot,
+                                blocks,
+                                [],
+                                turn_usage,
+                                turn_cost,
+                            )
+                            messages.append(
+                                Message.user(
+                                    f"[Goal still active]\n"
+                                    f"Condition: {cond}\n"
+                                    f"Evaluator: {decision.reason}\n"
+                                    "Continue working and surface the "
+                                    "missing evidence."
+                                )
+                            )
+                            continue
                     await self._record_turn(
                         tx,
                         iteration,
@@ -762,6 +813,8 @@ class AgentLoopBuilder:
         self._warn_threshold = 0.8
         self._max_cost_per_turn = 0.0
         self._enable_prompt_cache = True
+        self._goal: GoalController | None = None
+        self._evaluator_model: str | None = None
         self._hooks: HookRegistry | None = None
         self._permission_responses: asyncio.Queue[PermissionDecision] | None = None
         self._permission_timeout_secs = 120.0
@@ -810,6 +863,14 @@ class AgentLoopBuilder:
         self._enable_prompt_cache = b
         return self
 
+    def goal(self, g: GoalController) -> AgentLoopBuilder:
+        self._goal = g
+        return self
+
+    def evaluator_model(self, m: str) -> AgentLoopBuilder:
+        self._evaluator_model = m
+        return self
+
     def hooks(self, h: HookRegistry) -> AgentLoopBuilder:
         self._hooks = h
         return self
@@ -856,6 +917,8 @@ class AgentLoopBuilder:
             warn_threshold=self._warn_threshold,
             max_cost_per_turn=self._max_cost_per_turn,
             enable_prompt_cache=self._enable_prompt_cache,
+            goal=self._goal,
+            evaluator_model=self._evaluator_model,
             hooks=self._hooks,
             permission_responses=self._permission_responses,
             permission_timeout_secs=self._permission_timeout_secs,

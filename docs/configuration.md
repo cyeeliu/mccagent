@@ -151,6 +151,17 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 | `warn_threshold` | `0.8` | 告警阈值（0~1），达 `max_usd_per_session * warn_threshold` 时发 Notice |
 | `max_usd_per_turn` | `0.0` | 单轮成本上限（USD），0.0 表示不限；超限发 Notice |
 
+## Goal 配置
+
+见 [goal-loop.md](goal-loop.md)。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭时不注入 GoalController（行为与历史一致） |
+| `evaluator_model` | `null` | evaluator 模型，null 回落 summarize_model → main |
+| `block_cap` | `8` | 连续 block 上限，超了返回 limit 防死循环 |
+| `max_goal_length` | `4000` | condition 最大长度 |
+
 ## Hooks 配置
 
 见 [permissions.md](permissions.md#hooks)。

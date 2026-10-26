@@ -62,6 +62,20 @@ class Notice:
 
 
 @dataclass
+class GoalStatus:
+    """Goal Loop 状态变更事件。
+
+    action 取值：set / cleared / status / achieved / failed /
+    block / limit / error。TUI 据此渲染目标面板。
+    """
+
+    action: str
+    condition: str
+    reason: str
+    iterations: int = 0
+
+
+@dataclass
 class Error:
     text: str
 
@@ -91,6 +105,7 @@ AgentEvent = (
     | LlmUsage
     | TurnEnd
     | Notice
+    | GoalStatus
     | Error
     | PermissionRequest
 )

@@ -47,6 +47,7 @@ class RunRequest(BaseModel):
     model: str
     max_turns: int = 40
     work_dir: str | None = None
+    goal: str | None = None
 
 
 class AgentAdapter(Protocol):
@@ -264,13 +265,18 @@ class MccAdapter:
             )
         )
         checker = PermissionChecker(PermissionConfig(mode="bypassPermissions"))
-        return (
+        builder = (
             AgentLoopBuilder(llm, registry, ctx)
             .model(req.model)
             .permission(checker)
             .max_iterations(req.max_turns)
-            .build()
         )
+        if req.goal:
+            from mcc_harness import GoalController, PromptGoalEvaluator
+
+            evaluator = PromptGoalEvaluator(llm=llm, model=req.model)
+            builder = builder.goal(GoalController(evaluator=evaluator))
+        return builder.build()
 
     async def run(self, req: RunRequest) -> AsyncIterator[TraceEvent]:
         translator = _Translator(req)
