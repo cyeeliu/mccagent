@@ -71,11 +71,13 @@ class AgentEventSource(EventSource):
         slash_resolver: Callable[[str], str | None] | None = None,
         goal_controller: GoalController | None = None,
         team_manager: Any | None = None,
+        cron_scheduler: Any | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
         self._goal_controller = goal_controller
         self.team_manager = team_manager
+        self.cron_scheduler = cron_scheduler
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
         if self._goal_controller is not None:

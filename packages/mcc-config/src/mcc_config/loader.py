@@ -17,6 +17,7 @@ from mcc_config.models import (
     BudgetConfig,
     Config,
     ContextConfig,
+    CronConfig,
     GoalConfig,
     ModelConfig,
     PermissionConfig,
@@ -120,6 +121,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.team = project.team
     if project.background != BackgroundConfig():
         base.background = project.background
+    if project.cron != CronConfig():
+        base.cron = project.cron
 
     return base
 

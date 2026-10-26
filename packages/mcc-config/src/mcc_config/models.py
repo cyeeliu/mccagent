@@ -196,6 +196,19 @@ class BackgroundConfig(BaseModel):
     max_concurrent: int = 8
 
 
+class CronConfig(BaseModel):
+    """Cron 调度器配置：按 cron 表达式定时触发 prompt。
+
+    ``enabled`` 关闭时不创建 CronScheduler、不注册 cron 工具。
+    ``poll_interval`` 为轮询间隔（秒），``durable`` 控制是否
+    持久化到 ``.cron_jobs.json``。
+    """
+
+    enabled: bool = True
+    poll_interval: float = 1.0
+    durable: bool = True
+
+
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -212,3 +225,4 @@ class Config(BaseModel):
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     team: TeamConfig = Field(default_factory=TeamConfig)
     background: BackgroundConfig = Field(default_factory=BackgroundConfig)
+    cron: CronConfig = Field(default_factory=CronConfig)

@@ -263,6 +263,22 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 | `default_timeout` | `120` | 后台命令默认超时（秒） |
 | `max_concurrent` | `8` | 同时运行的后台任务上限 |
 
+## Cron 调度器配置
+
+见 [cron-scheduler.md](cron-scheduler.md)。
+
+```json
+{"cron": {"enabled": true, "poll_interval": 1.0, "durable": true}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭时不创建调度器、不注册 cron 工具 |
+| `poll_interval` | `1.0` | 轮询间隔（秒） |
+| `durable` | `true` | 是否持久化到 `.cron_jobs.json` |
+
+`.cron_jobs.json` 已 gitignore。
+
 ## .env
 
 项目根目录的 `.env` 自动加载（参考 [.env.example](../.env.example)），已存在的环境变量不会被覆盖。

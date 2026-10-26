@@ -24,6 +24,16 @@ from mcc_harness.background import (
     format_background_results,
 )
 from mcc_harness.compactor import CompactionReport, ContextCompactor
+from mcc_harness.cron import (
+    CancelCronTool,
+    CronJob,
+    CronScheduler,
+    ListCronsTool,
+    ScheduleCronTool,
+    cron_matches,
+    format_cron_delivery,
+    validate_cron,
+)
 from mcc_harness.goal import (
     GoalController,
     GoalError,
@@ -96,8 +106,11 @@ __all__ = [
     "BackgroundTaskInfo",
     "BackgroundTaskManager",
     "CancelBackgroundTaskTool",
+    "CancelCronTool",
     "CompactionReport",
     "ContextCompactor",
+    "CronJob",
+    "CronScheduler",
     "AgentRun",
     "TurnCost",
     "cache_hit_rate",
@@ -121,6 +134,7 @@ __all__ = [
     "HookResult",
     "HookType",
     "ListTeammatesTool",
+    "ListCronsTool",
     "Message",
     "MessageBus",
     "PathAction",
@@ -137,6 +151,7 @@ __all__ = [
     "ShellHook",
     "SpawnSubagentTool",
     "SpawnTeammateTool",
+    "ScheduleCronTool",
     "SubagentResult",
     "SubagentRunner",
     "SubagentSpec",
@@ -148,8 +163,10 @@ __all__ = [
     "WorktreeError",
     "bash_word_match",
     "create_worktree",
+    "cron_matches",
     "default_presets",
     "format_background_results",
+    "format_cron_delivery",
     "format_team_events",
     "model_price_per_1m",
     "permission_request_for",
@@ -157,5 +174,6 @@ __all__ = [
     "register_team_tools",
     "remove_worktree",
     "token_budget_to_usd",
+    "validate_cron",
 ]
 __version__ = "0.1.0"

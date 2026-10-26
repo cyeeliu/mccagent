@@ -19,3 +19,6 @@ eval-runs/
 # teammate 运行时产物
 .worktrees/
 .mailboxes/
+
+# cron 调度器持久化任务（运行时状态）
+.cron_jobs.json

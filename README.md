@@ -22,6 +22,7 @@
 - **Task** — 持久化任务记录（`.tasks/`）与依赖图，6 工具管理 pending→claim→complete 生命周期，环检测防循环依赖
 - **多 Agent 团队** — 长驻 teammate 协作：MessageBus 文件持久化通信、Plan approval 审批、git worktree 隔离、idle task 自动 claim、lead wake 消息注入
 - **后台任务** — `run_in_background` 异步执行长耗时命令，asyncio.Task + SandboxExecutor 沙箱隔离，结果每轮注入 `<background_result>` 通知，可查询/取消
+- **Cron 调度器** — 5 字段 cron 表达式定时触发 prompt，`schedule_cron`/`list_crons`/`cancel_cron` 三工具，due job 每轮注入 `<cron_delivery>` 通知，durable 任务持久化重启恢复
 - **开箱即用** — pipx/uv 一键安装、Docker 镜像、shell 补全、首次运行引导；无遥测
 
 ## 架构
@@ -143,6 +144,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [Task](docs/tasks.md) | 持久化任务与依赖图、6 工具、生命周期 |
 | [多 Agent 团队](docs/agent-team.md) | 长驻 teammate、MessageBus、Plan approval、Worktree 隔离 |
 | [后台任务](docs/background-tasks.md) | run_in_background、BackgroundTaskManager、结果注入 |
+| [Cron 调度器](docs/cron-scheduler.md) | cron 表达式、CronScheduler、durable 持久化 |
 | [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
 | [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |

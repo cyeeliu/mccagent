@@ -142,6 +142,28 @@ def _build_source(
         registry.register(BackgroundStatusTool(background_manager))
         registry.register(CancelBackgroundTaskTool(background_manager))
 
+    # Cron 调度器：按 cron 表达式定时触发 prompt
+    cron_scheduler = None
+    if config.cron.enabled:
+        from mcc_harness import CronScheduler
+
+        durable_path = work_dir / ".cron_jobs.json" if config.cron.durable else None
+        cron_scheduler = CronScheduler(
+            durable_path=durable_path,
+            poll_interval=config.cron.poll_interval,
+        )
+
+    if cron_scheduler is not None:
+        from mcc_harness import (
+            CancelCronTool,
+            ListCronsTool,
+            ScheduleCronTool,
+        )
+
+        registry.register(ScheduleCronTool(cron_scheduler))
+        registry.register(ListCronsTool(cron_scheduler))
+        registry.register(CancelCronTool(cron_scheduler))
+
     # MCP server 连接与工具发现（stdio transport）
     if config.mcp_servers:
         from mcc_mcp import McpClientManager
@@ -333,6 +355,8 @@ def _build_source(
         builder = builder.tasks_enabled(True)
     if background_manager is not None:
         builder = builder.background(background_manager)
+    if cron_scheduler is not None:
+        builder = builder.cron(cron_scheduler)
 
     agent = builder.build()
     return AgentEventSource(
@@ -340,6 +364,7 @@ def _build_source(
         slash_resolver=slash_resolver,
         goal_controller=goal_controller,
         team_manager=team_manager,
+        cron_scheduler=cron_scheduler,
     )
 
 
@@ -447,6 +472,9 @@ async def _run_tui_mode(
                     input_queue.put_nowait(format_team_events(inbox))
 
     worker = asyncio.create_task(agent_worker())
+    cron = getattr(source, "cron_scheduler", None)
+    if cron is not None:
+        await cron.start()
     try:
         handles = TuiHandles(
             events=event_queue,
@@ -457,6 +485,8 @@ async def _run_tui_mode(
         await run_tui(handles)
     finally:
         worker.cancel()
+        if cron is not None:
+            await cron.stop()
     return 0
 
 

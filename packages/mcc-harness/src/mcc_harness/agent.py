@@ -204,6 +204,7 @@ class AgentLoop:
         todo_reminder_interval: int = 3,
         tasks_enabled: bool = False,
         background_manager: Any | None = None,
+        cron_scheduler: Any | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -230,6 +231,7 @@ class AgentLoop:
         self.todo_reminder_interval = todo_reminder_interval
         self.tasks_enabled = tasks_enabled
         self.background_manager = background_manager
+        self.cron_scheduler = cron_scheduler
         self.history: list[Message] = list(history) if history else []
         if self.compactor is not None:
             # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
@@ -317,6 +319,16 @@ class AgentLoop:
                         notification = format_background_results(bg_results)
                         messages.append(Message.user(notification))
                         await tx.put(Notice(text=notification))
+
+                if self.cron_scheduler is not None:
+                    from mcc_harness.cron import format_cron_delivery
+
+                    cron_jobs = await self.cron_scheduler.consume()
+                    if cron_jobs:
+                        notification = format_cron_delivery(cron_jobs)
+                        messages.append(Message.user(notification))
+                        await tx.put(Notice(text=notification))
+                        await self.cron_scheduler.acknowledge(cron_jobs)
 
                 if (
                     self.max_cost_usd > 0
@@ -884,6 +896,7 @@ class AgentLoopBuilder:
         self._todo_reminder_interval: int = 3
         self._tasks_enabled: bool = False
         self._background: Any | None = None
+        self._cron: Any | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -980,6 +993,10 @@ class AgentLoopBuilder:
         self._background = mgr
         return self
 
+    def cron(self, sched: Any) -> AgentLoopBuilder:
+        self._cron = sched
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -1008,4 +1025,5 @@ class AgentLoopBuilder:
             todo_reminder_interval=self._todo_reminder_interval,
             tasks_enabled=self._tasks_enabled,
             background_manager=self._background,
+            cron_scheduler=self._cron,
         )
