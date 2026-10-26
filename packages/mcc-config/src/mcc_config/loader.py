@@ -26,6 +26,7 @@ from mcc_config.models import (
     TaskConfig,
     TeamConfig,
     TodoConfig,
+    WorkflowConfig,
 )
 
 _DEFAULT_CONFIG = Config(
@@ -123,6 +124,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.background = project.background
     if project.cron != CronConfig():
         base.cron = project.cron
+    if project.workflow != WorkflowConfig():
+        base.workflow = project.workflow
 
     return base
 

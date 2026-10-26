@@ -279,6 +279,23 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 
 `.cron_jobs.json` 已 gitignore。
 
+## Workflow 运行时配置
+
+见 [workflows.md](workflows.md)。
+
+```json
+{"workflow": {"enabled": true, "concurrency": 4, "agent_cap": 20, "budget_tokens": null}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭时不注册 workflow 工具 |
+| `concurrency` | `4` | run 级并发信号量 |
+| `agent_cap` | `20` | 单次 run 子代理调用总数上限 |
+| `budget_tokens` | `null` | 默认 token 预算（args.budget 可覆盖） |
+
+`.workflows/` 已 gitignore。
+
 ## .env
 
 项目根目录的 `.env` 自动加载（参考 [.env.example](../.env.example)），已存在的环境变量不会被覆盖。

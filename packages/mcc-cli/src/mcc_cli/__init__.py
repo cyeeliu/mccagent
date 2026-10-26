@@ -82,6 +82,101 @@ def _build_hooks(config, work_dir: Path):
     return hook_registry
 
 
+_REVIEW_FINDINGS_SCHEMA = {
+    "type": "object",
+    "required": ["findings"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["title", "severity"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "severity": {"type": "string",
+                                 "enum": ["high", "medium", "low"]},
+                },
+            },
+        }
+    },
+}
+_REVIEW_VERDICT_SCHEMA = {
+    "type": "object",
+    "required": ["isReal", "reason"],
+    "properties": {"isReal": {"type": "boolean"}, "reason": {"type": "string"}},
+}
+
+
+async def _review_changes_workflow(ctx, args):
+    """按审查维度流水线（audit → verify-each），仅保留被确认的发现。"""
+    import json as _json
+
+    ctx.phase("Review")
+    changes = args.get("changes", "")
+    if not isinstance(changes, str):
+        from mcc_harness import WorkflowInputError
+
+        raise WorkflowInputError("args.changes must be a string")
+    review_input = changes.strip() or "No change context was supplied."
+    dimensions = ["correctness", "security", "performance", "style"]
+
+    async def audit(_value, dimension, _idx):
+        out = await ctx.agent(
+            f"Review this change context for {dimension} issues. "
+            "Report only issues supported by the supplied text.\n\n"
+            f"{review_input}",
+            schema=_REVIEW_FINDINGS_SCHEMA,
+            label=f"audit:{dimension}",
+            phase="Review",
+        )
+        return {"dimension": dimension, "findings": out["findings"]}
+
+    async def verify(audited, dimension, _idx):
+        ctx.phase("Verify")
+        verdicts = await ctx.parallel([
+            (lambda f=f: ctx.agent(
+                f"Adversarially verify this {dimension} finding against the "
+                f"supplied change context.\n\nChange context:\n{review_input}"
+                f"\n\nFinding:\n{_json.dumps(f, ensure_ascii=False)}",
+                schema=_REVIEW_VERDICT_SCHEMA,
+                label=f"verify:{dimension}:{f['title']}",
+                phase="Verify",
+            ))
+            for f in audited["findings"]
+        ])
+        confirmed = [f for f, v in zip(audited["findings"], verdicts, strict=True)
+                     if v and v.get("isReal")]
+        return {"dimension": dimension, "confirmed": confirmed}
+
+    results = await ctx.pipeline(dimensions, audit, verify)
+    confirmed = [
+        {"dimension": r["dimension"], **f}
+        for r in results if r for f in r["confirmed"]
+    ]
+    confirmed.sort(
+        key=lambda f: {"high": 0, "medium": 1, "low": 2}.get(f["severity"], 3)
+    )
+    ctx.log(f"confirmed {len(confirmed)} real finding(s)")
+    return {"confirmed": confirmed}
+
+
+def _register_builtin_workflows() -> None:
+    """注册内置 workflow：review-changes 多维审查。"""
+    from mcc_harness import WORKFLOWS, register_workflow
+
+    if "review-changes" in WORKFLOWS:
+        return
+    register_workflow(
+        {
+            "name": "review-changes",
+            "description": "Review changed code across dimensions, "
+            "verify each finding adversarially",
+            "phases": ["Review", "Verify"],
+        },
+        _review_changes_workflow,
+    )
+
+
 def _build_source(
     work_dir: Path,
     model: str | None,
@@ -277,6 +372,21 @@ def _build_source(
         SpawnSubagentTool(runner, default_presets(subagent_model, summarize_model))
     )
 
+    # Workflow 运行时：可信代码编排多步 agent 调用，模型按名触发
+    workflow_tool = None
+    if config.workflow.enabled:
+        from mcc_harness import SubagentWorkflowRunner, WorkflowTool
+
+        _register_builtin_workflows()
+        workflow_tool = WorkflowTool(
+            SubagentWorkflowRunner(runner, subagent_model),
+            work_dir / ".workflows",
+            concurrency=config.workflow.concurrency,
+            agent_cap=config.workflow.agent_cap,
+            default_budget=config.workflow.budget_tokens,
+        )
+        registry.register(workflow_tool)
+
     recorder = SessionRecorder.open_sync(sid, work_dir)
     builder = AgentLoopBuilder(llm, registry, ctx).system(system).recorder(recorder)
 
@@ -365,6 +475,7 @@ def _build_source(
         goal_controller=goal_controller,
         team_manager=team_manager,
         cron_scheduler=cron_scheduler,
+        workflow_tool=workflow_tool,
     )
 
 
@@ -475,6 +586,9 @@ async def _run_tui_mode(
     cron = getattr(source, "cron_scheduler", None)
     if cron is not None:
         await cron.start()
+    wf_tool = getattr(source, "workflow_tool", None)
+    if wf_tool is not None:
+        wf_tool.set_event_sink(event_queue)
     try:
         handles = TuiHandles(
             events=event_queue,

@@ -209,6 +209,20 @@ class CronConfig(BaseModel):
     durable: bool = True
 
 
+class WorkflowConfig(BaseModel):
+    """Workflow 运行时配置：可信代码编排多步 agent 调用。
+
+    ``enabled`` 关闭时不注册 workflow 工具。``agent_cap`` 限制单次
+    run 的子代理调用总数，``concurrency`` 限制并发数，
+    ``budget_tokens`` 为默认 token 预算（args.budget 可覆盖）。
+    """
+
+    enabled: bool = True
+    concurrency: int = 4
+    agent_cap: int = 20
+    budget_tokens: int | None = None
+
+
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -226,3 +240,4 @@ class Config(BaseModel):
     team: TeamConfig = Field(default_factory=TeamConfig)
     background: BackgroundConfig = Field(default_factory=BackgroundConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
