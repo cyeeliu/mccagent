@@ -139,6 +139,18 @@ class GoalConfig(BaseModel):
     max_goal_length: int = 4000
 
 
+class McpServerConfig(BaseModel):
+    """单个 MCP server 的启动配置（stdio transport）。
+
+    ``command`` 为可执行文件名，``args`` 为命令行参数，``env`` 为
+    额外环境变量（合入 os.environ 后传给子进程）。
+    """
+
+    command: str
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+
+
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -150,3 +162,4 @@ class Config(BaseModel):
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     goal: GoalConfig = Field(default_factory=GoalConfig)
+    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)

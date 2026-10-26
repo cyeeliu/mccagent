@@ -120,6 +120,15 @@ def _build_source(
     # 不可用时在此报错退出，而不是静默降级
     registry.register(RunBashTool(build_executor(config.sandbox)))
 
+    # MCP server 连接与工具发现（stdio transport）
+    if config.mcp_servers:
+        from mcc_mcp import McpClientManager
+
+        mcp_manager = McpClientManager()
+        servers = {k: v.model_dump() for k, v in config.mcp_servers.items()}
+        asyncio.run(mcp_manager.connect_all(servers))
+        mcp_manager.register_all(registry)
+
     system = _system_prompt()
     store = MarkdownMemoryStore()
     for tool in memory_tools(store):

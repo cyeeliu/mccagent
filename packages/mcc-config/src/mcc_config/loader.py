@@ -106,6 +106,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.skills = project.skills
     if project.goal != GoalConfig():
         base.goal = project.goal
+    if project.mcp_servers:
+        base.mcp_servers = project.mcp_servers
 
     return base
 

@@ -10,6 +10,7 @@ members = [
     "mcc-eval",
     "mcc-harness",
     "mcc-llm",
+    "mcc-mcp",
     "mcc-session",
     "mcc-skills",
     "mcc-tools",
@@ -254,6 +255,17 @@ requires-dist = [
     { name = "mcc-core", editable = "packages/mcc-core" },
     { name = "pydantic", specifier = ">=2.9" },
 ]
+
+[[package]]
+name = "mcc-mcp"
+version = "0.1.0"
+source = { editable = "packages/mcc-mcp" }
+dependencies = [
+    { name = "mcc-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mcc-core", editable = "packages/mcc-core" }]
 
 [[package]]
 name = "mcc-session"

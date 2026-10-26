@@ -1,0 +1,13 @@
+[project]
+name = "mcc-mcp"
+version = "0.1.0"
+description = "MCP (Model Context Protocol) client：stdio transport，工具发现与转发"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "mcc-core",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

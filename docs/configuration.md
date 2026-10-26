@@ -61,6 +61,12 @@
   "hooks": {
     "pre_tool_use": [{"matcher": "run_bash", "command": "scripts/guard.sh"}],
     "post_tool_use": []
+  },
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    }
   }
 }
 ```
@@ -165,6 +171,32 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 ## Hooks 配置
 
 见 [permissions.md](permissions.md#hooks)。
+
+## MCP 配置
+
+见 [mcp.md](mcp.md)。
+
+`mcpServers` 段声明外部 MCP server，键名即 server 名：
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {"GITHUB_TOKEN": "ghp_xxx"}
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `command` | `str` | 可执行命令 |
+| `args` | `list[str]` | 命令参数 |
+| `env` | `dict[str,str]` | 额外环境变量 |
+
+工具注册名格式 `mcp__<server>__<tool>`，与 Claude Code 兼容。home 与 project 配置浅合并（project 覆盖同名 server）。
 
 ## .env
 
