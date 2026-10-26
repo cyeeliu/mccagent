@@ -203,6 +203,7 @@ class AgentLoop:
         todo: TodoManager | None = None,
         todo_reminder_interval: int = 3,
         tasks_enabled: bool = False,
+        background_manager: Any | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -228,6 +229,7 @@ class AgentLoop:
         self.todo = todo
         self.todo_reminder_interval = todo_reminder_interval
         self.tasks_enabled = tasks_enabled
+        self.background_manager = background_manager
         self.history: list[Message] = list(history) if history else []
         if self.compactor is not None:
             # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
@@ -307,6 +309,15 @@ class AgentLoop:
 
         try:
             for iteration in range(1, self.max_iterations + 1):
+                if self.background_manager is not None:
+                    from mcc_harness.background import format_background_results
+
+                    bg_results = await self.background_manager.collect()
+                    if bg_results:
+                        notification = format_background_results(bg_results)
+                        messages.append(Message.user(notification))
+                        await tx.put(Notice(text=notification))
+
                 if (
                     self.max_cost_usd > 0
                     and not budget_warned
@@ -872,6 +883,7 @@ class AgentLoopBuilder:
         self._todo: TodoManager | None = None
         self._todo_reminder_interval: int = 3
         self._tasks_enabled: bool = False
+        self._background: Any | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -964,6 +976,10 @@ class AgentLoopBuilder:
         self._tasks_enabled = b
         return self
 
+    def background(self, mgr: Any) -> AgentLoopBuilder:
+        self._background = mgr
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -991,4 +1007,5 @@ class AgentLoopBuilder:
             todo=self._todo,
             todo_reminder_interval=self._todo_reminder_interval,
             tasks_enabled=self._tasks_enabled,
+            background_manager=self._background,
         )

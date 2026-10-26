@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 from mcc_config.models import (
+    BackgroundConfig,
     BudgetConfig,
     Config,
     ContextConfig,
@@ -117,6 +118,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.mcp_servers = project.mcp_servers
     if project.team != TeamConfig():
         base.team = project.team
+    if project.background != BackgroundConfig():
+        base.background = project.background
 
     return base
 

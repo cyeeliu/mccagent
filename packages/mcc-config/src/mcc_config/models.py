@@ -184,6 +184,18 @@ class TeamConfig(BaseModel):
     worktree_enabled: bool = False
 
 
+class BackgroundConfig(BaseModel):
+    """后台任务配置：异步执行长耗时 shell 命令。
+
+    ``enabled`` 关闭时 run_bash 不暴露 run_in_background 参数、
+    不创建 BackgroundTaskManager。
+    """
+
+    enabled: bool = True
+    default_timeout: int = 120
+    max_concurrent: int = 8
+
+
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -199,3 +211,4 @@ class Config(BaseModel):
     tasks: TaskConfig = Field(default_factory=TaskConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
     team: TeamConfig = Field(default_factory=TeamConfig)
+    background: BackgroundConfig = Field(default_factory=BackgroundConfig)

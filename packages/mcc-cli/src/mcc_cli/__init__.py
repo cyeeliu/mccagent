@@ -118,7 +118,29 @@ def _build_source(
     registry = default_registry()
     # 沙箱按配置生效（默认 none 即直跑，行为不变）；显式 bubblewrap
     # 不可用时在此报错退出，而不是静默降级
-    registry.register(RunBashTool(build_executor(config.sandbox)))
+    sandbox_executor = build_executor(config.sandbox)
+
+    # 后台任务管理器：异步执行长耗时命令
+    background_manager = None
+    if config.background.enabled:
+        from mcc_harness import BackgroundTaskManager
+
+        background_manager = BackgroundTaskManager(
+            executor=sandbox_executor,
+            max_concurrent=config.background.max_concurrent,
+            default_timeout=config.background.default_timeout,
+        )
+
+    registry.register(RunBashTool(sandbox_executor, background_manager))
+
+    if background_manager is not None:
+        from mcc_harness import (
+            BackgroundStatusTool,
+            CancelBackgroundTaskTool,
+        )
+
+        registry.register(BackgroundStatusTool(background_manager))
+        registry.register(CancelBackgroundTaskTool(background_manager))
 
     # MCP server 连接与工具发现（stdio transport）
     if config.mcp_servers:
@@ -309,6 +331,8 @@ def _build_source(
         builder = builder.todo_reminder_interval(config.todo.reminder_interval)
     if config.tasks.enabled:
         builder = builder.tasks_enabled(True)
+    if background_manager is not None:
+        builder = builder.background(background_manager)
 
     agent = builder.build()
     return AgentEventSource(

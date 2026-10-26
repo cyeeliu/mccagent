@@ -249,6 +249,20 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 
 `.mailboxes/` 和 `.worktrees/` 已 gitignore。
 
+## 后台任务配置
+
+见 [background-tasks.md](background-tasks.md)。
+
+```json
+{"background": {"enabled": true, "default_timeout": 120, "max_concurrent": 8}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭时不暴露 run_in_background 参数 |
+| `default_timeout` | `120` | 后台命令默认超时（秒） |
+| `max_concurrent` | `8` | 同时运行的后台任务上限 |
+
 ## .env
 
 项目根目录的 `.env` 自动加载（参考 [.env.example](../.env.example)），已存在的环境变量不会被覆盖。

@@ -15,6 +15,14 @@ from mcc_harness.agent import (
     permission_request_for,
     price_usd,
 )
+from mcc_harness.background import (
+    BackgroundResult,
+    BackgroundStatusTool,
+    BackgroundTaskInfo,
+    BackgroundTaskManager,
+    CancelBackgroundTaskTool,
+    format_background_results,
+)
 from mcc_harness.compactor import CompactionReport, ContextCompactor
 from mcc_harness.goal import (
     GoalController,
@@ -83,6 +91,11 @@ __all__ = [
     "Action",
     "AgentLoop",
     "AgentLoopBuilder",
+    "BackgroundResult",
+    "BackgroundStatusTool",
+    "BackgroundTaskInfo",
+    "BackgroundTaskManager",
+    "CancelBackgroundTaskTool",
     "CompactionReport",
     "ContextCompactor",
     "AgentRun",
@@ -136,6 +149,7 @@ __all__ = [
     "bash_word_match",
     "create_worktree",
     "default_presets",
+    "format_background_results",
     "format_team_events",
     "model_price_per_1m",
     "permission_request_for",
