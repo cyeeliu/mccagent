@@ -43,6 +43,7 @@ from mcc_eval.events import (
     ToolResult,
     TraceEvent,
 )
+from mcc_eval.judge import JudgeScorer
 from mcc_eval.scoring import TraceSnapshot, score_case
 
 PROGRESS_FILE = "progress.json"
@@ -316,6 +317,7 @@ async def run_case(
     timeout_s: float = 600.0,
     attempt: int = 1,
     progress: ProgressTracker | None = None,
+    judge: JudgeScorer | None = None,
 ) -> CaseResult:
     """执行单个 Case 的一次采样：预置环境 → 轨迹流式落盘 → 评分。
 
@@ -405,8 +407,14 @@ async def run_case(
         )
 
     snap = snapshot_from_events(events)
+    judge_results = None
+    if judge is not None:
+        judge_results = await judge.prescore(
+            " ".join(snap.text_outputs), case.expectations
+        )
     scored = score_case(
-        snap, check=case.check, expectations=case.expectations, work_dir=work_dir
+        snap, check=case.check, expectations=case.expectations,
+        work_dir=work_dir, judge_results=judge_results,
     )
     return CaseResult(
         case_id=case.case_id,
@@ -432,6 +440,7 @@ async def run_batch(
     max_turns: int = 40,
     timeout_s: float = 600.0,
     runs_per_case: int = 1,
+    judge: JudgeScorer | None = None,
 ) -> BatchResult:
     """并发执行一批 Case，每 case 采样 ``runs_per_case`` 次。
 
@@ -464,6 +473,7 @@ async def run_batch(
                 timeout_s=timeout_s,
                 attempt=attempt,
                 progress=tracker,
+                judge=judge,
             )
             tracker.case_finished(result)
             done_count += 1

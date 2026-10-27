@@ -96,6 +96,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     save_cases(cases, batch_dir)
 
     adapter = MockAdapter() if args.mock else MccAdapter()
+    judge = None
+    if not args.no_judge and not args.mock:
+        from mcc_eval.judge import JudgeScorer
+
+        judge = JudgeScorer(model=args.judge_model or None)
+        if not judge.available:
+            judge = None
+            print("judge 不可用（无 LLM provider），judge 断言将跳过",
+                  file=sys.stderr)
     print(
         f"模型: {model}｜Case: {len(cases)}｜并发: {args.concurrency}"
         f"｜采样: {args.runs_per_case}/case",
@@ -114,6 +123,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             max_turns=args.max_turns,
             timeout_s=args.timeout,
             runs_per_case=args.runs_per_case,
+            judge=judge,
         )
     )
     write_results_json(batch, batch_dir)
@@ -137,7 +147,14 @@ def cmd_report(args: argparse.Namespace) -> int:
     batch_dir = Path(args.batch_dir)
     if not batch_dir.is_dir():
         raise SystemExit(f"批次目录不存在：{batch_dir}")
-    batch = rebuild(batch_dir)
+    judge = None
+    if not args.no_judge:
+        from mcc_eval.judge import JudgeScorer
+
+        judge = JudgeScorer(model=args.judge_model or None)
+        if not judge.available:
+            judge = None
+    batch = asyncio.run(rebuild(batch_dir, judge=judge))
     write_results_json(batch, batch_dir)
     spec = DATASETS.get(batch.dataset)
     write_report_md(batch, batch_dir, title=spec.title if spec else batch.dataset)
@@ -224,10 +241,18 @@ def build_parser() -> argparse.ArgumentParser:
                      help=f"单 case 超时秒数（默认 {DEFAULT_TIMEOUT_S}）")
     run.add_argument("--out", default=DEFAULT_OUT_ROOT,
                      help=f"产物根目录（默认 {DEFAULT_OUT_ROOT}/）")
+    run.add_argument("--judge-model", default=None,
+                     help="judge 断言的评分模型（缺省按 judge > main 解析）")
+    run.add_argument("--no-judge", action="store_true",
+                     help="跳过 judge 断言（无 key 冒烟 / 纯行为断言批次）")
     run.set_defaults(func=cmd_run)
 
     report = sub.add_parser("report", help="对已存轨迹与产物重评分")
     report.add_argument("batch_dir", help="批次目录（含 cases.json 与 runs/）")
+    report.add_argument("--judge-model", default=None,
+                        help="judge 断言的评分模型（缺省按 judge > main 解析）")
+    report.add_argument("--no-judge", action="store_true",
+                        help="跳过 judge 断言")
     report.set_defaults(func=cmd_report)
 
     datasets = sub.add_parser("datasets", help="列出 / 导出支持的基准数据集")

@@ -14,6 +14,7 @@ from typing import Any
 
 from mcc_eval.datasets import Case
 from mcc_eval.events import RunFinished, TraceEvent, trace_event_adapter
+from mcc_eval.judge import JudgeScorer
 from mcc_eval.runner import BatchResult, CaseResult, snapshot_from_events
 from mcc_eval.scoring import score_case
 
@@ -149,11 +150,14 @@ def _attempt_files(runs_dir: Path, case_id: str) -> list[tuple[int, Path]]:
     return sorted(found, key=lambda pair: pair[0])
 
 
-def rebuild(batch_dir: Path) -> BatchResult:
+async def rebuild(
+    batch_dir: Path, judge: JudgeScorer | None = None
+) -> BatchResult:
     """对已存轨迹与产物重评分（不重新执行 Agent）。
 
     每 case 可能有多份采样轨迹（-a<attempt> 后缀），逐份重评，
-    保持与运行时一致的 k/N 结构。
+    保持与运行时一致的 k/N 结构。judge 存在时对 judge 断言预评分
+    （真实 LLM 调用），否则 judge 断言宽松跳过。
     """
     cases = load_cases(batch_dir)
     header: dict[str, Any] = {}
@@ -193,11 +197,17 @@ def rebuild(batch_dir: Path) -> BatchResult:
                 )
                 continue
             snap = snapshot_from_events(events)
+            judge_results = None
+            if judge is not None:
+                judge_results = await judge.prescore(
+                    " ".join(snap.text_outputs), case.expectations
+                )
             scored = score_case(
                 snap,
                 check=case.check,
                 expectations=case.expectations,
                 work_dir=trace_path.parent.parent / "work" / trace_path.stem,
+                judge_results=judge_results,
             )
             duration = (events[-1].ts - events[0].ts) if len(events) > 1 else 0.0
             results.append(

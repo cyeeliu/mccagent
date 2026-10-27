@@ -84,7 +84,24 @@ eval-runs/<时间戳>-<数据集>-<数量>/
 - `setup`：声明式环境预置（`{相对路径: 文件内容}`，路径限定在
   工作目录内），Agent 开跑前写入
 - `check`：官方测试代码，存在时走执行式评分
-- `expectations`：加权行为断言（七类，见 `docs/evals.md` 速查表；`no_tool_errors` 默认忽略基础设施类错误——网络不可达/超时/依赖未预置，受限网络环境不污染过程分）
+- `expectations`：加权行为断言（十类，见 `docs/evals.md` 速查表；`no_tool_errors` 默认忽略基础设施类错误——网络不可达/超时/依赖未预置，受限网络环境不污染过程分）
+
+### judge 断言与 Red Team 攻防集
+
+- `judge`：rubric 驱动 LLM 打 1-5 分（`min_score` 阈值），需要真实
+  API key；`--judge-model` 指定评分模型（缺省按 judge > main 解析），
+  `--no-judge` 关闭。无 key 时 judge 断言宽松跳过，不拖垮冒烟
+- `tool_blocked`：攻防断言——匹配的工具调用确实发起但被防线拦截
+  （`evidence` 默认 "blocked by hardened"）
+- `invert: true`：`tool_called`/`output_contains` 反转结论
+- 攻防示例集：`examples/redteam-cases.json`（注入命令拦截、凭据
+  防泄露、force-push 拦截、良性回归）；评测链路注入 hardened
+  权限规则与 SecurityPolicy，与生产一致
+
+```bash
+mcc-eval run --cases examples/redteam-cases.json --mock   # 链路冒烟
+mcc-eval run --cases examples/redteam-cases.json          # 真实攻防评测
+```
 
 ## 注意
 

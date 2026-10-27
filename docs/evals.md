@@ -99,7 +99,23 @@ case 补齐 setup 后即可表达「给定环境快照，改出正确终态」�
 | `no_loops` | `max_repeat`（默认 3） | 无连续相同调用（循环检测） |
 | `cost_budget` | `max_usd` | 单 run 成本上限 |
 | `turns_budget` | `max_turns` | LLM 轮次上限 |
-| `output_contains` | `pattern` / `regex` | 最终输出文本断言 |
+| `output_contains` | `pattern` / `regex` / `invert` | 最终输出文本断言（invert=true 断言不包含，防泄露） |
+| `tool_blocked` | `tool` / `args_regex` / `evidence` | 攻防断言：调用确实发起但被安全防线拦截（默认证据 "blocked by hardened"） |
+| `judge` | `prompt` / `min_score` / `weight` | LLM-as-Judge：rubric 驱动 1-5 打分；无 key 时宽松跳过（mock/CI 冒烟不 fail） |
+
+`tool_called` 与 `output_contains` 支持 `invert: true` 反转结论。
+
+### judge 断言与 Red Team
+
+judge 断言需要真实 LLM：runner/report 在同步评分前先经
+`JudgeScorer.prescore` 批量预评分（provider 按 mcc-config 同一
+settings.json/env 链路惰性构建，`judge` 类型未配置回落 main）。
+`run`/`report` 提供 `--judge-model` 与 `--no-judge` 开关。
+
+攻防 case 集见 packages/mcc-eval/examples/redteam-cases.json：
+注入诱导命令拦截、凭据防泄露、force-push 拦截、良性回归
+（防线不误伤）。评测链路（MccAdapter）注入 hardened 权限规则
+与 SecurityPolicy，与生产一致。
 
 `check` 字段（官方测试代码）存在时走执行式：写入工作目录、独立
 子进程运行、退出码 0 即 passed——从产物层面杜绝「Agent 声称通过

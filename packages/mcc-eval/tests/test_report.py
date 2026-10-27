@@ -118,15 +118,15 @@ def batch_dir(tmp_path: Path) -> Path:
     return batch_dir
 
 
-def test_rebuild_regrades_saved_traces(batch_dir: Path) -> None:
+async def test_rebuild_regrades_saved_traces(batch_dir: Path) -> None:
     """重评分与首跑结论一致（断言式离线重算）。"""
-    batch = rebuild(batch_dir)
+    batch = await rebuild(batch_dir)
     by_id = {r.case_id: r.status for r in batch.results}
     assert by_id == {"passing": "passed", "failing": "failed"}
     assert batch.pass_rate == 0.5
 
 
-def test_rebuild_reads_attempt_files_and_legacy_layout(tmp_path: Path) -> None:
+async def test_rebuild_reads_attempt_files_and_legacy_layout(tmp_path: Path) -> None:
     """rebuild 兼容两种布局：-a<attempt> 多采样与旧版无后缀单采样。"""
     from mcc_eval.events import LlmChunk, RunStarted, ToolResult
 
@@ -151,7 +151,7 @@ def test_rebuild_reads_attempt_files_and_legacy_layout(tmp_path: Path) -> None:
     _write("multi-a2.jsonl")
     _write("multi-a3.jsonl", tool_error=True)  # 前两次过、第三次挂 → flaky
 
-    batch = rebuild(tmp_path)
+    batch = await rebuild(tmp_path)
     assert [r.attempt for r in batch.results] == [1, 2, 3]
     assert batch.flaky_cases == 1
     assert batch.case_pass_counts() == [("multi", 2, 3)]
@@ -168,20 +168,20 @@ def test_rebuild_reads_attempt_files_and_legacy_layout(tmp_path: Path) -> None:
         + RunFinished(seq=1, status="passed", turns=1).model_dump_json() + "\n",
         encoding="utf-8",
     )
-    old_batch = rebuild(legacy)
+    old_batch = await rebuild(legacy)
     assert old_batch.results[0].attempt == 1
     assert old_batch.results[0].status == "passed"
 
 
-def test_rebuild_missing_trace_is_error(tmp_path: Path) -> None:
+async def test_rebuild_missing_trace_is_error(tmp_path: Path) -> None:
     cases = [Case(case_id="ghost", task="t")]
     save_cases(cases, tmp_path)
-    batch = rebuild(tmp_path)
+    batch = await rebuild(tmp_path)
     assert batch.results[0].status == "error"
     assert "trace file missing" in batch.results[0].reason
 
 
-def test_rebuild_execution_terminal_preserved(tmp_path: Path) -> None:
+async def test_rebuild_execution_terminal_preserved(tmp_path: Path) -> None:
     """轨迹末事件是 error / timeout 的，重评分保留终态不再评分。"""
     from mcc_eval.events import RunFinished
 
@@ -192,12 +192,12 @@ def test_rebuild_execution_terminal_preserved(tmp_path: Path) -> None:
     (runs / "crashed.jsonl").write_text(
         RunFinished(seq=0, status="error").model_dump_json() + "\n", encoding="utf-8"
     )
-    batch = rebuild(tmp_path)
+    batch = await rebuild(tmp_path)
     assert batch.results[0].status == "error"
     assert "execution terminated as error" in batch.results[0].reason
 
 
-def test_rebuild_execution_check_reruns_on_work_dir(tmp_path: Path) -> None:
+async def test_rebuild_execution_check_reruns_on_work_dir(tmp_path: Path) -> None:
     """执行式重评分：在保留的 work/ 目录上重跑官方测试。"""
     cases = [Case(case_id="exec", task="t",
                   check="from solution import double as candidate\nassert candidate(3) == 6\n")]
@@ -216,7 +216,7 @@ def test_rebuild_execution_check_reruns_on_work_dir(tmp_path: Path) -> None:
         fh.write(RunFinished(seq=2, status="passed", cost_usd=0.01,
                              turns=1).model_dump_json() + "\n")
 
-    batch = rebuild(tmp_path)
+    batch = await rebuild(tmp_path)
     assert batch.results[0].status == "passed"
 
 

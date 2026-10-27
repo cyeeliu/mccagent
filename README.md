@@ -153,8 +153,8 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [可观测性](docs/observability.md) | JSONL 日志、脱敏、进程内指标、埋点 |
 | [安全纵深](docs/security.md) | hardened 规则、凭据扫描、untrusted 标签、system 条款 |
 | [可靠性](docs/reliability.md) | 错误分类、退避重试、熔断、限流、turn 超时、故障注入 |
-| [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
-| [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |
+| [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样、judge 与攻防断言 |
+| [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局、Red Team 集 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |
 | [踩坑与排障](docs/troubleshooting.md) | 已修复的 bug 与已知陷阱记录 |
 
