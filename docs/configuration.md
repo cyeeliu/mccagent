@@ -317,6 +317,20 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 
 日志写 `.mcc/logs/mcc.log.jsonl`，退出快照写 `.mcc/last_metrics.json`；`.mcc/` 已 gitignore。
 
+## 安全配置
+
+见 [security.md](security.md)。
+
+```json
+{"security": {"hardened": true, "redact_output": true, "untrusted_wrap": true}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `hardened` | `true` | 内置危险命令/敏感路径规则（不可被 allow/bypass 覆盖） |
+| `redact_output` | `true` | 工具输出凭据扫描替换为 `[REDACTED]` |
+| `untrusted_wrap` | `true` | MCP 工具输出包 `<untrusted>` 隔离标签 |
+
 ## .env
 
 项目根目录的 `.env` 自动加载（参考 [.env.example](../.env.example)），已存在的环境变量不会被覆盖。

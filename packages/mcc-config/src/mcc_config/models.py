@@ -94,6 +94,20 @@ class PermissionConfig(BaseModel):
     deny: list[str] = Field(default_factory=list)
 
 
+class SecurityConfig(BaseModel):
+    """安全纵深配置：hardened 规则、凭据扫描、untrusted 标签。
+
+    ``hardened`` 开启内置危险命令/敏感路径规则（不可被 allow 或
+    bypassPermissions 覆盖）；``redact_output`` 扫描工具输出中的
+    凭据并替换为 [REDACTED]；``untrusted_wrap`` 给 MCP 工具输出
+    包隔离标签。
+    """
+
+    hardened: bool = True
+    redact_output: bool = True
+    untrusted_wrap: bool = True
+
+
 class BudgetConfig(BaseModel):
     max_usd_per_session: float = 2.0
     max_iterations: int = 40
@@ -241,6 +255,7 @@ class Config(BaseModel):
     context: ContextConfig = Field(default_factory=ContextConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     goal: GoalConfig = Field(default_factory=GoalConfig)

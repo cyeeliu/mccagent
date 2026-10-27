@@ -132,7 +132,7 @@ def test_bash_allow_requires_word_boundary(checker_factory):
 
 def test_deny_carries_reason(checker_factory):
     checker = checker_factory([], ["Bash(rm:*)"])
-    result = checker.check(_bash_req("rm -rf /"))
+    result = checker.check(_bash_req("rm -rf ./tmp"))
     assert isinstance(result, Deny)
     assert "denied" in result.reason
 

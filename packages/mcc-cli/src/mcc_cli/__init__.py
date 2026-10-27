@@ -47,13 +47,16 @@ def _version() -> str:
 
 
 def _system_prompt() -> str:
+    from mcc_harness import SECURITY_SYSTEM_CLAUSE
+
     return (
         "You are mini-claude-code, an enterprise-grade AI coding assistant. "
         "Examine files with read_file or list_dir before making changes. "
         "Use edit_file for targeted modifications. "
         "Use run_bash for shell tasks. "
         "Use grep to search code. "
-        "Be concise and precise."
+        "Be concise and precise.\n\n"
+        + SECURITY_SYSTEM_CLAUSE
     )
 
 
@@ -403,8 +406,19 @@ def _build_source(
     builder = builder.model(resolve_model("main", model, config=config))
     builder = builder.summarize_model(summarize_model)
 
-    checker = PermissionChecker(config.permissions)
+    checker = PermissionChecker(
+        config.permissions, hardened=config.security.hardened
+    )
     builder = builder.permission(checker)
+
+    # 安全纵深：L3 hardened 由 checker 承载；L2/L5 注入 AgentLoop
+    from mcc_harness import SecurityPolicy
+
+    builder = builder.security(SecurityPolicy(
+        hardened=config.security.hardened,
+        redact_output=config.security.redact_output,
+        untrusted_wrap=config.security.untrusted_wrap,
+    ))
 
     # 多 Agent 团队：长驻 teammate 协作
     team_manager = None

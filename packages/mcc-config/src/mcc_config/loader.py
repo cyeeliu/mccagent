@@ -23,6 +23,7 @@ from mcc_config.models import (
     ObservabilityConfig,
     PermissionConfig,
     SandboxConfig,
+    SecurityConfig,
     SkillsConfig,
     TaskConfig,
     TeamConfig,
@@ -129,6 +130,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.workflow = project.workflow
     if project.observability != ObservabilityConfig():
         base.observability = project.observability
+    if project.security != SecurityConfig():
+        base.security = project.security
 
     return base
 

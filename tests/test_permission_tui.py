@@ -184,7 +184,7 @@ async def test_feedback_decision_returns_comment(ctx, registry, checker):
     responses: asyncio.Queue = asyncio.Queue()
     evq: asyncio.Queue = asyncio.Queue()
     llm = MockLlm([
-        _tool_turn("t1", "run_bash", {"command": "rm -rf /"}),
+        _tool_turn("t1", "run_bash", {"command": "rm -rf ./build-dir"}),
         single_text_turn("done"),
     ])
     agent = _agent(llm, ctx, registry, checker, responses)

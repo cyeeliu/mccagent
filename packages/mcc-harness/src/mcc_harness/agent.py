@@ -206,6 +206,7 @@ class AgentLoop:
         background_manager: Any | None = None,
         cron_scheduler: Any | None = None,
         observability: Any | None = None,
+        security_policy: Any | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -234,6 +235,7 @@ class AgentLoop:
         self.background_manager = background_manager
         self.cron_scheduler = cron_scheduler
         self.observability = observability
+        self.security_policy = security_policy
         self.history: list[Message] = list(history) if history else []
         if self.compactor is not None:
             # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
@@ -849,6 +851,25 @@ class AgentLoop:
                     is_error=is_error,
                 )
 
+            # 安全层：凭据扫描替换（防进上下文复读），第三方内容包隔离标签
+            if self.security_policy is not None and not is_error:
+                from mcc_harness.security import scan_tool_output, wrap_untrusted
+
+                if self.security_policy.redact_output:
+                    content, hits = scan_tool_output(content)
+                    if hits:
+                        await tx.put(Notice(
+                            text=f"[security] {tool_name} output redacted: "
+                            f"{', '.join(hits)}"
+                        ))
+                        if self.observability is not None:
+                            self.observability.event_counter(
+                                "agent_security_redactions_total", tool=tool_name
+                            )
+                if (self.security_policy.untrusted_wrap
+                        and tool_name.startswith("mcp__")):
+                    content = wrap_untrusted(tool_name, content)
+
             if self.hooks:
                 ctx = HookContext(
                     hook_type=HookType.POST_TOOL,
@@ -942,6 +963,7 @@ class AgentLoopBuilder:
         self._background: Any | None = None
         self._cron: Any | None = None
         self._observability: Any | None = None
+        self._security: Any | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -1046,6 +1068,10 @@ class AgentLoopBuilder:
         self._observability = sink
         return self
 
+    def security(self, policy: Any) -> AgentLoopBuilder:
+        self._security = policy
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -1076,4 +1102,5 @@ class AgentLoopBuilder:
             background_manager=self._background,
             cron_scheduler=self._cron,
             observability=self._observability,
+            security_policy=self._security,
         )

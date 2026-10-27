@@ -25,13 +25,22 @@ _MAX_STR = 500
 _STR_HEAD = 200
 
 # 凭据正则：先长后短，避免 sk- 前缀吃掉 sk-ant-
-_SECRET_PATTERNS = [
-    re.compile(r"sk-ant-[A-Za-z0-9\-_]{50,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"ghp_[A-Za-z0-9]{30,}"),
-    re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY"),
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("anthropic_api_key", re.compile(r"sk-ant-[A-Za-z0-9\-_]{50,}")),
+    ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("github_token", re.compile(r"ghp_[A-Za-z0-9]{30,}")),
+    ("private_key", re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY")),
+    ("openai_api_key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
 ]
+
+
+def find_secrets(text: str) -> list[str]:
+    """扫描文本中的常见凭据，返回命中模式名列表（去重，保序）。"""
+    seen: list[str] = []
+    for name, pattern in SECRET_PATTERNS:
+        if pattern.search(text) and name not in seen:
+            seen.append(name)
+    return seen
 
 
 def sanitize(value: Any, max_str: int = _MAX_STR) -> Any:
@@ -57,7 +66,7 @@ def sanitize(value: Any, max_str: int = _MAX_STR) -> Any:
 def redact_secrets(text: str) -> str:
     """扫描文本中的常见凭据并替换为 ``[REDACTED]``。"""
     out = text
-    for pattern in _SECRET_PATTERNS:
+    for _name, pattern in SECRET_PATTERNS:
         out = pattern.sub("[REDACTED]", out)
     return out
 
@@ -281,6 +290,10 @@ class ObservabilitySink:
             "agent_loop_iterations", float(iteration),
             session_hash=str(hash(self._session_id) % 10000),
         )
+
+    def event_counter(self, name: str, **labels: Any) -> None:
+        """通用计数器：供安全告警等自定义事件聚合。"""
+        self._metrics.counter(name, **labels)
 
     def _log(self, message: str, **fields: Any) -> None:
         if self._sanitize:

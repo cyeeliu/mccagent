@@ -65,14 +65,16 @@ class PermissionRequest:
 
 
 class PermissionChecker:
-    """权限检查器：deny 优先，allow 次之，无匹配走 mode 默认。"""
+    """权限检查器：hardened 内置规则最前（不可覆盖），deny 优先，
+    allow 次之，无匹配走 mode 默认。"""
 
-    def __init__(self, cfg: PermissionConfig) -> None:
+    def __init__(self, cfg: PermissionConfig, *, hardened: bool = True) -> None:
         self._allow_bash: list[str] = []
         self._deny_bash: list[str] = []
         self._allow_paths: list[str] = []
         self._deny_paths: list[str] = []
         self._mode = cfg.mode or "default"
+        self._hardened = hardened
 
         for rule in cfg.allow:
             _route(rule, self._allow_bash, self._allow_paths)
@@ -80,6 +82,25 @@ class PermissionChecker:
             _route(rule, self._deny_bash, self._deny_paths)
 
     def check(self, req: PermissionRequest) -> Decision:
+        if self._hardened:
+            from mcc_harness.security import (
+                hardened_deny_reason,
+                is_path_sensitive,
+            )
+
+            match req.action:
+                case BashAction(cmd=cmd):
+                    reason = hardened_deny_reason(cmd)
+                    if reason is not None:
+                        return Deny(
+                            f"blocked by hardened security policy: {reason}"
+                        )
+                case PathAction(path=path):
+                    if is_path_sensitive(path):
+                        return Deny(
+                            "blocked by hardened security policy: sensitive path"
+                        )
+
         match req.action:
             case BashAction(cmd=cmd):
                 c = cmd.lstrip()

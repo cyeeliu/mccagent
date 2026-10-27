@@ -67,6 +67,17 @@ from mcc_harness.permission import (
     bash_word_match,
 )
 from mcc_harness.plan import PlanError, PlanRequest, PlanStore
+from mcc_harness.security import (
+    HARDENED_CMD_PATTERNS,
+    HARDENED_PATH_GLOBS,
+    SECURITY_SYSTEM_CLAUSE,
+    SecurityPolicy,
+    hardened_deny_reason,
+    is_bash_dangerous,
+    is_path_sensitive,
+    scan_tool_output,
+    wrap_untrusted,
+)
 from mcc_harness.subagent import (
     SpawnSubagentTool,
     SubagentResult,
@@ -169,6 +180,8 @@ __all__ = [
     "PythonHook",
     "RequestShutdownTool",
     "ReviewPlanTool",
+    "SECURITY_SYSTEM_CLAUSE",
+    "SecurityPolicy",
     "SendToLeadTool",
     "SendTeammateMessageTool",
     "ShellHook",
@@ -189,6 +202,8 @@ __all__ = [
     "Budget",
     "ExecutionLimits",
     "ExecutionState",
+    "HARDENED_CMD_PATTERNS",
+    "HARDENED_PATH_GLOBS",
     "RunnerOutput",
     "SimpleJsonSchema",
     "SubagentWorkflowRunner",
@@ -205,6 +220,9 @@ __all__ = [
     "format_background_results",
     "format_cron_delivery",
     "format_team_events",
+    "hardened_deny_reason",
+    "is_bash_dangerous",
+    "is_path_sensitive",
     "list_workflows",
     "model_price_per_1m",
     "parse_json_value",
@@ -214,10 +232,12 @@ __all__ = [
     "register_workflow",
     "remove_worktree",
     "reserve_run_id",
+    "scan_tool_output",
     "token_budget_to_usd",
     "validate_cron",
     "validate_meta",
     "validate_run_id",
     "workflow_run_lock",
+    "wrap_untrusted",
 ]
 __version__ = "0.1.0"
