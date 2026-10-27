@@ -197,14 +197,18 @@ class BubblewrapExecutor:
             Path("/lib64"), Path("/etc"), Path("/proc"), Path("/dev"),
             Path("/tmp"),
         }
-        for parent in reversed(cwd_path.parents):
-            if parent not in mounted_roots:
-                argv += ["--dir", str(parent)]
         argv += [
             "--proc", "/proc",
             "--dev", "/dev",
             "--tmpfs", "/tmp",
             "--die-with-parent",
+        ]
+        # Create parents after replacing /tmp with tmpfs; creating them before
+        # --tmpfs would discard them and make the subsequent bind fail.
+        for parent in reversed(cwd_path.parents):
+            if parent not in mounted_roots:
+                argv += ["--dir", str(parent)]
+        argv += [
             "--bind", str(cwd_path), str(cwd_path),
             "--chdir", str(cwd_path),
         ]
