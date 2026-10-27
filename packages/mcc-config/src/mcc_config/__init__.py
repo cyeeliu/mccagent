@@ -25,7 +25,7 @@ from mcc_config.models import (
     SandboxConfig,
     SkillsConfig,
 )
-from mcc_config.resolve import DEFAULT_MODEL, build_llm_provider, resolve_model
+from mcc_config.resolve import DEFAULT_MODEL, resolve_model
 
 __all__ = [
     "ensure_default_config",
@@ -33,7 +33,6 @@ __all__ = [
     "merge",
     "read_home_settings",
     "update_home_setting",
-    "build_llm_provider",
     "resolve_model",
     "DEFAULT_MODEL",
     "BudgetConfig",

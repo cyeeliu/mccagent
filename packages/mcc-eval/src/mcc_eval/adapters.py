@@ -225,11 +225,11 @@ class MccAdapter:
         from mcc_config import (
             PermissionConfig,
             SandboxConfig,
-            build_llm_provider,
             load,
         )
         from mcc_core import ToolContext
         from mcc_harness import AgentLoopBuilder, PermissionChecker
+        from mcc_llm import build_llm_provider
         from mcc_tools import RunBashTool, default_registry
         from mcc_tools.sandbox import build_executor
 

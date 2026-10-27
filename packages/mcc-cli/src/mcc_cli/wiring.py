@@ -113,7 +113,7 @@ def _wire_llm(config, mock: bool, mock_script: str | None, llm_base_url: str | N
         # 网关与凭证约定统一在 mcc-config：显式 --llm-base-url >
         # settings.json llm 段 > MCC_LLM_BASE_URL，均未配置时按
         # 环境自动探测
-        from mcc_config import build_llm_provider
+        from mcc_llm import build_llm_provider
 
         try:
             llm = build_llm_provider(base_url=llm_base_url, config=config)

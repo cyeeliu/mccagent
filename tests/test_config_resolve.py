@@ -10,8 +10,9 @@ import json
 from pathlib import Path
 
 import pytest
-from mcc_config import DEFAULT_MODEL, build_llm_provider, resolve_model
+from mcc_config import DEFAULT_MODEL, resolve_model
 from mcc_config.models import Config, LlmConfig, ModelConfig
+from mcc_llm import build_llm_provider
 
 
 def _clear_llm_env(monkeypatch) -> None:

@@ -13,6 +13,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from mcc_core import ContentBlock, Message, Usage
 
+from mcc_llm.factory import build_llm_provider
+
 # ---------- 流式事件 ----------
 
 
@@ -118,5 +120,6 @@ __all__ = [
     "ToolUseInputDelta",
     "ToolUseStart",
     "auto_provider_from_env",
+    "build_llm_provider",
 ]
 __version__ = "0.1.0"

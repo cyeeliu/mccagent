@@ -1,16 +1,12 @@
 [project]
 name = "mcc-config"
 version = "0.1.0"
-description = "配置加载：home (~/.mcc) + project (.mcc) 合并；模型解析与 provider 构建统一入口"
+description = "配置加载：home (~/.mcc) + project (.mcc) 合并；模型解析统一入口"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "pydantic>=2.9",
-    "mcc-llm",
 ]
-
-[tool.uv.sources]
-mcc-llm = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

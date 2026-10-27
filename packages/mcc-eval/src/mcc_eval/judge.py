@@ -46,7 +46,8 @@ class JudgeScorer:
         if self._provider is not None:
             return self._provider, self._model or ""
         try:
-            from mcc_config import build_llm_provider, resolve_model
+            from mcc_config import resolve_model
+            from mcc_llm import build_llm_provider
 
             provider = build_llm_provider()
             model = resolve_model("judge")
