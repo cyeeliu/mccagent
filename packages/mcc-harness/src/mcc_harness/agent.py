@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,6 +59,7 @@ from mcc_harness.compactor import (
     ContextCompactor,
     is_too_long_error,
 )
+from mcc_harness.interceptors import IterationContext
 
 from .goal import GoalController
 from .hooks import HookContext, HookRegistry, HookType
@@ -211,6 +211,8 @@ class AgentLoop:
         retry_policy: Any | None = None,
         circuit_breaker: Any | None = None,
         turn_timeout_secs: float = 0.0,
+        interceptors: list[Any] | None = None,
+        guards: list[Any] | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -243,6 +245,34 @@ class AgentLoop:
         self.retry_policy = retry_policy
         self.circuit_breaker = circuit_breaker
         self.turn_timeout_secs = turn_timeout_secs
+        # 注入字段统一转换为拦截器/守卫（协议收敛，旧 builder 方法
+        # 兼容保留）；执行顺序即注册顺序：timeout → observability →
+        # background → cron → budget → hooks → 自定义扩展
+        from mcc_harness.interceptors import (
+            BackgroundInterceptor,
+            BudgetInterceptor,
+            CronInterceptor,
+            HooksInterceptor,
+            ObservabilityInterceptor,
+            ReliabilityGuard,
+            TurnTimeoutInterceptor,
+        )
+
+        self._interceptors: list[Any] = []
+        if turn_timeout_secs > 0:
+            self._interceptors.append(TurnTimeoutInterceptor(turn_timeout_secs))
+        if observability is not None:
+            self._interceptors.append(ObservabilityInterceptor(observability))
+        if background_manager is not None:
+            self._interceptors.append(BackgroundInterceptor(background_manager))
+        if cron_scheduler is not None:
+            self._interceptors.append(CronInterceptor(cron_scheduler))
+        self._interceptors.append(BudgetInterceptor())
+        if hooks is not None:
+            self._interceptors.append(HooksInterceptor(hooks))
+        self._interceptors.extend(interceptors or [])
+        self._guards: list[Any] = [ReliabilityGuard(retry_policy, circuit_breaker)]
+        self._guards.extend(guards or [])
         self.history: list[Message] = list(history) if history else []
         if self.compactor is not None:
             # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
@@ -316,86 +346,20 @@ class AgentLoop:
         total_usage = Usage()
         total_cost = 0.0
         cost_breakdown: list[TurnCost] = []
-        budget_warned = False
         system_blocks = self._build_system_blocks()
         rounds_since_todo = 0
-        turn_start: float | None = None
-        if self.turn_timeout_secs > 0:
-            turn_start = time.monotonic()
 
         try:
             for iteration in range(1, self.max_iterations + 1):
-                if turn_start is not None:
-                    elapsed = time.monotonic() - turn_start
-                    if elapsed >= self.turn_timeout_secs:
-                        await tx.put(Notice(
-                            text=f"turn timed out after "
-                            f"{self.turn_timeout_secs:.0f}s "
-                            f"({iteration - 1} iteration(s) completed)"
-                        ))
-                        raise AgentError(
-                            f"turn timed out after {self.turn_timeout_secs:.0f}s"
-                        )
-                if self.observability is not None:
-                    self.observability.iteration(iteration=iteration)
-
-                if self.background_manager is not None:
-                    from mcc_harness.background import format_background_results
-
-                    bg_results = await self.background_manager.collect()
-                    if bg_results:
-                        notification = format_background_results(bg_results)
-                        messages.append(Message.user(notification))
-                        await tx.put(Notice(text=notification))
-
-                if self.cron_scheduler is not None:
-                    from mcc_harness.cron import format_cron_delivery
-
-                    cron_jobs = await self.cron_scheduler.consume()
-                    if cron_jobs:
-                        notification = format_cron_delivery(cron_jobs)
-                        messages.append(Message.user(notification))
-                        await tx.put(Notice(text=notification))
-                        await self.cron_scheduler.acknowledge(cron_jobs)
-
-                if (
-                    self.max_cost_usd > 0
-                    and not budget_warned
-                    and total_cost >= self.max_cost_usd * self.warn_threshold
-                ):
-                    budget_warned = True
-                    await tx.put(
-                        Notice(
-                            text=f"Budget warning: ${total_cost:.4} / "
-                            f"${self.max_cost_usd:.4} "
-                            f"({total_cost / self.max_cost_usd:.0%})"
-                        )
-                    )
-                if self.max_cost_usd > 0 and total_cost >= self.max_cost_usd:
-                    await tx.put(
-                        Notice(
-                            text=f"Budget limit ${self.max_cost_usd:.4} reached "
-                            f"after {iteration - 1} iteration(s)"
-                        )
-                    )
-                    raise AgentError(
-                        f"cost ${total_cost:.4} >= limit ${self.max_cost_usd:.4}"
-                    )
-
-                if self.hooks:
-                    ctx = HookContext(
-                        hook_type=HookType.ON_TURN_START,
-                        session_id=self.ctx.session_id,
-                        cost_usd=total_cost,
-                        iteration=iteration,
-                        depth=self.ctx.depth,
-                        cwd=self.ctx.cwd,
-                    )
-                    for hr in await self.hooks.run_hooks(
-                        HookType.ON_TURN_START, ctx
-                    ):
-                        if hr.message:
-                            await tx.put(Notice(text=hr.message))
+                ictx = IterationContext(
+                    loop=self,
+                    messages=messages,
+                    tx=tx,
+                    iteration=iteration,
+                    total_cost=total_cost,
+                )
+                for interceptor in self._interceptors:
+                    await interceptor.on_iteration(ictx)
 
                 # 每轮调用模型前过压缩管线；API 拒绝超限时做一次性
                 # reactive 补救（内层循环重试，不占迭代预算）
@@ -680,69 +644,25 @@ class AgentLoop:
     async def _call_with_retry(
         self, req: CompleteRequest, tx: asyncio.Queue[AgentEvent]
     ) -> tuple[list[ContentBlock], str | None, Usage]:
-        """带熔断与结构化分类的指数退避重试。
+        """按守卫洋葱链调用 LLM：外→内逐层包裹 _call_streaming_once。
 
-        429 尊重 retry-after 头；其余可重试错误走 RetryPolicy
-        抖动退避。熔断器 open 时快速失败，不触达 LLM。
+        默认链上只有 ReliabilityGuard（熔断/重试/埋点）；扩展守卫经
+        builder.guard() 注册，执行顺序与注册顺序一致（先注册在外）。
         """
-        from mcc_harness.reliability import RetryPolicy, classify_llm_error
+        invoke = self._call_streaming_once
+        for guard in reversed(self._guards):
+            inner = invoke
 
-        policy = self.retry_policy or RetryPolicy()
-        if self.circuit_breaker is not None:
-            try:
-                self.circuit_breaker.check()
-            except Exception:
-                if self.observability is not None:
-                    self.observability.event_counter("agent_circuit_open_total")
-                raise
-        _t0: int | None = None
-        if self.observability is not None:
-            from mcc_observability import now_ms
+            async def _chained(
+                req: CompleteRequest,
+                tx: asyncio.Queue[AgentEvent],
+                _guard: Any = guard,
+                _inner: Any = inner,
+            ) -> tuple[list[ContentBlock], str | None, Usage]:
+                return await _guard.wrap(self, req, tx, _inner)
 
-            _t0 = now_ms()
-        rng = None
-        for attempt in range(1, policy.max_attempts + 1):
-            try:
-                blocks, stop_reason, usage = await self._call_streaming_once(req, tx)
-            except Exception as e:
-                decision = classify_llm_error(e)
-                if self.circuit_breaker is not None and decision.retryable:
-                    self.circuit_breaker.record_failure()
-                if not decision.retryable or attempt >= policy.max_attempts:
-                    raise
-                if decision.retry_after_ms is not None:
-                    delay = decision.retry_after_ms / 1000.0
-                else:
-                    if rng is None:
-                        import random
-
-                        rng = random.Random()
-                    delay = policy.delay(attempt, rng)
-                await tx.put(
-                    Notice(
-                        text=f"{decision.reason} (attempt {attempt}/"
-                        f"{policy.max_attempts}), retrying in {delay:.1f}s..."
-                    )
-                )
-                await asyncio.sleep(delay)
-                continue
-            if self.circuit_breaker is not None:
-                self.circuit_breaker.record_success()
-            if self.observability is not None and _t0 is not None:
-                from mcc_observability import now_ms as _now_ms
-
-                self.observability.llm_call(
-                    model=self.model,
-                    latency_ms=_now_ms() - _t0,
-                    input_tokens=usage.input_tokens,
-                    output_tokens=usage.output_tokens,
-                    cache_read_tokens=usage.cache_read_input_tokens,
-                    cache_write_tokens=usage.cache_creation_input_tokens,
-                    stop_reason=stop_reason,
-                    attempt=attempt,
-                )
-            return blocks, stop_reason, usage
-        raise AgentError("retry exhausted")
+            invoke = _chained
+        return await invoke(req, tx)
 
     async def _call_streaming_once(
         self, req: CompleteRequest, tx: asyncio.Queue[AgentEvent]
@@ -1010,6 +930,8 @@ class AgentLoopBuilder:
         self._retry_policy: Any | None = None
         self._circuit_breaker: Any | None = None
         self._turn_timeout_secs: float = 0.0
+        self._extra_interceptors: list[Any] = []
+        self._extra_guards: list[Any] = []
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -1130,6 +1052,18 @@ class AgentLoopBuilder:
         self._turn_timeout_secs = secs
         return self
 
+    def interceptor(self, it: Any) -> AgentLoopBuilder:
+        """注册自定义迭代拦截器（IterationInterceptor 协议），
+        在内置拦截器之后按注册顺序执行。"""
+        self._extra_interceptors.append(it)
+        return self
+
+    def guard(self, g: Any) -> AgentLoopBuilder:
+        """注册自定义 LLM 调用守卫（LlmCallGuard 协议），
+        在可靠性守卫之后按注册顺序包裹（后注册的更内层）。"""
+        self._extra_guards.append(g)
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -1164,4 +1098,6 @@ class AgentLoopBuilder:
             retry_policy=self._retry_policy,
             circuit_breaker=self._circuit_breaker,
             turn_timeout_secs=self._turn_timeout_secs,
+            interceptors=self._extra_interceptors,
+            guards=self._extra_guards,
         )
