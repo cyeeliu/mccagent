@@ -156,6 +156,53 @@ class TestMcpClientRealServer:
         await client.close()
         await client.close()
 
+    @pytest.mark.asyncio
+    async def test_concurrent_tool_calls_are_dispatched_to_matching_requests(self) -> None:
+        cmd = self._server_cmd()
+        client = McpClient("mock", cmd[0], args=cmd[1:])
+        try:
+            await client.connect()
+            messages = [f"message-{i}" for i in range(40)]
+            results = await asyncio.wait_for(
+                asyncio.gather(*(
+                    client.call_tool("echo", {"message": message})
+                    for message in messages
+                )),
+                timeout=5,
+            )
+            assert results == [(message, False) for message in messages]
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_rpc_times_out_when_server_does_not_respond(self, tmp_path: Path) -> None:
+        server = tmp_path / "silent_server.py"
+        server.write_text(
+            "import json, sys, time\n"
+            "for line in sys.stdin:\n"
+            " msg = json.loads(line)\n"
+            " if msg.get('method') == 'initialize':\n"
+            "  time.sleep(0.2)\n"
+            "  print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{"
+            "'protocolVersion':'2025-03-26','capabilities':{},'serverInfo':{"
+            "'name':'silent','version':'1'}}}), flush=True)\n"
+            " elif msg.get('method') == 'tools/list':\n"
+            "  print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{'tools':[]}}), flush=True)\n"
+            " elif msg.get('method') == 'tools/call':\n"
+            "  time.sleep(1)\n"
+            "  print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{"
+            "'content':[]}}), flush=True)\n",
+            encoding="utf-8",
+        )
+        client = McpClient(
+            "slow", sys.executable, args=[str(server)], request_timeout_secs=0.05
+        )
+        # Allow the handshake to finish, then use a short timeout for a deliberately slow call.
+        client.request_timeout_secs = 0.05
+        with pytest.raises(McpError, match="timed out"):
+            await client.connect()
+        await client.close()
+
 
 class TestMcpClientManager:
     def _server_cmd(self) -> list[str]:
