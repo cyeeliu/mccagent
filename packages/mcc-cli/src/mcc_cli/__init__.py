@@ -468,6 +468,36 @@ def _build_source(
     if cron_scheduler is not None:
         builder = builder.cron(cron_scheduler)
 
+    # 可观测性：JSON 日志落 .mcc/logs/ + 进程内指标聚合
+    obs_sink = None
+    if config.observability.enabled:
+        import logging as _logging
+
+        from mcc_observability import (
+            JsonFormatter,
+            Metrics,
+            ObservabilitySink,
+        )
+
+        log_dir = work_dir / ".mcc" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = _logging.FileHandler(log_dir / "mcc.log.jsonl", encoding="utf-8")
+        handler.setFormatter(
+            JsonFormatter(text=config.observability.log_format == "text")
+        )
+        logger = _logging.getLogger("mcc")
+        logger.setLevel(config.observability.log_level.upper())
+        if not any(isinstance(h, _logging.FileHandler) for h in logger.handlers):
+            logger.addHandler(handler)
+        logger.propagate = False
+        obs_sink = ObservabilitySink(
+            logger,
+            Metrics(),
+            session_id=sid,
+            sanitize_enabled=config.observability.sanitize,
+        )
+        builder = builder.observability(obs_sink)
+
     agent = builder.build()
     return AgentEventSource(
         agent,
@@ -476,6 +506,7 @@ def _build_source(
         team_manager=team_manager,
         cron_scheduler=cron_scheduler,
         workflow_tool=workflow_tool,
+        observability_sink=obs_sink,
     )
 
 
@@ -547,8 +578,46 @@ def _history_events(history: list, cost_usd: float = 0.0) -> list:
     return events
 
 
+def _dump_metrics_snapshot(sink, work_dir: Path | None) -> None:
+    """TUI 退出时落盘指标快照并向 stderr 打一行汇总。"""
+    import sys as _sys
+
+    snapshot = sink.metrics.snapshot()
+    target_dir = work_dir or Path.cwd()
+    try:
+        out = target_dir / ".mcc" / "last_metrics.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+    except OSError:
+        return
+    llm_calls = sum(
+        c["value"] for c in snapshot["counters"]
+        if c["name"] == "agent_llm_calls_total"
+    )
+    latency = next(
+        (h for h in snapshot["histograms"]
+         if h["name"] == "agent_llm_latency_ms"),
+        None,
+    )
+    cache = next(
+        (h for h in snapshot["histograms"]
+         if h["name"] == "agent_cache_hit_rate"),
+        None,
+    )
+    parts = [f"llm_calls={int(llm_calls)}"]
+    if latency:
+        parts.append(f"p95={latency['p95']:.0f}ms")
+    if cache:
+        parts.append(f"cache_hit_rate={cache['sum'] / max(cache['count'], 1):.2f}")
+    print(f"[observability] {' '.join(parts)}", file=_sys.stderr)
+
+
 async def _run_tui_mode(
-    source: EventSource, replay: list | None = None, session_id: str | None = None
+    source: EventSource,
+    replay: list | None = None,
+    session_id: str | None = None,
+    work_dir: Path | None = None,
 ) -> int:
     from mcc_tui import TuiHandles, run_tui
 
@@ -601,6 +670,9 @@ async def _run_tui_mode(
         worker.cancel()
         if cron is not None:
             await cron.stop()
+        sink = getattr(source, "observability_sink", None)
+        if sink is not None:
+            _dump_metrics_snapshot(sink, work_dir)
     return 0
 
 
@@ -786,7 +858,7 @@ def _run_resume_cmd(
     )
     replay = _history_events(history, cost_usd=meta.cost_usd)
     sys.exit(
-        asyncio.run(_run_tui_mode(source, replay=replay, session_id=meta.id))
+        asyncio.run(_run_tui_mode(source, replay=replay, session_id=meta.id, work_dir=work_dir))
     )
 
 
@@ -903,7 +975,7 @@ def main(
 
     try:
         if cmd == "tui" or (cmd is None and prompt is None):
-            sys.exit(asyncio.run(_run_tui_mode(source)))
+            sys.exit(asyncio.run(_run_tui_mode(source, work_dir=work_dir)))
         elif prompt is not None:
             sys.exit(asyncio.run(run_headless(source, prompt, quiet)))
     except KeyboardInterrupt:

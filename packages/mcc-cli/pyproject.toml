@@ -25,6 +25,7 @@ dependencies = [
     "mcc-session",
     "mcc-config",
     "mcc-tui",
+    "mcc-observability",
     "click>=8.1",
     "httpx>=0.27",
 ]

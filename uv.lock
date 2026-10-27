@@ -11,6 +11,7 @@ members = [
     "mcc-harness",
     "mcc-llm",
     "mcc-mcp",
+    "mcc-observability",
     "mcc-session",
     "mcc-skills",
     "mcc-tools",
@@ -145,6 +146,7 @@ dependencies = [
     { name = "mcc-core" },
     { name = "mcc-harness" },
     { name = "mcc-llm" },
+    { name = "mcc-observability" },
     { name = "mcc-session" },
     { name = "mcc-tools" },
     { name = "mcc-tui" },
@@ -158,6 +160,7 @@ requires-dist = [
     { name = "mcc-core", editable = "packages/mcc-core" },
     { name = "mcc-harness", editable = "packages/mcc-harness" },
     { name = "mcc-llm", editable = "packages/mcc-llm" },
+    { name = "mcc-observability", editable = "packages/mcc-observability" },
     { name = "mcc-session", editable = "packages/mcc-session" },
     { name = "mcc-tools", editable = "packages/mcc-tools" },
     { name = "mcc-tui", editable = "packages/mcc-tui" },
@@ -224,6 +227,7 @@ dependencies = [
     { name = "mcc-config" },
     { name = "mcc-core" },
     { name = "mcc-llm" },
+    { name = "mcc-observability" },
     { name = "mcc-session" },
     { name = "mcc-tools" },
     { name = "pydantic" },
@@ -234,6 +238,7 @@ requires-dist = [
     { name = "mcc-config", editable = "packages/mcc-config" },
     { name = "mcc-core", editable = "packages/mcc-core" },
     { name = "mcc-llm", editable = "packages/mcc-llm" },
+    { name = "mcc-observability", editable = "packages/mcc-observability" },
     { name = "mcc-session", editable = "packages/mcc-session" },
     { name = "mcc-tools", editable = "packages/mcc-tools" },
     { name = "pydantic", specifier = ">=2.9" },
@@ -266,6 +271,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "mcc-core", editable = "packages/mcc-core" }]
+
+[[package]]
+name = "mcc-observability"
+version = "0.1.0"
+source = { editable = "packages/mcc-observability" }
 
 [[package]]
 name = "mcc-session"

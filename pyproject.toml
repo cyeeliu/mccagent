@@ -23,6 +23,7 @@ mcc-cli = { workspace = true }
 mcc-eval = { workspace = true }
 mcc-skills = { workspace = true }
 mcc-mcp = { workspace = true }
+mcc-observability = { workspace = true }
 
 [dependency-groups]
 dev = [

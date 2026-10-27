@@ -73,6 +73,7 @@ class AgentEventSource(EventSource):
         team_manager: Any | None = None,
         cron_scheduler: Any | None = None,
         workflow_tool: Any | None = None,
+        observability_sink: Any | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
@@ -80,6 +81,7 @@ class AgentEventSource(EventSource):
         self.team_manager = team_manager
         self.cron_scheduler = cron_scheduler
         self.workflow_tool = workflow_tool
+        self.observability_sink = observability_sink
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
         if self._goal_controller is not None:

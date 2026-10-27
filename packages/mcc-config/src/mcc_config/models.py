@@ -102,8 +102,18 @@ class BudgetConfig(BaseModel):
 
 
 class ObservabilityConfig(BaseModel):
+    """可观测性配置：结构化 JSON 日志、脱敏与进程内指标。
+
+    ``enabled`` 关闭时不构造 sink、不写日志文件；``log_format``
+    支持 json/text；``sanitize`` 控制日志字段脱敏；``metrics``
+    控制进程内指标聚合与退出快照。
+    """
+
+    enabled: bool = True
     log_format: str = "json"
-    otel_endpoint: str | None = None
+    log_level: str = "info"
+    sanitize: bool = True
+    metrics: bool = True
 
 
 class HookEntry(BaseModel):

@@ -55,8 +55,11 @@
     "max_usd_per_turn": 0.0
   },
   "observability": {
+    "enabled": true,
     "log_format": "json",
-    "otel_endpoint": null
+    "log_level": "info",
+    "sanitize": true,
+    "metrics": true
   },
   "hooks": {
     "pre_tool_use": [{"matcher": "run_bash", "command": "scripts/guard.sh"}],
@@ -295,6 +298,24 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 | `budget_tokens` | `null` | 默认 token 预算（args.budget 可覆盖） |
 
 `.workflows/` 已 gitignore。
+
+## 可观测性配置
+
+见 [observability.md](observability.md)。
+
+```json
+{"observability": {"enabled": true, "log_format": "json", "log_level": "info", "sanitize": true, "metrics": true}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关闭时不构造 sink、不写日志文件 |
+| `log_format` | `json` | `json`（JSONL）或 `text`（人类可读） |
+| `log_level` | `info` | logging 级别 |
+| `sanitize` | `true` | 日志字段脱敏开关 |
+| `metrics` | `true` | 进程内指标聚合与退出快照 |
+
+日志写 `.mcc/logs/mcc.log.jsonl`，退出快照写 `.mcc/last_metrics.json`；`.mcc/` 已 gitignore。
 
 ## .env
 

@@ -1,0 +1,11 @@
+[project]
+name = "mcc-observability"
+version = "0.1.0"
+description = "结构化 JSON 日志、敏感字段脱敏与进程内指标聚合"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

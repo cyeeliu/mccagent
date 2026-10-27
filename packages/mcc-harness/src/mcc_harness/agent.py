@@ -205,6 +205,7 @@ class AgentLoop:
         tasks_enabled: bool = False,
         background_manager: Any | None = None,
         cron_scheduler: Any | None = None,
+        observability: Any | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -232,6 +233,7 @@ class AgentLoop:
         self.tasks_enabled = tasks_enabled
         self.background_manager = background_manager
         self.cron_scheduler = cron_scheduler
+        self.observability = observability
         self.history: list[Message] = list(history) if history else []
         if self.compactor is not None:
             # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
@@ -311,6 +313,9 @@ class AgentLoop:
 
         try:
             for iteration in range(1, self.max_iterations + 1):
+                if self.observability is not None:
+                    self.observability.iteration(iteration=iteration)
+
                 if self.background_manager is not None:
                     from mcc_harness.background import format_background_results
 
@@ -654,9 +659,14 @@ class AgentLoop:
     ) -> tuple[list[ContentBlock], str | None, Usage]:
         """带指数退避的 LLM 调用重试。"""
         max_retries = 3
+        _t0: int | None = None
+        if self.observability is not None:
+            from mcc_observability import now_ms
+
+            _t0 = now_ms()
         for attempt in range(1, max_retries + 1):
             try:
-                return await self._call_streaming_once(req, tx)
+                blocks, stop_reason, usage = await self._call_streaming_once(req, tx)
             except Exception as e:
                 msg = str(e)
                 retryable = any(
@@ -672,6 +682,21 @@ class AgentLoop:
                     )
                 )
                 await asyncio.sleep(delay)
+                continue
+            if self.observability is not None and _t0 is not None:
+                from mcc_observability import now_ms as _now_ms
+
+                self.observability.llm_call(
+                    model=self.model,
+                    latency_ms=_now_ms() - _t0,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cache_read_tokens=usage.cache_read_input_tokens,
+                    cache_write_tokens=usage.cache_creation_input_tokens,
+                    stop_reason=stop_reason,
+                    attempt=attempt,
+                )
+            return blocks, stop_reason, usage
         raise AgentError("retry exhausted")
 
     async def _call_streaming_once(
@@ -752,6 +777,12 @@ class AgentLoop:
                 if self.permission
                 else Allow()
             )
+            if self.observability is not None:
+                preq = permission_request_for(tool_name, tool_input)
+                self.observability.permission(
+                    category=preq.category,
+                    decision=type(decision).__name__.lower(),
+                )
             match decision:
                 case Deny(reason=reason):
                     return (tool_id, f"permission denied: {reason}", True)
@@ -801,9 +832,22 @@ class AgentLoop:
             tool = self.registry.get(tool_name)
             if tool is None:
                 return (tool_id, f"unknown tool: {tool_name}", True)
+            _t0 = None
+            if self.observability is not None:
+                from mcc_observability import now_ms
+
+                _t0 = now_ms()
             out = await tool.execute(tool_input, self.ctx)
             content = out.content
             is_error = out.is_error
+            if self.observability is not None and _t0 is not None:
+                from mcc_observability import now_ms as _now_ms
+
+                self.observability.tool_call(
+                    tool=tool_name,
+                    latency_ms=_now_ms() - _t0,
+                    is_error=is_error,
+                )
 
             if self.hooks:
                 ctx = HookContext(
@@ -897,6 +941,7 @@ class AgentLoopBuilder:
         self._tasks_enabled: bool = False
         self._background: Any | None = None
         self._cron: Any | None = None
+        self._observability: Any | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -997,6 +1042,10 @@ class AgentLoopBuilder:
         self._cron = sched
         return self
 
+    def observability(self, sink: Any) -> AgentLoopBuilder:
+        self._observability = sink
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -1026,4 +1075,5 @@ class AgentLoopBuilder:
             tasks_enabled=self._tasks_enabled,
             background_manager=self._background,
             cron_scheduler=self._cron,
+            observability=self._observability,
         )

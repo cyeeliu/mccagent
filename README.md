@@ -24,6 +24,7 @@
 - **后台任务** — `run_in_background` 异步执行长耗时命令，asyncio.Task + SandboxExecutor 沙箱隔离，结果每轮注入 `<background_result>` 通知，可查询/取消
 - **Cron 调度器** — 5 字段 cron 表达式定时触发 prompt，`schedule_cron`/`list_crons`/`cancel_cron` 三工具，due job 每轮注入 `<cron_delivery>` 通知，durable 任务持久化重启恢复
 - **Workflow 运行时** — 可信代码编排多步 agent 调用：agent/parallel/pipeline 原语、journal 语义缓存断点续跑、token 预算与并发/agent 计数三重护栏、schema 校验重试
+- **可观测性** — JSONL 结构化日志（敏感字段脱敏）+ 进程内指标（llm/tool/permission 埋点，退出快照）；Replays 与成本归因由 session/harness 提供
 - **开箱即用** — pipx/uv 一键安装、Docker 镜像、shell 补全、首次运行引导；无遥测
 
 ## 架构
@@ -147,6 +148,7 @@ mcc --mock-script examples/write_then_read.json -p "write and read"
 | [后台任务](docs/background-tasks.md) | run_in_background、BackgroundTaskManager、结果注入 |
 | [Cron 调度器](docs/cron-scheduler.md) | cron 表达式、CronScheduler、durable 持久化 |
 | [Workflow 运行时](docs/workflows.md) | 编排原语、journal 断点续跑、三重护栏 |
+| [可观测性](docs/observability.md) | JSONL 日志、脱敏、进程内指标、埋点 |
 | [评测](docs/evals.md) | 评测方法：三层断言、失败回流、多次采样 |
 | [评测包](packages/mcc-eval/README.md) | mcc-eval：CLI、case 结构、产物布局 |
 | [安装与自托管](docs/packaging.md) | pipx/Docker 安装、自托管 LLM 网关、发布流程 |

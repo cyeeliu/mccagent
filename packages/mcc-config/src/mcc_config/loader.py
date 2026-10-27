@@ -20,6 +20,7 @@ from mcc_config.models import (
     CronConfig,
     GoalConfig,
     ModelConfig,
+    ObservabilityConfig,
     PermissionConfig,
     SandboxConfig,
     SkillsConfig,
@@ -126,6 +127,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.cron = project.cron
     if project.workflow != WorkflowConfig():
         base.workflow = project.workflow
+    if project.observability != ObservabilityConfig():
+        base.observability = project.observability
 
     return base
 

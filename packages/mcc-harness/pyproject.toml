@@ -10,6 +10,7 @@ dependencies = [
     "mcc-tools",
     "mcc-session",
     "mcc-config",
+    "mcc-observability",
     "pydantic>=2.9",
 ]
 
