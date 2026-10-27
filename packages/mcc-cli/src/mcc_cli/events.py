@@ -12,7 +12,6 @@ from typing import Any, Protocol, runtime_checkable
 
 from mcc_core import (
     AgentEvent,
-    GoalStatus,
     Notice,
     TextDelta,
     ToolCallEnd,
@@ -20,7 +19,7 @@ from mcc_core import (
     TurnEnd,
     UserEcho,
 )
-from mcc_harness.goal import CLEAR_ALIASES, GoalController
+from mcc_harness.goal import GoalController
 
 
 @runtime_checkable
@@ -74,6 +73,11 @@ class AgentEventSource(EventSource):
         cron_scheduler: Any | None = None,
         workflow_tool: Any | None = None,
         observability_sink: Any | None = None,
+        slash_registry: Any | None = None,
+        config: Any | None = None,
+        work_dir: Any | None = None,
+        skills_catalog: str | None = None,
+        session_short_id: str | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
@@ -82,37 +86,27 @@ class AgentEventSource(EventSource):
         self.cron_scheduler = cron_scheduler
         self.workflow_tool = workflow_tool
         self.observability_sink = observability_sink
+        self.slash_registry = slash_registry
+        self.config = config
+        self.work_dir = work_dir
+        self.skills_catalog = skills_catalog
+        self.session_short_id = session_short_id
+
+    @property
+    def goal_controller(self) -> GoalController | None:
+        return self._goal_controller
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
-        if self._goal_controller is not None:
-            stripped = prompt.strip()
-            if stripped == "/goal":
-                yield GoalStatus(
-                    action="status",
-                    condition="",
-                    reason=self._goal_controller.status(),
-                    iterations=0,
-                )
-                return
-            if stripped.startswith("/goal "):
-                arg = stripped[6:].strip()
-                if arg.lower() in CLEAR_ALIASES:
-                    self._goal_controller.clear()
-                    yield GoalStatus(
-                        action="cleared",
-                        condition="",
-                        reason="goal cleared",
-                        iterations=0,
-                    )
+        # slash 本地命令：/model /config /help /status /goal ——注册表
+        # 分发，不进 AgentLoop；prompt 非空时替换输入继续（goal set）
+        if self.slash_registry is not None:
+            result = await self.slash_registry.dispatch(prompt, self)
+            if result is not None:
+                if result.text:
+                    yield Notice(text=result.text)
+                if result.prompt is None:
                     return
-                self._goal_controller.set_goal(arg)
-                yield GoalStatus(
-                    action="set",
-                    condition=arg,
-                    reason="goal set",
-                    iterations=0,
-                )
-                prompt = arg
+                prompt = result.prompt
         if self._slash_resolver is not None:
             resolved = self._slash_resolver(prompt)
             if resolved is not None:

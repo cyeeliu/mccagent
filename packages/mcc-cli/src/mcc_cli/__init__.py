@@ -309,6 +309,7 @@ def _build_source(
         system = f"{system}\n\n# Memory Index\n{index}"
 
     slash_resolver = None
+    skills_catalog_text = None
     if config.skills.enabled and not no_skills:
         from functools import partial
 
@@ -328,6 +329,7 @@ def _build_source(
             catalog = SkillRouter(skills).catalog_for_prompt()
             if catalog:
                 system = f"{system}\n\n{catalog}"
+                skills_catalog_text = catalog
             registry.register(LoadSkillTool(skills))
 
         commands = load_commands_merged(
@@ -540,6 +542,8 @@ def _build_source(
         builder = builder.observability(obs_sink)
 
     agent = builder.build()
+    from mcc_cli.slash import build_default_registry
+
     return AgentEventSource(
         agent,
         slash_resolver=slash_resolver,
@@ -548,6 +552,11 @@ def _build_source(
         cron_scheduler=cron_scheduler,
         workflow_tool=workflow_tool,
         observability_sink=obs_sink,
+        slash_registry=build_default_registry(),
+        config=config,
+        work_dir=work_dir,
+        skills_catalog=skills_catalog_text,
+        session_short_id=sid,
     )
 
 
@@ -774,6 +783,43 @@ def _run_sessions_cmd(args: tuple[str, ...], older_than: str | None) -> None:
     sys.exit(2)
 
 
+def _run_onboarding_wizard() -> bool:
+    """交互式首启配置向导：provider/网关/key/模型写入 home settings。
+
+    返回 True 表示配置完成可继续正常启动；用户中断返回 False。
+    其余配置一律保持默认，后续可用 /config 修改。
+    """
+    from mcc_config import update_home_setting
+
+    click.echo("欢迎使用 mini-claude-code！首次运行需要配置 LLM 连接。\n")
+    try:
+        kind = click.prompt(
+            "Provider 类型（anthropic 官方 / gateway 自托管网关）",
+            default="anthropic",
+            type=click.Choice(["anthropic", "gateway"], case_sensitive=False),
+        )
+        if kind.lower() == "gateway":
+            base_url = click.prompt(
+                "Base URL", default="http://localhost:8000/v1"
+            )
+            update_home_setting(["llm", "base_url"], base_url)
+        api_key = click.prompt(
+            "API key（自托管网关可留空）",
+            default="",
+            show_default=False,
+            hide_input=True,
+        )
+        if api_key.strip():
+            update_home_setting(["llm", "api_key"], api_key.strip())
+        model_id = click.prompt("主模型 ID", default="claude-opus-4-8")
+        update_home_setting(["model", "main"], model_id.strip())
+    except (click.Abort, EOFError):
+        click.echo("\n已取消向导。", err=True)
+        return False
+    click.echo("配置已写入 ~/.mcc/settings.json，其余保持默认。\n")
+    return True
+
+
 def _print_onboarding() -> None:
     """无 API key 时的首次运行引导。"""
     click.echo(
@@ -880,8 +926,12 @@ def _run_resume_cmd(
     if not (mock or mock_script or llm_base_url
             or os.environ.get("ANTHROPIC_API_KEY")
             or os.environ.get("OPENAI_API_KEY")):
-        _print_onboarding()
-        sys.exit(2)
+        from mcc_config import read_home_settings
+
+        home_llm = read_home_settings().get("llm") or {}
+        if not (home_llm.get("api_key") or home_llm.get("base_url")):
+            _print_onboarding()
+            sys.exit(2)
 
     click.echo(f"Resuming session {meta.id} ({meta.turns} turn(s), "
                f"${meta.cost_usd:.4f})" + (f" — {meta.title}" if meta.title else ""),
@@ -935,6 +985,12 @@ def _run_resume_cmd(
     help="OpenAI 兼容自托管网关地址（vLLM / SGLang / Ollama 等）",
 )
 @click.option(
+    "--no-wizard",
+    "no_wizard",
+    is_flag=True,
+    help="跳过首次运行的交互式配置向导",
+)
+@click.option(
     "--older-than",
     "older_than",
     default=None,
@@ -960,6 +1016,7 @@ def main(
     llm_base_url: str | None,
     no_compact: bool,
     no_skills: bool,
+    no_wizard: bool,
     older_than: str | None,
     args: tuple[str, ...],
 ) -> None:
@@ -1002,6 +1059,12 @@ def main(
         or os.environ.get("ANTHROPIC_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
     )
+    if not has_llm:
+        from mcc_config import read_home_settings
+
+        home_llm = read_home_settings().get("llm") or {}
+        if home_llm.get("api_key") or home_llm.get("base_url"):
+            has_llm = True
 
     if has_llm:
         source = _build_source(work_dir, model, mock, mock_script,
@@ -1010,6 +1073,11 @@ def main(
     elif prompt is not None:
         _print_onboarding()
         sys.exit(2)
+    elif not no_wizard and _run_onboarding_wizard():
+        # TUI 首启：向导写入 home settings 后直接正常构建启动
+        source = _build_source(work_dir, model, mock, mock_script,
+                               llm_base_url=llm_base_url,
+                               no_compact=no_compact, no_skills=no_skills)
     else:
         _print_onboarding()
         source = EchoEventSource()

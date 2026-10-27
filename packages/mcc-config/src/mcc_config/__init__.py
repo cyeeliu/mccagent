@@ -5,7 +5,13 @@ home (~/.mcc/settings.json) + project (.mcc/settings.json) 合并，
 也在本包（resolve.py），CLI 与评测共用。
 """
 
-from mcc_config.loader import ensure_default_config, load, merge
+from mcc_config.loader import (
+    ensure_default_config,
+    load,
+    merge,
+    read_home_settings,
+    update_home_setting,
+)
 from mcc_config.models import (
     BudgetConfig,
     Config,
@@ -25,6 +31,8 @@ __all__ = [
     "ensure_default_config",
     "load",
     "merge",
+    "read_home_settings",
+    "update_home_setting",
     "build_llm_provider",
     "resolve_model",
     "DEFAULT_MODEL",

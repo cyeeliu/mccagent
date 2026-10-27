@@ -154,6 +154,18 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 }
 ```
 
+### 首次运行向导与 /config 修改
+
+TUI 启动且无可用凭证时进入交互式向导（provider 类型 → base_url
+→ api_key → 主模型 ID），写入 home settings.json 的 `llm` 与
+`model.main` 段，其余保持默认。`--no-wizard` 跳过；headless
+（`-p`）不可交互，保持文本引导 + exit 2。
+
+运行中可用 `/model`（切换主模型，即刻生效并写回）与
+`/config get/set`（白名单修改）调整配置，见
+[slash-commands.md](slash-commands.md)。settings.json 写入时
+chmod 600，凭据展示脱敏。
+
 ## 权限配置
 
 见 [permissions.md](permissions.md)。

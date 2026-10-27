@@ -40,12 +40,29 @@ class TestOnboarding:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("MCC_LLM_BASE_URL", raising=False)
+        # settings.json 的 llm 段也算凭证来源；隔离 HOME 排除宿主配置干扰
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
         runner = CliRunner()
         result = runner.invoke(main, ["-p", "hi", "--cwd", str(tmp_path)])
         assert result.exit_code == 2
         assert "欢迎使用" in result.output
         assert "ANTHROPIC_API_KEY" in result.output
         assert "--mock" in result.output
+
+    def test_home_settings_key_counts_as_llm_source(self, tmp_path, monkeypatch):
+        """home settings 里配置过 llm.api_key 时无需 env 也可启动。"""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("MCC_LLM_BASE_URL", raising=False)
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        from mcc_config import update_home_setting
+
+        update_home_setting(["llm", "api_key"], "sk-test")
+        runner = CliRunner()
+        result = runner.invoke(main, ["-p", "hi", "--cwd", str(tmp_path)])
+        # 不再打引导页；构建 provider 失败也应是 LLM 错误而非 onboarding
+        assert "欢迎使用 mini-claude-code" not in result.output
 
     def test_resume_without_key_shows_guide(self, tmp_path, monkeypatch):
         home = tmp_path / "home"

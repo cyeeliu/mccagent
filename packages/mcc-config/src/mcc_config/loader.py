@@ -144,3 +144,52 @@ async def load(cwd: Path) -> Config:
     home_path = home_dir / ".mcc" / "settings.json"
     project_path = cwd / ".mcc" / "settings.json"
     return _read_and_merge(home_path, project_path)
+
+
+# ---------- settings 写回 ----------
+
+
+def _home_settings_path() -> Path:
+    return Path.home() / ".mcc" / "settings.json"
+
+
+def read_home_settings() -> dict:
+    """读取 home settings.json 的原始 dict；不存在返回 {}。"""
+    path = _home_settings_path()
+    if not path.is_file():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def update_home_setting(keys: list[str], value: object) -> None:
+    """按嵌套 key 路径更新 home settings.json 的单个字段。
+
+    dict 级操作（不经 Config 往返）：只改目标 key，不固化
+    “回落 main”的派生值，保持用户文件最小。原子写 + 0600。
+    示例：``update_home_setting(["model", "main"], "claude-x")``
+    """
+    if not keys:
+        raise ValueError("keys must not be empty")
+    path = _home_settings_path()
+    data = read_home_settings()
+    node = data
+    for key in keys[:-1]:
+        child = node.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            node[key] = child
+        node = child
+    node[keys[-1]] = value
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.chmod(0o600)
+    import os
+
+    os.replace(tmp, path)
