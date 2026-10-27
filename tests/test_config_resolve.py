@@ -236,3 +236,35 @@ def test_legacy_settings_without_llm_section_parses(tmp_path, monkeypatch) -> No
     config = asyncio.run(load(project))
     assert config.llm.base_url is None
     assert config.llm.api_key is None
+
+
+# ─── merge 字段驱动回归护栏 ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    sorted(set(Config.model_fields) - {"permissions", "model", "llm", "mcp_servers"}),
+)
+def test_merge_generic_fields_project_overrides(field_name: str) -> None:
+    """通用子配置：project 偏离默认时整体覆盖 home。
+
+    防字段遍历遗漏：新增子配置若被特例集漏掉会在这里失败。
+    """
+    from mcc_config.loader import merge
+
+    home = Config()
+    project = Config.model_validate({field_name: {"enabled": False}})
+    merged = merge(home, project)
+    proj_val = getattr(project, field_name)
+    assert getattr(merged, field_name) == proj_val, (
+        f"{field_name}: project override lost"
+    )
+
+
+def test_merge_generic_fields_default_keeps_home() -> None:
+    """通用子配置：project 全默认时 home 值保留。"""
+    from mcc_config.loader import merge
+
+    home = Config.model_validate({"reliability": {"turn_timeout_secs": 300}})
+    merged = merge(home, Config())
+    assert merged.reliability.turn_timeout_secs == 300.0

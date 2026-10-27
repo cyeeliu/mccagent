@@ -13,23 +13,10 @@ import json
 from pathlib import Path
 
 from mcc_config.models import (
-    BackgroundConfig,
     BudgetConfig,
     Config,
-    ContextConfig,
-    CronConfig,
-    GoalConfig,
     ModelConfig,
-    ObservabilityConfig,
     PermissionConfig,
-    ReliabilityConfig,
-    SandboxConfig,
-    SecurityConfig,
-    SkillsConfig,
-    TaskConfig,
-    TeamConfig,
-    TodoConfig,
-    WorkflowConfig,
 )
 
 _DEFAULT_CONFIG = Config(
@@ -83,8 +70,16 @@ def _read_config(path: Path) -> Config | None:
 
 
 def merge(home: Config | None, project: Config | None) -> Config:
-    base = home if home is not None else Config()
+    """home 为基线，project 逐字段覆盖。
 
+    语义规则（新增子配置零代码并入）：
+    - ``permissions``：deny/allow 追加，mode 显式覆盖（非 None）
+    - ``model``/``llm``：逐字段 None 不覆盖（model.main 需偏离默认）
+    - ``mcp_servers``：非空 dict 才覆盖
+    - 其余子配置：project 值偏离默认时整体覆盖（避免逐字段拼接出
+      语义含混的组合）
+    """
+    base = home if home is not None else Config()
     if project is None:
         return base
 
@@ -93,48 +88,26 @@ def merge(home: Config | None, project: Config | None) -> Config:
     if project.permissions.mode is not None:
         base.permissions.mode = project.permissions.mode
 
-    if project.budget != BudgetConfig():
-        base.budget = project.budget
     if project.model.main != ModelConfig().main:
         base.model.main = project.model.main
-    if project.model.subagent is not None:
-        base.model.subagent = project.model.subagent
-    if project.model.summarize is not None:
-        base.model.summarize = project.model.summarize
-    if project.llm.base_url is not None:
-        base.llm.base_url = project.llm.base_url
-    if project.llm.api_key is not None:
-        base.llm.api_key = project.llm.api_key
-    # 与 budget 同语义：project 显式配置过沙箱（任何字段偏离默认）
-    # 时整体覆盖，避免逐字段拼接出语义含混的组合
-    if project.sandbox != SandboxConfig():
-        base.sandbox = project.sandbox
-    if project.context != ContextConfig():
-        base.context = project.context
-    if project.skills != SkillsConfig():
-        base.skills = project.skills
-    if project.goal != GoalConfig():
-        base.goal = project.goal
-    if project.todo != TodoConfig():
-        base.todo = project.todo
-    if project.tasks != TaskConfig():
-        base.tasks = project.tasks
+    for name in ("subagent", "summarize"):
+        value = getattr(project.model, name)
+        if value is not None:
+            setattr(base.model, name, value)
+    for name in ("base_url", "api_key"):
+        value = getattr(project.llm, name)
+        if value is not None:
+            setattr(base.llm, name, value)
     if project.mcp_servers:
         base.mcp_servers = project.mcp_servers
-    if project.team != TeamConfig():
-        base.team = project.team
-    if project.background != BackgroundConfig():
-        base.background = project.background
-    if project.cron != CronConfig():
-        base.cron = project.cron
-    if project.workflow != WorkflowConfig():
-        base.workflow = project.workflow
-    if project.observability != ObservabilityConfig():
-        base.observability = project.observability
-    if project.security != SecurityConfig():
-        base.security = project.security
-    if project.reliability != ReliabilityConfig():
-        base.reliability = project.reliability
+
+    defaults = Config()
+    for name in Config.model_fields:
+        if name in ("permissions", "model", "llm", "mcp_servers"):
+            continue
+        value = getattr(project, name)
+        if value != getattr(defaults, name):
+            setattr(base, name, value)
 
     return base
 
