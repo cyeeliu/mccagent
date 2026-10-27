@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from typing import Any
@@ -134,10 +135,8 @@ class McpClient:
         self._reader_task = None
         if reader_task is not None and not reader_task.done():
             reader_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await reader_task
-            except asyncio.CancelledError:
-                pass
 
         self._fail_pending(McpError(f"server {self.name!r} connection closed"))
 

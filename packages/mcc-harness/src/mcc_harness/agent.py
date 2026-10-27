@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -747,7 +748,7 @@ class AgentLoop:
         async def run_one(
             tool_id: str, tool_name: str, tool_input: dict[str, Any]
         ) -> tuple[str, str, bool]:
-            original_input = dict(tool_input)
+            original_input = copy.deepcopy(tool_input)
 
             async def authorize(candidate: dict[str, Any]) -> tuple[bool, str]:
                 decision = (
@@ -761,7 +762,8 @@ class AgentLoop:
                     case Deny(reason=reason):
                         return False, f"permission denied: {reason}"
                     case Ask(message=message):
-                        req_id = abs(hash(f"{tool_id}:{json.dumps(candidate, sort_keys=True)}")) % (10**8)
+                        request_key = f"{tool_id}:{json.dumps(candidate, sort_keys=True)}"
+                        req_id = abs(hash(request_key)) % (10**8)
                         await tx.put(
                             PermissionRequestEvent(
                                 id=req_id,
