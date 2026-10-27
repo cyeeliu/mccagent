@@ -182,7 +182,6 @@ class TestMcpClientRealServer:
             "for line in sys.stdin:\n"
             " msg = json.loads(line)\n"
             " if msg.get('method') == 'initialize':\n"
-            "  time.sleep(0.2)\n"
             "  print(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{"
             "'protocolVersion':'2025-03-26','capabilities':{},'serverInfo':{"
             "'name':'silent','version':'1'}}}), flush=True)\n"
@@ -195,13 +194,15 @@ class TestMcpClientRealServer:
             encoding="utf-8",
         )
         client = McpClient(
-            "slow", sys.executable, args=[str(server)], request_timeout_secs=0.05
+            "slow", sys.executable, args=[str(server)], request_timeout_secs=0.5
         )
-        # Allow the handshake to finish, then use a short timeout for a deliberately slow call.
-        client.request_timeout_secs = 0.05
-        with pytest.raises(McpError, match="timed out"):
+        try:
             await client.connect()
-        await client.close()
+            client.request_timeout_secs = 0.05
+            with pytest.raises(McpError, match="timed out"):
+                await client.call_tool("slow", {})
+        finally:
+            await client.close()
 
 
 class TestMcpClientManager:
