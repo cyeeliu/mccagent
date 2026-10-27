@@ -67,6 +67,15 @@ from mcc_harness.permission import (
     bash_word_match,
 )
 from mcc_harness.plan import PlanError, PlanRequest, PlanStore
+from mcc_harness.reliability import (
+    CircuitBreaker,
+    CircuitOpenError,
+    FlakyProvider,
+    RetryDecision,
+    RetryPolicy,
+    ThrottledLlm,
+    classify_llm_error,
+)
 from mcc_harness.security import (
     HARDENED_CMD_PATTERNS,
     HARDENED_PATH_GLOBS,
@@ -141,6 +150,8 @@ __all__ = [
     "BackgroundTaskManager",
     "CancelBackgroundTaskTool",
     "CancelCronTool",
+    "CircuitBreaker",
+    "CircuitOpenError",
     "CompactionReport",
     "ContextCompactor",
     "CronJob",
@@ -149,6 +160,7 @@ __all__ = [
     "TurnCost",
     "cache_hit_rate",
     "CreateWorktreeTool",
+    "FlakyProvider",
     "GoalController",
     "GoalError",
     "GoalEvaluation",
@@ -179,6 +191,8 @@ __all__ = [
     "PlanStore",
     "PythonHook",
     "RequestShutdownTool",
+    "RetryDecision",
+    "RetryPolicy",
     "ReviewPlanTool",
     "SECURITY_SYSTEM_CLAUSE",
     "SecurityPolicy",
@@ -195,6 +209,7 @@ __all__ = [
     "TeammateInfo",
     "TeammateManager",
     "TeammateRuntime",
+    "ThrottledLlm",
     "TeammateSpec",
     "WorktreeError",
     "MISS",
@@ -213,6 +228,7 @@ __all__ = [
     "WorkflowTask",
     "WorkflowTool",
     "bash_word_match",
+    "classify_llm_error",
     "create_run_id",
     "create_worktree",
     "cron_matches",

@@ -22,6 +22,7 @@ from mcc_config.models import (
     ModelConfig,
     ObservabilityConfig,
     PermissionConfig,
+    ReliabilityConfig,
     SandboxConfig,
     SecurityConfig,
     SkillsConfig,
@@ -132,6 +133,8 @@ def merge(home: Config | None, project: Config | None) -> Config:
         base.observability = project.observability
     if project.security != SecurityConfig():
         base.security = project.security
+    if project.reliability != ReliabilityConfig():
+        base.reliability = project.reliability
 
     return base
 

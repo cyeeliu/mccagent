@@ -359,6 +359,16 @@ def _build_source(
             click.echo(f"Error: {e}\nUse --mock for testing without API keys.", err=True)
             sys.exit(2)
 
+    # 可靠性：限流包装（rpm/并发 >0 时）+ 重试/熔断/turn 超时注入 builder
+    if config.reliability.rpm > 0 or config.reliability.max_concurrency > 0:
+        from mcc_harness import ThrottledLlm
+
+        llm = ThrottledLlm(
+            llm,
+            rpm=config.reliability.rpm,
+            max_concurrency=config.reliability.max_concurrency,
+        )
+
     hook_registry = _build_hooks(config, work_dir)
 
     from mcc_config import resolve_model
@@ -419,6 +429,23 @@ def _build_source(
         redact_output=config.security.redact_output,
         untrusted_wrap=config.security.untrusted_wrap,
     ))
+
+    # 可靠性：重试退避始终生效；熔断/turn 超时按配置启用
+    from mcc_harness import CircuitBreaker, RetryPolicy
+
+    builder = builder.retry_policy(RetryPolicy(
+        max_attempts=config.reliability.max_attempts,
+        base_delay=config.reliability.base_delay,
+        max_delay=config.reliability.max_delay,
+        jitter=config.reliability.jitter,
+    ))
+    if config.reliability.circuit_failure_threshold > 0:
+        builder = builder.circuit_breaker(CircuitBreaker(
+            failure_threshold=config.reliability.circuit_failure_threshold,
+            reset_timeout=config.reliability.circuit_reset_timeout,
+        ))
+    if config.reliability.turn_timeout_secs > 0:
+        builder = builder.turn_timeout(config.reliability.turn_timeout_secs)
 
     # 多 Agent 团队：长驻 teammate 协作
     team_manager = None

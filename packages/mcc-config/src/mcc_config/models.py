@@ -108,6 +108,25 @@ class SecurityConfig(BaseModel):
     untrusted_wrap: bool = True
 
 
+class ReliabilityConfig(BaseModel):
+    """可靠性配置：重试退避、熔断、限流与 turn 超时。
+
+    ``circuit_failure_threshold`` 为 0 表示禁用熔断；``rpm`` 与
+    ``max_concurrency`` 为 0 表示该维度不限流；``turn_timeout_secs``
+    为 0 表示 turn 不限时。
+    """
+
+    max_attempts: int = 4
+    base_delay: float = 0.5
+    max_delay: float = 30.0
+    jitter: bool = True
+    circuit_failure_threshold: int = 0
+    circuit_reset_timeout: float = 30.0
+    rpm: int = 0
+    max_concurrency: int = 0
+    turn_timeout_secs: float = 0.0
+
+
 class BudgetConfig(BaseModel):
     max_usd_per_session: float = 2.0
     max_iterations: int = 40
@@ -256,6 +275,7 @@ class Config(BaseModel):
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    reliability: ReliabilityConfig = Field(default_factory=ReliabilityConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     goal: GoalConfig = Field(default_factory=GoalConfig)

@@ -401,6 +401,7 @@ async def test_event_order_turn_end_last(ctx, registry):
 @pytest.mark.asyncio
 async def test_retry_on_429(ctx, registry):
     """429 错误触发重试，最终成功。"""
+    from mcc_harness.reliability import InjectedFailure
     from mcc_llm import CompleteRequest, MessageResponse
 
     class RetryLlm:
@@ -413,7 +414,7 @@ async def test_retry_on_429(ctx, registry):
         async def stream(self, req: CompleteRequest):
             self._calls += 1
             if self._calls < 3:
-                raise RuntimeError("429 Too Many Requests")
+                raise InjectedFailure(429)
             yield LlmTextDelta(text="recovered")
             yield MessageStop(stop_reason="end_turn", usage=Usage(input_tokens=5, output_tokens=3))
 
@@ -426,6 +427,7 @@ async def test_retry_on_429(ctx, registry):
 
 @pytest.mark.asyncio
 async def test_retry_exhausted_raises(ctx, registry):
+    from mcc_harness.reliability import InjectedFailure
     from mcc_llm import CompleteRequest
 
     class Always429:
@@ -433,12 +435,12 @@ async def test_retry_exhausted_raises(ctx, registry):
             pass
 
         async def stream(self, req: CompleteRequest):
-            raise RuntimeError("429 Too Many Requests")
+            raise InjectedFailure(429)
             yield  # makes this an async generator
 
     llm = Always429()
     agent = _make_agent(llm, ctx, registry)
-    with pytest.raises(RuntimeError, match="429"):
+    with pytest.raises(InjectedFailure, match="429"):
         await agent.run("test")
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -207,6 +208,9 @@ class AgentLoop:
         cron_scheduler: Any | None = None,
         observability: Any | None = None,
         security_policy: Any | None = None,
+        retry_policy: Any | None = None,
+        circuit_breaker: Any | None = None,
+        turn_timeout_secs: float = 0.0,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -236,6 +240,9 @@ class AgentLoop:
         self.cron_scheduler = cron_scheduler
         self.observability = observability
         self.security_policy = security_policy
+        self.retry_policy = retry_policy
+        self.circuit_breaker = circuit_breaker
+        self.turn_timeout_secs = turn_timeout_secs
         self.history: list[Message] = list(history) if history else []
         if self.compactor is not None:
             # 摘要回调用本循环的 LLM 与摘要模型：compactor 本体保持
@@ -312,9 +319,23 @@ class AgentLoop:
         budget_warned = False
         system_blocks = self._build_system_blocks()
         rounds_since_todo = 0
+        turn_start: float | None = None
+        if self.turn_timeout_secs > 0:
+            turn_start = time.monotonic()
 
         try:
             for iteration in range(1, self.max_iterations + 1):
+                if turn_start is not None:
+                    elapsed = time.monotonic() - turn_start
+                    if elapsed >= self.turn_timeout_secs:
+                        await tx.put(Notice(
+                            text=f"turn timed out after "
+                            f"{self.turn_timeout_secs:.0f}s "
+                            f"({iteration - 1} iteration(s) completed)"
+                        ))
+                        raise AgentError(
+                            f"turn timed out after {self.turn_timeout_secs:.0f}s"
+                        )
                 if self.observability is not None:
                     self.observability.iteration(iteration=iteration)
 
@@ -659,32 +680,54 @@ class AgentLoop:
     async def _call_with_retry(
         self, req: CompleteRequest, tx: asyncio.Queue[AgentEvent]
     ) -> tuple[list[ContentBlock], str | None, Usage]:
-        """带指数退避的 LLM 调用重试。"""
-        max_retries = 3
+        """带熔断与结构化分类的指数退避重试。
+
+        429 尊重 retry-after 头；其余可重试错误走 RetryPolicy
+        抖动退避。熔断器 open 时快速失败，不触达 LLM。
+        """
+        from mcc_harness.reliability import RetryPolicy, classify_llm_error
+
+        policy = self.retry_policy or RetryPolicy()
+        if self.circuit_breaker is not None:
+            try:
+                self.circuit_breaker.check()
+            except Exception:
+                if self.observability is not None:
+                    self.observability.event_counter("agent_circuit_open_total")
+                raise
         _t0: int | None = None
         if self.observability is not None:
             from mcc_observability import now_ms
 
             _t0 = now_ms()
-        for attempt in range(1, max_retries + 1):
+        rng = None
+        for attempt in range(1, policy.max_attempts + 1):
             try:
                 blocks, stop_reason, usage = await self._call_streaming_once(req, tx)
             except Exception as e:
-                msg = str(e)
-                retryable = any(
-                    s in msg for s in ("429", "500", "502", "503", "overloaded")
-                )
-                if not retryable or attempt >= max_retries:
+                decision = classify_llm_error(e)
+                if self.circuit_breaker is not None and decision.retryable:
+                    self.circuit_breaker.record_failure()
+                if not decision.retryable or attempt >= policy.max_attempts:
                     raise
-                delay = 0.5 * (2**attempt)
+                if decision.retry_after_ms is not None:
+                    delay = decision.retry_after_ms / 1000.0
+                else:
+                    if rng is None:
+                        import random
+
+                        rng = random.Random()
+                    delay = policy.delay(attempt, rng)
                 await tx.put(
                     Notice(
-                        text=f"API error (attempt {attempt}/{max_retries}), "
-                        f"retrying in {delay:.1f}s..."
+                        text=f"{decision.reason} (attempt {attempt}/"
+                        f"{policy.max_attempts}), retrying in {delay:.1f}s..."
                     )
                 )
                 await asyncio.sleep(delay)
                 continue
+            if self.circuit_breaker is not None:
+                self.circuit_breaker.record_success()
             if self.observability is not None and _t0 is not None:
                 from mcc_observability import now_ms as _now_ms
 
@@ -964,6 +1007,9 @@ class AgentLoopBuilder:
         self._cron: Any | None = None
         self._observability: Any | None = None
         self._security: Any | None = None
+        self._retry_policy: Any | None = None
+        self._circuit_breaker: Any | None = None
+        self._turn_timeout_secs: float = 0.0
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -1072,6 +1118,18 @@ class AgentLoopBuilder:
         self._security = policy
         return self
 
+    def retry_policy(self, policy: Any) -> AgentLoopBuilder:
+        self._retry_policy = policy
+        return self
+
+    def circuit_breaker(self, breaker: Any) -> AgentLoopBuilder:
+        self._circuit_breaker = breaker
+        return self
+
+    def turn_timeout(self, secs: float) -> AgentLoopBuilder:
+        self._turn_timeout_secs = secs
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -1103,4 +1161,7 @@ class AgentLoopBuilder:
             cron_scheduler=self._cron,
             observability=self._observability,
             security_policy=self._security,
+            retry_policy=self._retry_policy,
+            circuit_breaker=self._circuit_breaker,
+            turn_timeout_secs=self._turn_timeout_secs,
         )

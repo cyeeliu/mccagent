@@ -331,6 +331,26 @@ settings.json 配置自托管网关示例（`~/.mcc` 不入库，凭证留在本
 | `redact_output` | `true` | 工具输出凭据扫描替换为 `[REDACTED]` |
 | `untrusted_wrap` | `true` | MCP 工具输出包 `<untrusted>` 隔离标签 |
 
+## 可靠性配置
+
+见 [reliability.md](reliability.md)。
+
+```json
+{"reliability": {"max_attempts": 4, "base_delay": 0.5, "max_delay": 30, "jitter": true, "circuit_failure_threshold": 0, "circuit_reset_timeout": 30, "rpm": 0, "max_concurrency": 0, "turn_timeout_secs": 0}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `max_attempts` | `4` | LLM 调用最大尝试次数（含首次） |
+| `base_delay` | `0.5` | 退避基数（秒） |
+| `max_delay` | `30` | 退避封顶（秒） |
+| `jitter` | `true` | equal jitter 开关 |
+| `circuit_failure_threshold` | `0` | 熔断阈值；0 禁用 |
+| `circuit_reset_timeout` | `30` | 熔断 open 后探测等待（秒） |
+| `rpm` | `0` | 每分钟请求上限；0 不限 |
+| `max_concurrency` | `0` | LLM 并发上限；0 不限 |
+| `turn_timeout_secs` | `0` | turn 级超时（秒）；0 不限 |
+
 ## .env
 
 项目根目录的 `.env` 自动加载（参考 [.env.example](../.env.example)），已存在的环境变量不会被覆盖。
