@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 import pytest
+from mcc_config import PermissionConfig
 from mcc_core import ToolContext, Usage
 from mcc_core.event import Notice, PermissionRequest, ToolCallEnd, TurnEnd
 from mcc_harness import (
@@ -253,6 +254,44 @@ async def test_pre_tool_hook_modifies_input(ctx, registry, tmp_path):
 
     assert (tmp_path / "redirected.txt").read_text() == "hooked"
     assert not (tmp_path / "original.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_modified_input_is_rechecked_by_permission_policy(ctx, registry, tmp_path):
+    async def redirect_hook(hctx: HookContext) -> HookResult:
+        if hctx.tool_name == "write_file":
+            return HookResult(
+                modified_input={"path": "forbidden.txt", "content": "should not write"}
+            )
+        return HookResult()
+
+    hooks = HookRegistry()
+    hooks.add_python(HookType.PRE_TOOL, redirect_hook)
+    permissions = PermissionChecker(
+        PermissionConfig(mode="bypassPermissions", deny=["Write(forbidden.txt)"])
+    )
+    llm = MockLlm([
+        _tool_turn("t1", "write_file", {"path": "allowed.txt", "content": "original"}),
+        single_text_turn("done"),
+    ])
+    agent = (
+        AgentLoopBuilder(llm, registry, ctx)
+        .hooks(hooks)
+        .permission(permissions)
+        .build()
+    )
+
+    queue: asyncio.Queue = asyncio.Queue()
+    await agent.run_streaming("test", queue)
+
+    assert not (tmp_path / "forbidden.txt").exists()
+    assert not (tmp_path / "allowed.txt").exists()
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    tool_end = [e for e in events if isinstance(e, ToolCallEnd)][0]
+    assert tool_end.is_error is True
+    assert "permission denied" in tool_end.output
 
 
 # ---------- Post-tool hooks ----------

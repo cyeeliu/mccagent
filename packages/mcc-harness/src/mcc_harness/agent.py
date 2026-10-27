@@ -747,38 +747,47 @@ class AgentLoop:
         async def run_one(
             tool_id: str, tool_name: str, tool_input: dict[str, Any]
         ) -> tuple[str, str, bool]:
-            decision = (
-                self.permission.check(permission_request_for(tool_name, tool_input))
-                if self.permission
-                else Allow()
-            )
-            match decision:
-                case Deny(reason=reason):
-                    return (tool_id, f"permission denied: {reason}", True)
-                case Ask(message=message):
-                    req_id = abs(hash(tool_id)) % (10**8)
-                    await tx.put(
-                        PermissionRequestEvent(
-                            id=req_id,
-                            message=f"{tool_name}: {message}",
-                            tool_name=tool_name,
-                            tool_input=tool_input,
-                        )
+            original_input = dict(tool_input)
+
+            async def authorize(candidate: dict[str, Any]) -> tuple[bool, str]:
+                decision = (
+                    self.permission.check(
+                        permission_request_for(tool_name, candidate)
                     )
-                    user_decision = await self._await_permission_decision(req_id)
-                    if user_decision.action == "feedback":
-                        return (
-                            tool_id,
-                            f"permission denied by user: {user_decision.feedback}",
-                            True,
+                    if self.permission
+                    else Allow()
+                )
+                match decision:
+                    case Deny(reason=reason):
+                        return False, f"permission denied: {reason}"
+                    case Ask(message=message):
+                        req_id = abs(hash(f"{tool_id}:{json.dumps(candidate, sort_keys=True)}")) % (10**8)
+                        await tx.put(
+                            PermissionRequestEvent(
+                                id=req_id,
+                                message=f"{tool_name}: {message}",
+                                tool_name=tool_name,
+                                tool_input=candidate,
+                            )
                         )
-                    if user_decision.action == "deny":
-                        return (tool_id, "permission denied by user", True)
-                    if user_decision.action == "allow_always" and self.permission:
-                        preq = permission_request_for(tool_name, tool_input)
-                        self.permission.allow_always(preq.category, preq.action)
-                case Allow():
-                    pass
+                        user_decision = await self._await_permission_decision(req_id)
+                        if user_decision.action == "feedback":
+                            return False, (
+                                "permission denied by user: "
+                                f"{user_decision.feedback}"
+                            )
+                        if user_decision.action == "deny":
+                            return False, "permission denied by user"
+                        if user_decision.action == "allow_always" and self.permission:
+                            preq = permission_request_for(tool_name, candidate)
+                            self.permission.allow_always(preq.category, preq.action)
+                    case Allow():
+                        pass
+                return True, ""
+
+            allowed, denial = await authorize(tool_input)
+            if not allowed:
+                return (tool_id, denial, True)
 
             if self.hooks:
                 ctx = HookContext(
@@ -797,6 +806,13 @@ class AgentLoop:
                         return (tool_id, f"blocked by hook: {hr.message}", True)
                     if hr.modified_input is not None:
                         tool_input = hr.modified_input
+
+            # Hooks may rewrite command/path/arguments. Authorization must apply
+            # to the exact input that will execute, not only the model's input.
+            if tool_input != original_input:
+                allowed, denial = await authorize(tool_input)
+                if not allowed:
+                    return (tool_id, denial, True)
 
             tool = self.registry.get(tool_name)
             if tool is None:
