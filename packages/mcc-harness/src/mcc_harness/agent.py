@@ -135,6 +135,29 @@ def cache_hit_rate(usage: Usage) -> float:
     return usage.cache_read_input_tokens / total_input
 
 
+DEFAULT_CONTEXT_WINDOW = 200_000
+
+
+def context_window(model: str) -> int:
+    """模型的上下文窗口大小（token）。未知模型回落 200k（Claude 系默认）。
+
+    与价格表同为子串匹配风格：新模型系列只需补一行。
+    """
+    if "claude-opus-4" in model or "opus-4" in model:
+        return 200_000
+    if "claude-sonnet-4" in model or "sonnet-4" in model:
+        return 200_000
+    if "claude-haiku-4" in model or "haiku-4" in model:
+        return 200_000
+    if "gpt-4" in model:
+        return 128_000
+    if "deepseek" in model:
+        return 64_000
+    if "qwen" in model:
+        return 128_000
+    return DEFAULT_CONTEXT_WINDOW
+
+
 def permission_request_for(tool_name: str, input: dict[str, Any]) -> PermissionRequest:
     """将工具调用映射到权限检查请求。
 

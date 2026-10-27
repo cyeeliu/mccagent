@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 from mcc_harness.agent import (
+    DEFAULT_CONTEXT_WINDOW,
     AgentLoop,
     AgentLoopBuilder,
     AgentRun,
     TurnCost,
     cache_hit_rate,
+    context_window,
     model_price_per_1m,
     permission_request_for,
     price_usd,
@@ -166,11 +168,13 @@ __all__ = [
     "CircuitOpenError",
     "CompactionReport",
     "ContextCompactor",
+    "DEFAULT_CONTEXT_WINDOW",
     "CronJob",
     "CronScheduler",
     "AgentRun",
     "TurnCost",
     "cache_hit_rate",
+    "context_window",
     "CreateWorktreeTool",
     "FlakyProvider",
     "GoalController",

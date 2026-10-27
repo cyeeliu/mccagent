@@ -25,12 +25,19 @@ class TuiHandles:
     input_tx: asyncio.Queue[str]
     session_short_id: str
     permission_tx: asyncio.Queue[PermissionDecision] | None = None
+    completions: Any = None  # CompletionProvider：slash 补全候选
+    model_id: str = ""
+    context_limit: int = 0
 
 
 async def run_tui(handles: TuiHandles, console: Console | None = None) -> None:
     """运行 TUI 事件循环，直到用户退出或输入结束。"""
     console = console or Console()
-    app = App(session_short_id=handles.session_short_id)
+    app = App(
+        session_short_id=handles.session_short_id,
+        model_id=handles.model_id,
+        context_limit=handles.context_limit,
+    )
 
     key_queue: asyncio.Queue = asyncio.Queue()
 
@@ -82,21 +89,40 @@ def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
         return _handle_feedback_key(app, handles, key)
     if app.pending_permission is not None:
         return _handle_permission_key(app, handles, key)
+
+    # 补全浮层激活时的键位优先：↑↓ 选择、Tab 补全、Enter 补全选中
+    # 项（已是精确匹配则照常发送）、Esc 关闭浮层
+    if app.comp_active:
+        if key == Key.up:
+            app.comp_index = (app.comp_index - 1) % len(app.comp_items)
+            return False
+        if key == Key.down:
+            app.comp_index = (app.comp_index + 1) % len(app.comp_items)
+            return False
+        if key == Key.tab:
+            app.apply_completion(app.comp_items[app.comp_index])
+            return False
+        if key == Key.escape:
+            app.dismiss_completions()
+            return False
+        if key == Key.enter and not app.agent_busy:
+            current = app.comp_items[app.comp_index]
+            if app.input.strip() == current.insert:
+                app.dismiss_completions()
+                return _send_input(app, handles)
+            app.apply_completion(current)
+            return False
+
     if key == Key.escape and app.agent_busy:
         app.push(_notice_item("(cancel requested)"))
         return False
     if key == Key.enter and not app.agent_busy:
-        text = app.input
-        app.input = ""
-        app.cursor = 0
-        if text.strip():
-            app.agent_busy = True
-            handles.input_tx.put_nowait(text)
-        return False
+        return _send_input(app, handles)
     if key == Key.backspace:
         if app.cursor > 0:
             app.input = app.input[: app.cursor - 1] + app.input[app.cursor :]
             app.cursor -= 1
+        app.refresh_completions(handles.completions)
         return False
     if key == Key.left:
         app.cursor = max(0, app.cursor - 1)
@@ -125,6 +151,17 @@ def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
     if isinstance(key, str):
         app.input = app.input[: app.cursor] + key + app.input[app.cursor :]
         app.cursor += 1
+        app.refresh_completions(handles.completions)
+    return False
+
+
+def _send_input(app: App, handles: TuiHandles) -> bool:
+    """Enter 发送：清空输入、关闭补全、非空则进 agent。"""
+    text = app.input
+    app.reset_input()
+    if text.strip():
+        app.agent_busy = True
+        handles.input_tx.put_nowait(text)
     return False
 
 

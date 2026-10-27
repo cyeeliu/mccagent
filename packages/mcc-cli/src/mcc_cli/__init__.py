@@ -159,7 +159,9 @@ async def _run_tui_mode(
     session_id: str | None = None,
     work_dir: Path | None = None,
 ) -> int:
+    from mcc_harness import context_window
     from mcc_tui import TuiHandles, run_tui
+    from mcc_tui.completions import make_provider
 
     event_queue: asyncio.Queue = asyncio.Queue()
     input_queue: asyncio.Queue = asyncio.Queue()
@@ -199,11 +201,18 @@ async def _run_tui_mode(
     if wf_tool is not None:
         wf_tool.set_event_sink(event_queue)
     try:
+        slash_registry = getattr(source, "slash_registry", None)
+        commands = slash_registry.list_commands() if slash_registry is not None else []
+        agent_obj = getattr(source, "agent", None)
+        model_id = getattr(agent_obj, "model", "") or ""
         handles = TuiHandles(
             events=event_queue,
             input_tx=input_queue,
             session_short_id=session_short_id,
             permission_tx=permission_queue,
+            completions=make_provider(commands),
+            model_id=model_id,
+            context_limit=context_window(model_id) if model_id else 0,
         )
         await run_tui(handles)
     finally:

@@ -15,15 +15,22 @@ from rich.text import Text
 from mcc_tui.app import App, CallStatus, RenderItem
 
 _INPUT_ROWS = 3
-_STATUS_ROWS = 1
+_STATUS_ROWS = 3
 _PANEL_BORDERS = 2
 _TEXT_INDENT = 2
+_COMP_MAX_ROWS = 7
 
 
 def _truncate(s: str, n: int) -> str:
     if len(s) <= n:
         return s
     return s[:n] + "…"
+
+
+def _fmt_tokens(n: int) -> str:
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
 
 
 def _render_item(item: RenderItem) -> Text:
@@ -52,6 +59,8 @@ def _render_item(item: RenderItem) -> Text:
             text.append(f"    {line}\n", style=style)
     elif item.kind == "notice":
         text.append(f"· {item.text}", style="blue")
+    elif item.kind == "turn_stats":
+        text.append(f"  {item.stats}", style="dim italic")
     elif item.kind == "error":
         text.append(f"✗ error: {item.text}", style="bold red")
     return text
@@ -128,20 +137,85 @@ def _max_scroll(items: list[Text], available: int, width: int = 80) -> int:
     return max(0, total - available)
 
 
+def _completion_panel(app: App) -> Panel | None:
+    """slash 补全浮层：候选项列表，高亮行反色。"""
+    if not app.comp_active:
+        return None
+    text = Text()
+    for idx, item in enumerate(app.comp_items[:_COMP_MAX_ROWS]):
+        style = "reverse" if idx == app.comp_index else ""
+        line = item.label
+        if item.hint:
+            line += f"  {_truncate(item.hint, 40)}"
+        text.append(line + "\n", style=style)
+    return Panel(text, title=" commands ", border_style="magenta")
+
+
+def _status_info(app: App) -> Text:
+    """常驻信息行：模型 · 上下文占比（颜色分级）· 缓存命中率 · 成本。"""
+    text = Text()
+    text.append(f" {app.model_id or '—'}", style="bold")
+    if app.context_limit > 0:
+        pct = app.ctx_tokens / app.context_limit
+        style = "green" if pct < 0.6 else "yellow" if pct < 0.85 else "red"
+        text.append(
+            f" · ctx {_fmt_tokens(app.ctx_tokens)}/{_fmt_tokens(app.context_limit)}"
+            f" {pct:.0%}",
+            style=style,
+        )
+        if pct >= 0.85:
+            text.append(" ! near limit", style="bold red")
+    else:
+        text.append(f" · ctx {_fmt_tokens(app.ctx_tokens)}", style="dim")
+    cache = app.cache_hit_pct
+    text.append(
+        f" · cache {cache:.0%}" if cache is not None else " · cache —",
+        style="dim" if cache is None else "cyan",
+    )
+    text.append(f" · ${app.cost_usd:.4f}", style="dim")
+    return text
+
+
+def _status_hint(app: App) -> Text:
+    """下行提示：feedback/permission/busy/idle 四态。"""
+    if app.permission_feedback_mode:
+        return Text(" Enter: submit · Esc: back to choice ")
+    if app.pending_permission is not None:
+        status = Text()
+        status.append("⚠ ", style="bold yellow")
+        status.append("y: allow · a: always · n: deny · e: deny with comment")
+        return status
+    if app.agent_busy:
+        status = Text()
+        status.append("●", style="yellow")
+        status.append(" thinking… (Esc cancel · Ctrl-C quit)")
+        return status
+    if app.comp_active:
+        return Text(" Tab/Enter: complete · ↑/↓: choose · Esc: close ")
+    return Text(" Enter: send · /: commands · ↑/↓: scroll · Ctrl-C: quit ")
+
+
 def build_renderable(app: App, console: Console) -> Layout:
     all_items: list[Text] = [_render_item(it) for it in app.items]
     if app.streaming_text:
         all_items.append(_render_item(RenderItem(kind="assistant", text=app.streaming_text)))
 
+    comp_panel = _completion_panel(app)
+    comp_rows = (len(app.comp_items[:_COMP_MAX_ROWS]) + _PANEL_BORDERS) if comp_panel else 0
+
     available = max(
         5,
-        console.height - _INPUT_ROWS - _STATUS_ROWS - _PANEL_BORDERS,
+        console.height - _INPUT_ROWS - _STATUS_ROWS - _PANEL_BORDERS - comp_rows,
     )
     text_width = max(20, console.width - _PANEL_BORDERS - _TEXT_INDENT)
     app.scroll = min(app.scroll, _max_scroll(all_items, available, text_width))
     visible = _select_visible(all_items, available, app.scroll, text_width)
 
-    thinking = " · thinking…" if app.agent_busy else ""
+    thinking = (
+        f" · thinking… ~{_fmt_tokens(app.est_stream_tokens)} tok"
+        if app.agent_busy
+        else ""
+    )
     title = (
         f" mini-claude-code — session {app.session_short_id}"
         f" (${app.cost_usd:.3f}){thinking} "
@@ -176,23 +250,14 @@ def build_renderable(app: App, console: Console) -> Layout:
         cursor_display = app.input[: app.cursor] + "▎" + app.input[app.cursor :]
         input_panel = Panel(Text(cursor_display), title=" input ", border_style="cyan")
 
-    if app.permission_feedback_mode:
-        status = Text(" Enter: submit · Esc: back to choice ")
-    elif app.pending_permission is not None:
-        status = Text()
-        status.append("⚠ ", style="bold yellow")
-        status.append("y: allow · a: always · n: deny · e: deny with comment")
-    elif app.agent_busy:
-        status = Text()
-        status.append("●", style="yellow")
-        status.append(" thinking… (Esc cancel · Ctrl-C quit)")
-    else:
-        status = Text(" Enter: send · ↑/↓ scroll · Ctrl-C: quit ")
+    status = Group(_status_info(app), _status_hint(app))
+
+    rows: list[Layout] = [Layout(msg_panel, name="messages")]
+    if comp_panel is not None:
+        rows.append(Layout(comp_panel, name="completions", size=comp_rows))
+    rows.append(Layout(input_panel, name="input", size=_INPUT_ROWS))
+    rows.append(Layout(status, name="status", size=_STATUS_ROWS))
 
     layout = Layout()
-    layout.split_column(
-        Layout(msg_panel, name="messages"),
-        Layout(input_panel, name="input", size=_INPUT_ROWS),
-        Layout(status, name="status", size=_STATUS_ROWS),
-    )
+    layout.split_column(*rows)
     return layout

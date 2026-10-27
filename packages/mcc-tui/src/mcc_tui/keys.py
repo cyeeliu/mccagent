@@ -27,6 +27,7 @@ class Key(Enum):
     end = "end"
     page_up = "page_up"
     page_down = "page_down"
+    tab = "tab"
 
 
 class KeyReader:
@@ -66,6 +67,8 @@ class KeyReader:
             return Key.ctrl_d, None
         if ch in ("\r", "\n"):
             return Key.enter, None
+        if ch == "\t":
+            return Key.tab, None
         if ch == "\x7f":
             return Key.backspace, None
         if ch == "\x1b":
