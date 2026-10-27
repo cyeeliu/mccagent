@@ -188,12 +188,25 @@ class BubblewrapExecutor:
         argv = ["bwrap"]
         for src in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
             argv += ["--ro-bind", src, src]
+        # bwrap starts from a minimal root. Make the host working directory
+        # visible at the same absolute path before chdir; otherwise --chdir
+        # can fail and project files are invisible inside the sandbox.
+        cwd_path = cwd.resolve()
+        mounted_roots = {
+            Path("/"), Path("/usr"), Path("/bin"), Path("/lib"),
+            Path("/lib64"), Path("/etc"), Path("/proc"), Path("/dev"),
+            Path("/tmp"),
+        }
+        for parent in reversed(cwd_path.parents):
+            if parent not in mounted_roots:
+                argv += ["--dir", str(parent)]
         argv += [
             "--proc", "/proc",
             "--dev", "/dev",
             "--tmpfs", "/tmp",
             "--die-with-parent",
-            "--chdir", str(cwd),
+            "--bind", str(cwd_path), str(cwd_path),
+            "--chdir", str(cwd_path),
         ]
         if self._cfg.network == "off":
             argv.append("--unshare-net")

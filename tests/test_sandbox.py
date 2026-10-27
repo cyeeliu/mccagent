@@ -157,7 +157,10 @@ def test_bwrap_argv_contains_isolation_bindings(tmp_path: Path) -> None:
     assert "--tmpfs /tmp" in joined
     assert "--ro-bind /usr /usr" in joined
     assert "--ro-bind /etc /etc" in joined
-    assert f"--chdir {tmp_path}" in joined
+    assert f"--bind {tmp_path.resolve()} {tmp_path.resolve()}" in joined
+    assert f"--chdir {tmp_path.resolve()}" in joined
+    # Parent directories must be created in the minimal bwrap root before bind.
+    assert str(tmp_path.resolve().parent) in argv
     assert argv[-2:] == ["bash", "-c"] or argv[-1] == "ls"
 
 
