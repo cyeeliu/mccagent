@@ -382,6 +382,17 @@ class TestEventSourceIntegration:
         texts = [e.text for e in events if hasattr(e, "text")]
         assert any("/model" in t for t in texts)
 
+    @pytest.mark.parametrize("cmd", ["/help", "/status", "/config", "/model"])
+    async def test_display_command_emits_turn_end(self, cmd: str) -> None:
+        """纯展示型 slash 命令发零成本 TurnEnd，使 TUI 复位 agent_busy。"""
+        from mcc_core import TurnEnd
+
+        source, _ = self._build(registry=build_default_registry())
+        events = [e async for e in source.run(cmd)]
+        turn_ends = [e for e in events if isinstance(e, TurnEnd)]
+        assert len(turn_ends) == 1
+        assert turn_ends[0].cost_usd == 0.0
+
     async def test_goal_set_prompt_continues_to_agent(self) -> None:
         controller = GoalController(evaluator=None)
         source, llm = self._build(

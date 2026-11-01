@@ -105,6 +105,7 @@ class AgentEventSource(EventSource):
                 if result.text:
                     yield Notice(text=result.text)
                 if result.prompt is None:
+                    yield TurnEnd(cost_usd=0.0)
                     return
                 prompt = result.prompt
         if self._slash_resolver is not None:
