@@ -167,6 +167,7 @@ async def _run_tui_mode(
     event_queue: asyncio.Queue = asyncio.Queue()
     input_queue: asyncio.Queue = asyncio.Queue()
     permission_queue: asyncio.Queue = asyncio.Queue()
+    cancel_queue: asyncio.Queue = asyncio.Queue()
     session_short_id = session_id or uuid.uuid4().hex[:8]
 
     agent = getattr(source, "agent", None)
@@ -181,6 +182,7 @@ async def _run_tui_mode(
     from mcc_core import Notice as NoticeEvent
     from mcc_core import PermissionDecision
     from mcc_core import PermissionRequest as PermissionRequestEvent
+    from mcc_core import TurnEnd as TurnEndEvent
     from mcc_harness import format_cron_delivery
 
     @dataclass
@@ -198,10 +200,11 @@ async def _run_tui_mode(
                     NoticeEvent(text=f"⏰ 定时任务触发（{len(item.jobs)} 个）")
                 )
             prompt = item.prompt if is_cron else item
-            try:
-                async for ev in source.run(prompt):
-                    if is_cron and isinstance(ev, PermissionRequestEvent):
-                        if item.permission_mode == "auto_allow":
+
+            async def run_turn(turn_prompt, turn_cron, turn_item):
+                async for ev in source.run(turn_prompt):
+                    if turn_cron and isinstance(ev, PermissionRequestEvent):
+                        if turn_item.permission_mode == "auto_allow":
                             permission_queue.put_nowait(
                                 PermissionDecision(ev.id, "allow")
                             )
@@ -209,16 +212,38 @@ async def _run_tui_mode(
                                 NoticeEvent(text=f"⏰ 自动批准: {ev.tool_name}")
                             )
                             continue
-                        if item.permission_mode == "auto_deny":
+                        if turn_item.permission_mode == "auto_deny":
                             permission_queue.put_nowait(
                                 PermissionDecision(ev.id, "deny")
                             )
                             continue
                     await event_queue.put(ev)
-            except Exception as exc:
-                from mcc_core import Error as ErrorEvent
 
-                await event_queue.put(ErrorEvent(text=str(exc)))
+            turn_task = asyncio.create_task(run_turn(prompt, is_cron, item))
+            cancel_task = asyncio.create_task(cancel_queue.get())
+            done, _pending = await asyncio.wait(
+                {turn_task, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel_task in done and not turn_task.done():
+                turn_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await turn_task
+                await event_queue.put(NoticeEvent(text="⏹ 已中断"))
+                await event_queue.put(TurnEndEvent(cost_usd=0.0))
+            else:
+                if cancel_task not in done:
+                    cancel_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await cancel_task
+                while not cancel_queue.empty():
+                    cancel_queue.get_nowait()
+                try:
+                    turn_task.result()
+                except Exception as exc:
+                    from mcc_core import Error as ErrorEvent
+
+                    await event_queue.put(ErrorEvent(text=str(exc)))
             if is_cron:
                 await event_queue.put(NoticeEvent(text="✓ 定时任务完成"))
             team_mgr = getattr(source, "team_manager", None)
@@ -261,6 +286,7 @@ async def _run_tui_mode(
             input_tx=input_queue,
             session_short_id=session_short_id,
             permission_tx=permission_queue,
+            cancel_tx=cancel_queue,
             completions=make_provider(commands),
             model_id=model_id,
             context_limit=context_window(model_id) if model_id else 0,

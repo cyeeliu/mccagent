@@ -25,6 +25,7 @@ class TuiHandles:
     input_tx: asyncio.Queue[str]
     session_short_id: str
     permission_tx: asyncio.Queue[PermissionDecision] | None = None
+    cancel_tx: asyncio.Queue[bool] | None = None
     completions: Any = None  # CompletionProvider：slash 补全候选
     model_id: str = ""
     context_limit: int = 0
@@ -114,7 +115,9 @@ def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
             return False
 
     if key == Key.escape and app.agent_busy:
-        app.push(_notice_item("(cancel requested)"))
+        if handles.cancel_tx is not None:
+            handles.cancel_tx.put_nowait(True)
+        app.push(_notice_item("(取消中…)"))
         return False
     if key == Key.enter and not app.agent_busy:
         return _send_input(app, handles)
