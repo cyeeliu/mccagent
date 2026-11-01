@@ -2,10 +2,22 @@
 
 两种 slash 语义共存于同一输入框：
 
-- **本地命令**（SlashRegistry）：/model /config /help /status /goal——
+- **本地命令**（SlashRegistry）：/model /config /help /status /goal /resume——
   直接执行不进 AgentLoop，结果以 Notice 回显
 - **内容替换**（slash_resolver）：/skill-name——SKILL.md 注入
   prompt 后进 AgentLoop（Skills 机制，见 skills.md）
+
+## 输入补全
+
+输入框以 `/` 开头且无空格时弹出候选浮层，随输入前缀实时过滤。
+候选来源：
+
+- 内置命令（SlashRegistry 注册的 name/description）
+- 自定义命令（`~/.mcc/commands/*.md` 与 `./commands/*.md`）
+- **Skills**（`~/.mcc/skills/*/SKILL.md` 与 `./skills/*/SKILL.md` 的 name）
+
+↑↓ 选择、Tab/Enter 补全高亮项、Esc 关闭浮层。skill 候选 hint
+标记为 `skill` 以区分内置命令。
 
 ## 内置命令
 
@@ -16,6 +28,7 @@
 | `/model` | 无参显示当前模型；`/model <id>` 切换主模型（即刻生效并写配置）；`/model <main\|subagent\|summarize> <id>` 指定类型 |
 | `/config` | 无参查看生效配置摘要（凭据脱敏）；`/config get <key>`；`/config set <key> <value>` |
 | `/goal` | 查看/设置/清除 goal loop（`/goal clear` 清除；`/goal <文本>` 设置并把文本作为任务输入） |
+| `/resume` | 无参列出最近 10 条历史会话；`/resume <id>` 就地恢复：加载历史写入 agent.history 并更新状态栏 session id |
 
 ### /config set 白名单与生效语义
 

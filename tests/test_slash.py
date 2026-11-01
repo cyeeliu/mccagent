@@ -523,3 +523,170 @@ class TestOnboardingWizard:
         ok = self._run(home, [])
         assert ok is False
         assert read_home_settings() == {}
+
+
+# -- skills 补全 --
+
+
+class TestSkillsCompletion:
+    """skills 名注入补全 provider：输入 / 时 skill 候选出现在浮层。"""
+
+    def test_skill_names_appear_in_completions(self) -> None:
+        from mcc_tui.completions import make_provider
+
+        provider = make_provider(
+            [("help", "帮助"), ("status", "状态")],
+            skill_names=["code-review", "debug-fix"],
+        )
+        inserts = [item.insert for item in provider("/")]
+        assert "/help" in inserts
+        assert "/status" in inserts
+        assert "/code-review" in inserts
+        assert "/debug-fix" in inserts
+
+    @pytest.mark.parametrize(
+        "prefix, expected",
+        [
+            ("/", ["/code-review", "/debug-fix"]),
+            ("/code", ["/code-review"]),
+            ("/debug", ["/debug-fix"]),
+            ("/xyz", []),
+        ],
+    )
+    def test_skill_prefix_filter(self, prefix: str, expected: list[str]) -> None:
+        from mcc_tui.completions import make_provider
+
+        provider = make_provider([], skill_names=["code-review", "debug-fix"])
+        inserts = [item.insert for item in provider(prefix)]
+        assert inserts == expected
+
+    def test_no_skill_names_no_skill_items(self) -> None:
+        from mcc_tui.completions import make_provider
+
+        provider = make_provider([("help", "帮助")])
+        inserts = [item.insert for item in provider("/")]
+        assert inserts == ["/help"]
+
+    def test_skill_hint_label(self) -> None:
+        from mcc_tui.completions import make_provider
+
+        provider = make_provider([], skill_names=["my-skill"])
+        items = provider("/")
+        assert len(items) == 1
+        assert items[0].hint == "skill"
+        assert items[0].label == "/my-skill"
+
+
+# -- /resume --
+
+
+def _write_session(home: Path, sid: str, turns: int = 1, title: str | None = None) -> None:
+    """在隔离 HOME 下直接落盘一个会话的 meta + JSONL 文件。"""
+    from datetime import UTC, datetime
+
+    from mcc_core import Message, Role, TextBlock
+    from mcc_session.models import SessionMeta, TurnSnapshot
+
+    base = home / ".mcc" / "sessions"
+    day = base / datetime.now(UTC).strftime("%Y-%m-%d")
+    day.mkdir(parents=True, exist_ok=True)
+
+    meta = SessionMeta(
+        id=sid,
+        started_at=datetime.now(UTC),
+        cwd=str(home),
+        turns=turns,
+        cost_usd=0.001 * turns,
+        status="completed",
+        title=title,
+    )
+    (day / f"{sid}.meta.json").write_text(
+        meta.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    lines: list[str] = []
+    for i in range(turns):
+        snapshot = TurnSnapshot(
+            ts=datetime.now(UTC),
+            iteration=i,
+            request_messages=[
+                Message(role=Role.user, content=[TextBlock(text=f"turn {i}")])
+            ],
+            assistant_blocks=[TextBlock(text=f"reply {i}")],
+            usage=Usage(),
+            model="test-model",
+            cost_usd=0.001,
+        )
+        lines.append(snapshot.model_dump_json())
+    (day / f"{sid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class TestResumeCommand:
+    """/resume：列出会话与就地恢复历史。"""
+
+    async def test_list_no_sessions(self, home: Path) -> None:
+        registry = build_default_registry()
+        result = await registry.dispatch("/resume", _source(slash_registry=registry))
+        assert result is not None and result.text is not None
+        assert "没有历史会话" in result.text
+
+    async def test_list_shows_sessions(self, home: Path) -> None:
+        _write_session(home, "abc12345", turns=2, title="my task")
+        registry = build_default_registry()
+        result = await registry.dispatch("/resume", _source(slash_registry=registry))
+        assert result is not None and result.text is not None
+        assert "abc12345" in result.text
+        assert "2 turn" in result.text
+        assert "my task" in result.text
+
+    async def test_resume_by_id_loads_history(self, home: Path) -> None:
+        _write_session(home, "xyz99999", turns=1)
+        registry = build_default_registry()
+        source = _source(slash_registry=registry)
+        result = await registry.dispatch("/resume xyz99999", source)
+        assert result is not None and result.text is not None
+        assert "已恢复" in result.text
+        assert "xyz99999" in result.text
+        assert len(source.agent.history) > 0
+        assert source.session_short_id == "xyz99999"
+
+    async def test_resume_by_id_preserves_multi_turn_history(self, home: Path) -> None:
+        _write_session(home, "multi001", turns=3)
+        registry = build_default_registry()
+        source = _source(slash_registry=registry)
+        result = await registry.dispatch("/resume multi001", source)
+        assert result is not None and result.text is not None
+        assert "3 turn" in result.text
+        assert len(source.agent.history) >= 2
+
+    async def test_resume_unknown_id(self, home: Path) -> None:
+        registry = build_default_registry()
+        result = await registry.dispatch(
+            "/resume nosuchid", _source(slash_registry=registry)
+        )
+        assert result is not None and result.text is not None
+        assert "错误" in result.text
+
+    async def test_resume_registered_in_default_registry(self) -> None:
+        registry = build_default_registry()
+        commands = dict(registry.list_commands())
+        assert "resume" in commands
+
+
+class TestEventSourceSkillNames:
+    """AgentEventSource 暴露 skill_names 供 TUI 补全消费。"""
+
+    def test_skill_names_defaults_to_empty_list(self) -> None:
+        from mcc_cli.events import AgentEventSource
+
+        source = AgentEventSource(agent=SimpleNamespace())
+        assert source.skill_names == []
+
+    def test_skill_names_stored(self) -> None:
+        from mcc_cli.events import AgentEventSource
+
+        source = AgentEventSource(
+            agent=SimpleNamespace(),
+            skill_names=["code-review", "debug-fix"],
+        )
+        assert source.skill_names == ["code-review", "debug-fix"]

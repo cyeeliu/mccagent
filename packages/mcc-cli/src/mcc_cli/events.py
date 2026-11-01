@@ -78,6 +78,7 @@ class AgentEventSource(EventSource):
         config: Any | None = None,
         work_dir: Any | None = None,
         skills_catalog: str | None = None,
+        skill_names: list[str] | None = None,
         session_short_id: str | None = None,
     ) -> None:
         self.agent = agent
@@ -91,6 +92,7 @@ class AgentEventSource(EventSource):
         self.config = config
         self.work_dir = work_dir
         self.skills_catalog = skills_catalog
+        self.skill_names = skill_names or []
         self.session_short_id = session_short_id
 
     @property

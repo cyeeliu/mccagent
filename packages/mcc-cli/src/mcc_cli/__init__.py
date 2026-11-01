@@ -288,6 +288,7 @@ async def _run_tui_mode(
     try:
         slash_registry = getattr(source, "slash_registry", None)
         commands = slash_registry.list_commands() if slash_registry is not None else []
+        skill_names = getattr(source, "skill_names", None) or []
         agent_obj = getattr(source, "agent", None)
         model_id = getattr(agent_obj, "model", "") or ""
         handles = TuiHandles(
@@ -296,7 +297,7 @@ async def _run_tui_mode(
             session_short_id=session_short_id,
             permission_tx=permission_queue,
             cancel_tx=cancel_queue,
-            completions=make_provider(commands),
+            completions=make_provider(commands, skill_names=skill_names),
             model_id=model_id,
             context_limit=context_window(model_id) if model_id else 0,
         )

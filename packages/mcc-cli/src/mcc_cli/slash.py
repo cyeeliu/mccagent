@@ -287,6 +287,43 @@ def _goal_handler(source: Any, args: str) -> SlashResult:
     return SlashResult(text=f"goal set: {stripped}", prompt=stripped)
 
 
+def _resume(source: Any, args: str) -> SlashResult:
+    """/resume：列出历史会话或就地恢复指定会话。
+
+    无参数 → 列出最近 10 条会话供选择；
+    有参数 → 加载该 session-id 的历史并写入 agent.history，
+    同步更新 source.session_short_id 供状态栏显示。
+    """
+    from mcc_session import SessionNotFoundError, list_sessions, load_session
+
+    stripped = args.strip()
+    if not stripped:
+        metas = list_sessions()
+        if not metas:
+            return SlashResult(text="没有历史会话")
+        lines = ["最近会话（输入 /resume <id> 恢复）:"]
+        for m in metas[:10]:
+            title = f" — {m.title}" if m.title else ""
+            lines.append(f"  {m.id}  {m.turns} turn(s)  ${m.cost_usd:.4f}{title}")
+        return SlashResult(text="\n".join(lines))
+
+    try:
+        meta, history = load_session(stripped)
+    except SessionNotFoundError as e:
+        return SlashResult(text=f"错误: {e}")
+
+    agent = getattr(source, "agent", None)
+    if agent is None:
+        return SlashResult(text="agent 不可用，无法恢复")
+    agent.history = history
+    source.session_short_id = meta.id
+    title = f" — {meta.title}" if meta.title else ""
+    return SlashResult(
+        text=f"已恢复会话 {meta.id}（{meta.turns} turn(s), "
+        f"${meta.cost_usd:.4f}）{title}"
+    )
+
+
 def build_default_registry() -> SlashRegistry:
     """注册内置命令的默认注册表。"""
     registry = SlashRegistry()
@@ -295,4 +332,5 @@ def build_default_registry() -> SlashRegistry:
     registry.register("model", "查看或切换模型", _model)
     registry.register("config", "查看或修改配置", _config)
     registry.register("goal", "设置/查看/清除 goal loop", _goal_handler)
+    registry.register("resume", "列出或恢复历史会话", _resume)
     return registry
