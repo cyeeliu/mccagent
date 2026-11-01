@@ -225,6 +225,26 @@ class TestModelCommand:
         assert result is not None and result.text is not None
         assert "未知模型类型" in result.text
 
+    @pytest.mark.parametrize(
+        "cmd, expected",
+        [("/model claude-x", "claude-x"), ("/model main claude-y", "claude-y")],
+    )
+    async def test_main_switch_sets_model_update(
+        self, home: Path, cmd: str, expected: str
+    ) -> None:
+        registry = build_default_registry()
+        result = await registry.dispatch(cmd, _source(slash_registry=registry))
+        assert result is not None
+        assert result.model_update == expected
+
+    async def test_subagent_switch_no_model_update(self, home: Path) -> None:
+        registry = build_default_registry()
+        result = await registry.dispatch(
+            "/model subagent claude-h", _source(slash_registry=registry)
+        )
+        assert result is not None
+        assert result.model_update is None
+
 
 # -- /config --
 
@@ -278,6 +298,22 @@ class TestConfigCommand:
         await registry.dispatch("/config set model.main claude-y", source)
         assert source.agent.model == "claude-y"
         assert source.config.model.main == "claude-y"
+
+    async def test_set_model_main_sets_model_update(self, home: Path) -> None:
+        registry = build_default_registry()
+        result = await registry.dispatch(
+            "/config set model.main claude-z", _source(slash_registry=registry)
+        )
+        assert result is not None
+        assert result.model_update == "claude-z"
+
+    async def test_set_model_subagent_no_model_update(self, home: Path) -> None:
+        registry = build_default_registry()
+        result = await registry.dispatch(
+            "/config set model.subagent claude-s", _source(slash_registry=registry)
+        )
+        assert result is not None
+        assert result.model_update is None
 
     async def test_set_rejected_key(self, home: Path) -> None:
         registry = build_default_registry()
@@ -392,6 +428,32 @@ class TestEventSourceIntegration:
         turn_ends = [e for e in events if isinstance(e, TurnEnd)]
         assert len(turn_ends) == 1
         assert turn_ends[0].cost_usd == 0.0
+
+    @pytest.mark.parametrize(
+        "cmd, expected",
+        [
+            ("/model claude-new", "claude-new"),
+            ("/config set model.main claude-new2", "claude-new2"),
+        ],
+    )
+    async def test_model_switch_emits_model_changed(
+        self, home: Path, cmd: str, expected: str
+    ) -> None:
+        """切主模型经事件流通知前端：/model 与 /config set model.main 两入口。"""
+        from mcc_core import ModelChanged
+
+        source, _ = self._build(registry=build_default_registry())
+        events = [e async for e in source.run(cmd)]
+        changed = [e for e in events if isinstance(e, ModelChanged)]
+        assert len(changed) == 1
+        assert changed[0].model_id == expected
+
+    async def test_subagent_switch_emits_no_model_changed(self, home: Path) -> None:
+        from mcc_core import ModelChanged
+
+        source, _ = self._build(registry=build_default_registry())
+        events = [e async for e in source.run("/model subagent claude-s")]
+        assert not any(isinstance(e, ModelChanged) for e in events)
 
     async def test_goal_set_prompt_continues_to_agent(self) -> None:
         controller = GoalController(evaluator=None)

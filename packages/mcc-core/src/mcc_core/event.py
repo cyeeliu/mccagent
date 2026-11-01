@@ -62,6 +62,17 @@ class Notice:
 
 
 @dataclass
+class ModelChanged:
+    """主对话模型切换事件（/model 或 /config set model.main 触发）。
+
+    TUI 据此更新状态栏模型 ID；AgentLoop.model 已由 slash handler
+    即刻改写，本事件仅用于通知前端同步展示。
+    """
+
+    model_id: str
+
+
+@dataclass
 class GoalStatus:
     """Goal Loop 状态变更事件。
 
@@ -105,6 +116,7 @@ AgentEvent = (
     | LlmUsage
     | TurnEnd
     | Notice
+    | ModelChanged
     | GoalStatus
     | Error
     | PermissionRequest

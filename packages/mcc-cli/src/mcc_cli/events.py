@@ -12,6 +12,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from mcc_core import (
     AgentEvent,
+    ModelChanged,
     Notice,
     TextDelta,
     ToolCallEnd,
@@ -102,6 +103,8 @@ class AgentEventSource(EventSource):
         if self.slash_registry is not None:
             result = await self.slash_registry.dispatch(prompt, self)
             if result is not None:
+                if result.model_update:
+                    yield ModelChanged(model_id=result.model_update)
                 if result.text:
                     yield Notice(text=result.text)
                 if result.prompt is None:

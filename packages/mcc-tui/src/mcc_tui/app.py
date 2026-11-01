@@ -14,6 +14,7 @@ from mcc_core import (
     AgentEvent,
     Error,
     LlmUsage,
+    ModelChanged,
     Notice,
     PermissionRequest,
     TextDelta,
@@ -210,6 +211,8 @@ class App:
                 self.push(RenderItem(kind="turn_stats", stats=stats))
             self.turn_in = 0
             self.turn_out = 0
+        elif isinstance(ev, ModelChanged):
+            self.model_id = ev.model_id
         elif isinstance(ev, Notice):
             self.push(RenderItem(kind="notice", text=ev.text))
         elif isinstance(ev, Error):

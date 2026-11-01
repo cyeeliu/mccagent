@@ -23,10 +23,13 @@ class SlashResult:
 
     ``text`` 非空 → Notice 回显；``prompt`` 非空 → 替换用户输入
     继续走后续链路（如 /goal set 后把 goal 文本送进 AgentLoop）。
+    ``model_update`` 非空 → 主模型被切换，事件源据此发 ModelChanged
+    通知前端同步状态栏（仅 main 即刻生效，subagent/summarize 不发）。
     """
 
     text: str | None = None
     prompt: str | None = None
+    model_update: str | None = None
 
 
 SlashHandler = Callable[[Any, str], "SlashResult | Awaitable[SlashResult]"]
@@ -156,12 +159,17 @@ def _model(source: Any, args: str) -> SlashResult:
     if kind == "main":
         source.agent.model = model_id
         note = "即刻生效"
+        model_update = model_id
     else:
         note = "下个会话生效"
+        model_update = None
     update_home_setting(["model", kind], model_id)
     if config is not None:
         setattr(config.model, kind, model_id)
-    return SlashResult(text=f"model.{kind} = {model_id}（{note}，已写入配置）")
+    return SlashResult(
+        text=f"model.{kind} = {model_id}（{note}，已写入配置）",
+        model_update=model_update,
+    )
 
 
 def _config(source: Any, args: str) -> SlashResult:
@@ -195,10 +203,14 @@ def _config(source: Any, args: str) -> SlashResult:
             return SlashResult(text=f"值 {raw_value!r} 不是合法的 {key} 类型")
         update_home_setting(keys, value)
         _apply_runtime(config, key, value)
+        model_update = str(value) if key == "model.main" else None
         if key == "model.main":
             source.agent.model = str(value)
         shown = _mask_secret(value) if key in _SECRET_KEYS else str(value)
-        return SlashResult(text=f"{key} = {shown}（{note}，已写入配置）")
+        return SlashResult(
+            text=f"{key} = {shown}（{note}，已写入配置）",
+            model_update=model_update,
+        )
 
     return SlashResult(text="用法: /config | /config get <key> | /config set <key> <value>")
 

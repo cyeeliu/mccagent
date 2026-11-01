@@ -163,6 +163,15 @@ def test_cost_accumulates_across_runs():
     assert app.cost_usd == pytest.approx(0.08)
 
 
+def test_model_changed_updates_model_id():
+    """ModelChanged 事件更新状态栏模型 ID。"""
+    from mcc_core import ModelChanged
+
+    app = App(session_short_id="t", model_id="old-model")
+    app.apply_event(ModelChanged(model_id="new-model"))
+    assert app.model_id == "new-model"
+
+
 # -- CLI 注入 --
 
 
