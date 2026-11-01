@@ -134,6 +134,7 @@ class CronJob:
     pending_delivery: bool = False
     last_fired: str | None = None
     created_at: str = ""
+    permission_mode: str = "interactive"
 
 
 # -- CronScheduler --
@@ -193,12 +194,15 @@ class CronScheduler:
         prompt: str,
         recurring: bool = True,
         durable: bool = True,
+        permission_mode: str = "interactive",
     ) -> CronJob | str:
         error = validate_cron(cron)
         if error:
             return error
         if not prompt.strip():
             return "Prompt cannot be empty"
+        if permission_mode not in ("interactive", "auto_allow", "auto_deny"):
+            return f"Invalid permission_mode: {permission_mode}"
         async with self._lock:
             job = CronJob(
                 id=self._new_id(),
@@ -207,6 +211,7 @@ class CronScheduler:
                 recurring=recurring,
                 durable=durable,
                 created_at=datetime.now().isoformat(),
+                permission_mode=permission_mode,
             )
             self._jobs[job.id] = job
             try:
@@ -261,6 +266,18 @@ class CronScheduler:
 
     async def consume(self) -> list[CronJob]:
         jobs: list[CronJob] = []
+        while not self._queue.empty():
+            jobs.append(self._queue.get_nowait())
+        return jobs
+
+    async def next_due(self) -> list[CronJob]:
+        """阻塞等待 due cron jobs，返回当前所有 due jobs。
+
+        与 ``consume`` 不同，本方法会阻塞直到至少一个 job due，
+        供空闲时 cron bridge 主动触发 agent turn。
+        """
+        first = await self._queue.get()
+        jobs = [first]
         while not self._queue.empty():
             jobs.append(self._queue.get_nowait())
         return jobs
@@ -416,6 +433,16 @@ class ScheduleCronTool(Tool):
                     "type": "boolean",
                     "description": "If true, persists to disk and survives restart",
                 },
+                "permission_mode": {
+                    "type": "string",
+                    "enum": ["interactive", "auto_allow", "auto_deny"],
+                    "description": (
+                        "Permission handling for cron-triggered turns: "
+                        "interactive (prompt user, default), "
+                        "auto_allow (auto-approve tool calls), "
+                        "auto_deny (auto-reject tool calls)"
+                    ),
+                },
             },
             "required": ["cron", "prompt"],
         }
@@ -425,7 +452,10 @@ class ScheduleCronTool(Tool):
         prompt = input["prompt"]
         recurring = input.get("recurring", True)
         durable = input.get("durable", True)
-        result = await self._scheduler.schedule(cron, prompt, recurring, durable)
+        permission_mode = input.get("permission_mode", "interactive")
+        result = await self._scheduler.schedule(
+            cron, prompt, recurring, durable, permission_mode
+        )
         if isinstance(result, str):
             return ToolOutput.err(f"Error: {result}")
         return ToolOutput.ok(f"Scheduled {result.id}: {cron} -> {prompt}")
@@ -457,7 +487,8 @@ class ListCronsTool(Tool):
             frequency = "recurring" if job.recurring else "one-shot"
             storage = "durable" if job.durable else "session"
             lines.append(
-                f"{job.id}: {job.cron} -> {job.prompt[:60]} [{frequency}, {storage}]"
+                f"{job.id}: {job.cron} -> {job.prompt[:60]} "
+                f"[{frequency}, {storage}, {job.permission_mode}]"
             )
         return ToolOutput.ok("\n".join(lines))
 

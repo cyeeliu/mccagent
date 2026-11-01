@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -175,16 +176,51 @@ async def _run_tui_mode(
     for ev in replay or []:
         event_queue.put_nowait(ev)
 
+    from dataclasses import dataclass
+
+    from mcc_core import Notice as NoticeEvent
+    from mcc_core import PermissionDecision
+    from mcc_core import PermissionRequest as PermissionRequestEvent
+    from mcc_harness import format_cron_delivery
+
+    @dataclass
+    class CronTurn:
+        prompt: str
+        jobs: list
+        permission_mode: str
+
     async def agent_worker() -> None:
         while True:
-            user_input = await input_queue.get()
+            item = await input_queue.get()
+            is_cron = isinstance(item, CronTurn)
+            if is_cron:
+                await event_queue.put(
+                    NoticeEvent(text=f"⏰ 定时任务触发（{len(item.jobs)} 个）")
+                )
+            prompt = item.prompt if is_cron else item
             try:
-                async for ev in source.run(user_input):
+                async for ev in source.run(prompt):
+                    if is_cron and isinstance(ev, PermissionRequestEvent):
+                        if item.permission_mode == "auto_allow":
+                            permission_queue.put_nowait(
+                                PermissionDecision(ev.id, "allow")
+                            )
+                            await event_queue.put(
+                                NoticeEvent(text=f"⏰ 自动批准: {ev.tool_name}")
+                            )
+                            continue
+                        if item.permission_mode == "auto_deny":
+                            permission_queue.put_nowait(
+                                PermissionDecision(ev.id, "deny")
+                            )
+                            continue
                     await event_queue.put(ev)
             except Exception as exc:
                 from mcc_core import Error as ErrorEvent
 
                 await event_queue.put(ErrorEvent(text=str(exc)))
+            if is_cron:
+                await event_queue.put(NoticeEvent(text="✓ 定时任务完成"))
             team_mgr = getattr(source, "team_manager", None)
             if team_mgr is not None:
                 inbox = await team_mgr.consume_lead_inbox()
@@ -195,8 +231,23 @@ async def _run_tui_mode(
 
     worker = asyncio.create_task(agent_worker())
     cron = getattr(source, "cron_scheduler", None)
+    cron_bridge_task: asyncio.Task[None] | None = None
     if cron is not None:
         await cron.start()
+
+        async def cron_bridge() -> None:
+            while True:
+                jobs = await cron.next_due()
+                await cron.acknowledge(jobs)
+                input_queue.put_nowait(
+                    CronTurn(
+                        prompt=format_cron_delivery(jobs),
+                        jobs=jobs,
+                        permission_mode=jobs[0].permission_mode,
+                    )
+                )
+
+        cron_bridge_task = asyncio.create_task(cron_bridge())
     wf_tool = getattr(source, "workflow_tool", None)
     if wf_tool is not None:
         wf_tool.set_event_sink(event_queue)
@@ -217,6 +268,10 @@ async def _run_tui_mode(
         await run_tui(handles)
     finally:
         worker.cancel()
+        if cron_bridge_task is not None:
+            cron_bridge_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cron_bridge_task
         if cron is not None:
             await cron.stop()
         sink = getattr(source, "observability_sink", None)

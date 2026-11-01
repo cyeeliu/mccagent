@@ -408,7 +408,7 @@ class TestCronTools:
         tool = ListCronsTool(sched)
         out = await tool.execute({}, _ctx(tmp_path))
         assert "cron_" in out.content
-        assert "[one-shot, session]" in out.content
+        assert "[one-shot, session, interactive]" in out.content
 
     async def test_cancel_tool(self, tmp_path: Path) -> None:
         sched = CronScheduler()
@@ -557,3 +557,126 @@ class TestCronConfig:
         project = Config()
         merged = merge(home, project)
         assert merged.cron.poll_interval == 2.0
+
+
+# -- next_due 阻塞式消费 --
+
+
+class TestNextDue:
+    async def test_returns_immediately_when_ready(self) -> None:
+        sched = CronScheduler()
+        await sched.schedule("* * * * *", "x")
+        await sched.poll(datetime.now())
+        jobs = await asyncio.wait_for(sched.next_due(), timeout=1.0)
+        assert len(jobs) == 1
+        assert jobs[0].prompt == "x"
+
+    async def test_drains_all_due(self) -> None:
+        sched = CronScheduler()
+        await sched.schedule("* * * * *", "a")
+        await sched.schedule("* * * * *", "b")
+        await sched.poll(datetime.now())
+        jobs = await asyncio.wait_for(sched.next_due(), timeout=1.0)
+        assert len(jobs) == 2
+
+    async def test_blocks_when_empty(self) -> None:
+        sched = CronScheduler()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(sched.next_due(), timeout=0.1)
+
+    async def test_wakes_when_job_becomes_due(self) -> None:
+        sched = CronScheduler(poll_interval=0.05)
+        await sched.start()
+        try:
+            await sched.schedule("* * * * *", "x")
+            jobs = await asyncio.wait_for(sched.next_due(), timeout=2.0)
+            assert len(jobs) >= 1
+            assert jobs[0].prompt == "x"
+        finally:
+            await sched.stop()
+
+
+# -- permission_mode --
+
+
+class TestPermissionMode:
+    async def test_default_is_interactive(self) -> None:
+        sched = CronScheduler()
+        job = await sched.schedule("* * * * *", "x")
+        assert job.permission_mode == "interactive"
+
+    @pytest.mark.parametrize("mode", ["auto_allow", "auto_deny", "interactive"])
+    async def test_valid_modes(self, mode: str) -> None:
+        sched = CronScheduler()
+        job = await sched.schedule("* * * * *", "x", permission_mode=mode)
+        assert job.permission_mode == mode
+
+    async def test_invalid_mode_rejected(self) -> None:
+        sched = CronScheduler()
+        result = await sched.schedule("* * * * *", "x", permission_mode="bad")
+        assert isinstance(result, str)
+        assert "Invalid permission_mode" in result
+
+    async def test_persisted_to_disk(self, tmp_path: Path) -> None:
+        path = tmp_path / ".cron_jobs.json"
+        sched = CronScheduler(durable_path=path)
+        await sched.schedule("* * * * *", "x", permission_mode="auto_deny")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload[0]["permission_mode"] == "auto_deny"
+
+    async def test_reloaded_from_disk(self, tmp_path: Path) -> None:
+        path = tmp_path / ".cron_jobs.json"
+        sched = CronScheduler(durable_path=path)
+        await sched.schedule("* * * * *", "x", permission_mode="auto_allow")
+        sched2 = CronScheduler(durable_path=path)
+        await sched2.start()
+        try:
+            jobs = await sched2.list_jobs()
+            assert jobs[0].permission_mode == "auto_allow"
+        finally:
+            await sched2.stop()
+
+    async def test_old_format_defaults_interactive(self, tmp_path: Path) -> None:
+        path = tmp_path / ".cron_jobs.json"
+        path.write_text(
+            json.dumps(
+                [{"id": "cron_old", "cron": "0 9 * * *", "prompt": "x"}]
+            ),
+            encoding="utf-8",
+        )
+        sched = CronScheduler(durable_path=path)
+        await sched.start()
+        try:
+            jobs = await sched.list_jobs()
+            assert jobs[0].permission_mode == "interactive"
+        finally:
+            await sched.stop()
+
+
+class TestCronToolsPermissionMode:
+    async def test_schedule_tool_with_mode(self, tmp_path: Path) -> None:
+        sched = CronScheduler()
+        tool = ScheduleCronTool(sched)
+        out = await tool.execute(
+            {"cron": "0 9 * * *", "prompt": "x", "permission_mode": "auto_allow"},
+            _ctx(tmp_path),
+        )
+        assert out.content.startswith("Scheduled cron_")
+        jobs = await sched.list_jobs()
+        assert jobs[0].permission_mode == "auto_allow"
+
+    async def test_schedule_tool_default_mode(self, tmp_path: Path) -> None:
+        sched = CronScheduler()
+        tool = ScheduleCronTool(sched)
+        await tool.execute(
+            {"cron": "0 9 * * *", "prompt": "x"}, _ctx(tmp_path)
+        )
+        jobs = await sched.list_jobs()
+        assert jobs[0].permission_mode == "interactive"
+
+    async def test_list_tool_shows_mode(self, tmp_path: Path) -> None:
+        sched = CronScheduler()
+        await sched.schedule("0 9 * * *", "x", permission_mode="auto_allow")
+        tool = ListCronsTool(sched)
+        out = await tool.execute({}, _ctx(tmp_path))
+        assert "auto_allow" in out.content

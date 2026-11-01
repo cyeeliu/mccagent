@@ -1,9 +1,10 @@
 # Cron 调度器
 
 按标准 5 字段 cron 表达式定时触发 prompt。调度器在 asyncio.Task 中
-轮询 due jobs，AgentLoop 每轮迭代首 consume 并注入为 user 消息，
-使模型在空闲时处理定时任务。durable job 持久化到 `.cron_jobs.json`，
-进程重启后自动恢复。
+轮询 due jobs，通过两条路径注入 AgentLoop：（1）用户 turn 进行中，
+每轮迭代首 consume 并注入为 user 消息；（2）用户空闲时，cron_bridge
+阻塞式 next_due 主动触发 agent turn。durable job 持久化到
+`.cron_jobs.json`，进程重启后自动恢复。
 
 ## 架构概览
 
@@ -11,11 +12,22 @@
 CronScheduler._poll_loop（asyncio.Task，每 poll_interval 秒）
  └── poll(now) → cron_matches 匹配 → due job 入队（asyncio.Queue）
 
-AgentLoop 每轮迭代首
- ├── cron_scheduler.consume() → due jobs
- ├── format_cron_delivery → <cron_delivery> XML
- ├── messages.append(Message.user(notification))
- └── acknowledge(jobs) → recurring 重置 / one-shot 移除
+路径 1：用户 turn 进行中（CronInterceptor）
+ AgentLoop 每轮迭代首
+  ├── cron_scheduler.consume() → due jobs
+  ├── format_cron_delivery → <cron_delivery> XML
+  ├── messages.append(Message.user(notification))
+  └── acknowledge(jobs) → recurring 重置 / one-shot 移除
+
+路径 2：用户空闲时（cron_bridge）
+ cron_bridge（asyncio.Task）
+  ├── cron_scheduler.next_due() → 阻塞等待 due jobs
+  ├── acknowledge(jobs)
+  └── input_queue.put(CronTurn) → agent_worker 触发 agent turn
+      ├── Notice("⏰ 定时任务触发")
+      ├── source.run(prompt) → 事件流到 TUI
+      │   └── PermissionRequest 按 permission_mode 拦截
+      └── Notice("✓ 定时任务完成")
 ```
 
 ## 使用方式
@@ -67,22 +79,38 @@ day-of-month 与 day-of-week 同时受限时为 OR 语义（与标准 cron 一�
 投递语义：due job 注入前标记 `pending_delivery`（持久化），成功注入后
 acknowledge；若投递失败可 `restore` 重新入队，保证不丢任务。
 
+### permission_mode 权限模式
+
+cron 触发的 agent turn 中，模型可能调用需要权限确认的工具（如 bash、
+文件写入）。`permission_mode` 控制此类请求的处理方式：
+
+| 模式 | 行为 | 适用场景 |
+|------|------|----------|
+| `interactive`（默认） | 权限请求弹到 TUI 等用户确认，超时（120s）拒绝 | 用户在场 |
+| `auto_allow` | 自动批准，发 Notice 告知 | 受信任的定时任务（定期 lint/测试/构建） |
+| `auto_deny` | 自动拒绝 | 最保守，仅用已授权工具 |
+
+`interactive` 模式下权限交互走 `permission_queue`，与用户输入队列独立，
+cron turn 期间正常弹框确认。`auto_allow` / `auto_deny` 由 `agent_worker`
+拦截 `PermissionRequest` 事件，自动回填 `PermissionDecision`，不转发给 TUI。
+
 ## 核心组件
 
 ### CronScheduler
 
-- `schedule(cron, prompt, recurring, durable) -> CronJob | str`：安排任务（返回错误字符串表示校验失败）
+- `schedule(cron, prompt, recurring, durable, permission_mode) -> CronJob | str`：安排任务（返回错误字符串表示校验失败）
 - `poll(moment) -> int`：检查 due jobs 入队（minute_marker 去重，同一分钟不重复触发）
-- `consume() -> list[CronJob]`：批量取出 due jobs
+- `consume() -> list[CronJob]`：批量取出 due jobs（非阻塞）
+- `next_due() -> list[CronJob]`：阻塞等待 due jobs，供 cron_bridge 空闲触发
 - `acknowledge(jobs)`：recurring 重置 pending_delivery / one-shot 移除并持久化
 - `restore(jobs)`：投递失败时重新入队
 - `start() / stop()`：启动/停止 poll loop（幂等）
 
 ### CronJob
 
-`id / cron / prompt / recurring / durable / pending_delivery / last_fired`
+`id / cron / prompt / recurring / durable / pending_delivery / last_fired / permission_mode`
 字段经 asdict 序列化持久化；加载时校验表达式、ID 前缀与 prompt，
-非法条目跳过不中断。
+非法条目跳过不中断。旧格式缺 `permission_mode` 时默认 `interactive`。
 
 ## 配置
 
