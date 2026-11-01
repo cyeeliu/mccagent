@@ -57,6 +57,7 @@ class App:
     input: str = ""
     cursor: int = 0
     agent_busy: bool = False
+    # 会话累计成本：TurnEnd.cost_usd 是单次 run 的累计，此处跨 run 累加
     cost_usd: float = 0.0
     scroll: int = 0
     pending_permission: PermissionRequest | None = None
@@ -193,7 +194,8 @@ class App:
             self.cache_seen_total += self.turn_in
         elif isinstance(ev, TurnEnd):
             self.flush_streaming()
-            self.cost_usd = ev.cost_usd
+            # 跨 run 累加：ev.cost_usd 是本次 run 的累计成本
+            self.cost_usd += ev.cost_usd
             self.agent_busy = False
             run_in = self.session_in - self._run_start_in
             run_out = self.session_out - self._run_start_out

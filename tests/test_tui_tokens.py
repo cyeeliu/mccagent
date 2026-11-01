@@ -155,6 +155,14 @@ def test_turn_stats_isolated_per_run():
     assert "80" in stats[1].stats
 
 
+def test_cost_accumulates_across_runs():
+    """成本跨 run 累加：status bar 显示会话累计，而非单次 run 覆盖。"""
+    app = App(session_short_id="t")
+    app.apply_event(TurnEnd(cost_usd=0.05))
+    app.apply_event(TurnEnd(cost_usd=0.03))
+    assert app.cost_usd == pytest.approx(0.08)
+
+
 # -- CLI 注入 --
 
 
