@@ -3,10 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
-from mcc_core import Notice, TurnEnd, UserEcho
+from mcc_core import (
+    Message,
+    Notice,
+    Role,
+    TextBlock,
+    ToolContext,
+    ToolOutput,
+    ToolResultBlock,
+    ToolUseBlock,
+    TurnEnd,
+    Usage,
+    UserEcho,
+)
+from mcc_harness import AgentLoopBuilder
+from mcc_llm import MessageStop, ToolUseInputDelta, ToolUseStart
+from mcc_llm.mock import MockLlm, single_text_turn
+from mcc_tools import Tool, ToolRegistry, default_registry
 from mcc_tui import TuiHandles, _handle_key
 from mcc_tui.app import App
 from mcc_tui.keys import Key
@@ -228,3 +246,155 @@ async def test_stale_cancel_signal_does_not_break_next_turn(tmp_path: Path):
     assert len(turn_ends) == 2
     cancelled_notices = [e for e in captured if isinstance(e, Notice) and "已中断" in e.text]
     assert len(cancelled_notices) == 1
+
+
+class _HangingTool:
+    """执行时通知 started 事件后永久挂起，用于触发 cancel。"""
+
+    def __init__(self, started: asyncio.Event) -> None:
+        self._started = started
+
+    @property
+    def name(self) -> str:
+        return "hang_forever"
+
+    @property
+    def description(self) -> str:
+        return "test tool that hangs forever"
+
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        self._started.set()
+        await asyncio.sleep(3600)
+        return ToolOutput.ok("unreachable")
+
+
+def _tool_use_turn(tool_id: str, tool_name: str, tool_input: dict) -> list:
+    return [
+        ToolUseStart(id=tool_id, name=tool_name),
+        ToolUseInputDelta(partial_json=json.dumps(tool_input)),
+        MessageStop(stop_reason="tool_use", usage=Usage()),
+    ]
+
+
+@pytest.fixture
+def _ctx(tmp_path: Path) -> ToolContext:
+    return ToolContext(cwd=tmp_path, session_id="cancel-sess")
+
+
+class TestCancelPreservesHistory:
+    """cancel 后 agent.history 应保留被中断轮的上下文。"""
+
+    async def test_cancel_during_tool_execution_finalizes_history(
+        self, _ctx: ToolContext
+    ):
+        """工具执行中途 cancel：history 含 user + assistant(tool_use) + tool(interrupted)。"""
+        started = asyncio.Event()
+        registry = ToolRegistry()
+        registry.register(_HangingTool(started))
+
+        llm = MockLlm([_tool_use_turn("t1", "hang_forever", {})])
+        agent = AgentLoopBuilder(llm, registry, _ctx).build()
+
+        evq: asyncio.Queue = asyncio.Queue()
+        task = asyncio.create_task(agent.run_streaming("do something", evq))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        roles = [m.role for m in agent.history]
+        assert roles == [Role.user, Role.assistant, Role.tool]
+
+        assert agent.history[0].content[0].text == "do something"
+
+        tool_uses = [
+            b for b in agent.history[1].content if isinstance(b, ToolUseBlock)
+        ]
+        assert len(tool_uses) == 1
+        assert tool_uses[0].id == "t1"
+
+        tool_results = [
+            b for b in agent.history[2].content if isinstance(b, ToolResultBlock)
+        ]
+        assert len(tool_results) == 1
+        assert tool_results[0].tool_use_id == "t1"
+        assert tool_results[0].is_error is True
+        assert "interrupted" in tool_results[0].content
+
+    async def test_cancel_during_tool_then_next_turn_works(
+        self, _ctx: ToolContext
+    ):
+        """中断后下一轮能正常调用 LLM（消息序列合法）。"""
+        started = asyncio.Event()
+        registry = ToolRegistry()
+        registry.register(_HangingTool(started))
+
+        llm = MockLlm([
+            _tool_use_turn("t1", "hang_forever", {}),
+            single_text_turn("recovered after interrupt"),
+        ])
+        agent = AgentLoopBuilder(llm, registry, _ctx).build()
+
+        evq: asyncio.Queue = asyncio.Queue()
+        task = asyncio.create_task(agent.run_streaming("first", evq))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        captured: list = []
+        evq2: asyncio.Queue = asyncio.Queue()
+        await agent.run_streaming("second", evq2)
+        while not evq2.empty():
+            captured.append(evq2.get_nowait())
+
+        from mcc_core import TextDelta
+
+        text_parts = [
+            e.text for e in captured if isinstance(e, TextDelta)
+        ]
+        assert "".join(text_parts) != ""
+        assert any(isinstance(e, TurnEnd) for e in captured)
+
+    async def test_cancel_during_llm_stream_preserves_user_message(
+        self, _ctx: ToolContext
+    ):
+        """LLM 流式输出中途 cancel：history 至少保留 user 消息。"""
+
+        class _BlockingLlm:
+            """stream 时通知 started 后挂起，模拟 LLM 响应中途被 cancel。"""
+
+            def __init__(self, started: asyncio.Event) -> None:
+                self._started = started
+
+            async def complete(self, req):
+                self._started.set()
+                await asyncio.sleep(3600)
+
+            def stream(self, req):
+                self._started.set()
+
+                async def _gen():
+                    yield ToolUseStart(id="x", name="x")
+                    await asyncio.sleep(3600)
+
+                return _gen()
+
+        started = asyncio.Event()
+        llm = _BlockingLlm(started)
+        agent = AgentLoopBuilder(llm, default_registry(), _ctx).build()
+
+        evq: asyncio.Queue = asyncio.Queue()
+        task = asyncio.create_task(agent.run_streaming("hello", evq))
+        await started.wait()
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert len(agent.history) >= 1
+        assert agent.history[0].role == Role.user
+        assert agent.history[0].content[0].text == "hello"

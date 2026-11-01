@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import select
 import sys
 import termios
 import tty
@@ -80,6 +81,12 @@ class KeyReader:
         return self._stream.read(1)
 
     def _read_escape(self) -> str:
+        # 纯 ESC 键无后续字符；方向键等 escape sequence 在几毫秒内
+        # 连续到达。短超时内无可读字符则判定为单独的 ESC，避免
+        # read(1) 阻塞导致 ESC 按键要凑满 4 次循环才返回。
+        rlist, _, _ = select.select([self._stream], [], [], 0.05)
+        if not rlist:
+            return ""
         seq = ""
         for _ in range(4):
             ch = self._stream.read(1)

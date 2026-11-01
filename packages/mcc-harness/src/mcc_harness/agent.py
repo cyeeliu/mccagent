@@ -618,10 +618,45 @@ class AgentLoop:
 
             raise AgentError(f"exceeded max_iterations={self.max_iterations}")
         except BaseException:
+            self.history = self._finalize_messages(messages)
             if self.recorder:
                 with contextlib.suppress(Exception):
                     await self.recorder.finalize("errored")
             raise
+
+    def _finalize_messages(self, messages: list[Message]) -> list[Message]:
+        """中断时保留已积累的上下文，对未闭合的 tool_use 补中断结果。
+
+        cancel 可能发生在工具执行中途：messages 末尾的 assistant 消息
+        含 ToolUseBlock 但无对应 ToolResultBlock，直接用于下一轮 API
+        调用会因消息序列不合法而报错。此处补上 is_error 的占位结果，
+        使下一轮对话能延续被中断轮的上下文。
+        """
+        finalized = list(messages)
+        if not finalized:
+            return finalized
+        last = finalized[-1]
+        if last.role != Role.assistant:
+            return finalized
+        pending_ids = [
+            b.id for b in last.content if isinstance(b, ToolUseBlock)
+        ]
+        if not pending_ids:
+            return finalized
+        finalized.append(
+            Message(
+                role=Role.tool,
+                content=[
+                    ToolResultBlock(
+                        tool_use_id=tid,
+                        content="[interrupted by user]",
+                        is_error=True,
+                    )
+                    for tid in pending_ids
+                ],
+            )
+        )
+        return finalized
 
     async def _record_turn(
         self,

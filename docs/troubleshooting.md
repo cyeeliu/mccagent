@@ -173,3 +173,22 @@ restrictions」；显式 `bubblewrap` 档直接报错。
 
 **注意**：转存目录 `.task_outputs/` 与会话工作目录绑定，删除工作目录
 即清理转存产物；resume 依赖会话 JSONL，无需额外文件。
+
+## Esc 中断后上下文丢失
+
+**现象**：TUI 中按 Esc 中断正在运行的 turn 后，下一轮对话丢失被中断轮
+的全部上下文（user 消息、已完成的 assistant 回复、已执行的 tool 调用
+均不保留）；且按 Esc 需要连按多次才生效。
+
+**根因**：`AgentLoop.run_streaming` 的 `except BaseException` 分支未将
+已积累的 `messages` 写回 `self.history`，cancel 抛出 `CancelledError`
+（继承 `BaseException`）后 history 停留在中断前状态，下一轮以空上下文
+重新开始。同时 `KeyReader._read_escape` 用阻塞 `read(1)` 连读 4 字节
+判定 ESC 序列，单独按 Esc 时需凑满 4 次 read 才返回，体感为「按很多次
+才生效」。
+
+**修复**：`except BaseException` 中调用新增的 `_finalize_messages`，
+对未闭合的 `ToolUseBlock` 补 `ToolResultBlock(is_error=True,
+content="[interrupted by user]")`，使消息序列合法可延续；
+`_read_escape` 增加 `select` 50 ms 超时，无后续字符即判定为单独 ESC
+立即返回。
