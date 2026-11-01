@@ -10,7 +10,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from mcc_core import AgentEvent, PermissionDecision
+from mcc_core import AgentEvent, PermissionDecision, SelectionDecision
 from rich.console import Console
 from rich.live import Live
 
@@ -26,6 +26,7 @@ class TuiHandles:
     session_short_id: str
     permission_tx: asyncio.Queue[PermissionDecision] | None = None
     cancel_tx: asyncio.Queue[bool] | None = None
+    selection_tx: asyncio.Queue[SelectionDecision] | None = None
     completions: Any = None  # CompletionProvider：slash 补全候选
     model_id: str = ""
     context_limit: int = 0
@@ -90,6 +91,8 @@ def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
         return _handle_feedback_key(app, handles, key)
     if app.pending_permission is not None:
         return _handle_permission_key(app, handles, key)
+    if app.pending_selection is not None:
+        return _handle_selection_key(app, handles, key)
 
     # 补全浮层激活时的键位优先：↑↓ 选择、Tab 补全、Enter 补全选中
     # 项（已是精确匹配则照常发送）、Esc 关闭浮层
@@ -186,6 +189,36 @@ def _send_decision(
             + (f": {feedback}" if feedback else "")
         )
     )
+
+
+def _handle_selection_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
+    """/resume 等选择浮层：↑↓ 移动、Enter 确认、Esc 取消。"""
+    req = app.pending_selection
+    if req is None:
+        return False
+    n = len(req.options)
+    if n == 0:
+        return False
+    if key == Key.up:
+        app.sel_index = (app.sel_index - 1) % n
+    elif key == Key.down:
+        app.sel_index = (app.sel_index + 1) % n
+    elif key == Key.enter:
+        value = req.options[app.sel_index].value
+        if handles.selection_tx is not None:
+            handles.selection_tx.put_nowait(
+                SelectionDecision(request_id=req.id, value=value)
+            )
+        app.pending_selection = None
+        app.sel_index = 0
+    elif key == Key.escape:
+        if handles.selection_tx is not None:
+            handles.selection_tx.put_nowait(
+                SelectionDecision(request_id=req.id, value=None)
+            )
+        app.pending_selection = None
+        app.sel_index = 0
+    return False
 
 
 def _handle_permission_key(app: App, handles: TuiHandles, key: Key | str) -> bool:

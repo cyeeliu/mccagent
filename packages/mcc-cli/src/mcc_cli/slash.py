@@ -25,11 +25,17 @@ class SlashResult:
     继续走后续链路（如 /goal set 后把 goal 文本送进 AgentLoop）。
     ``model_update`` 非空 → 主模型被切换，事件源据此发 ModelChanged
     通知前端同步状态栏（仅 main 即刻生效，subagent/summarize 不发）。
+    ``select`` 非空 → 请求用户从候选列表交互式选择一项，选中后事件源
+    以 ``/{select_command} {value}`` 重新分发（如 /resume <id>）；
+    ``select_title`` 为浮层标题。
     """
 
     text: str | None = None
     prompt: str | None = None
     model_update: str | None = None
+    select: list[tuple[str, str]] | None = None
+    select_title: str = ""
+    select_command: str = ""
 
 
 SlashHandler = Callable[[Any, str], "SlashResult | Awaitable[SlashResult]"]
@@ -290,7 +296,7 @@ def _goal_handler(source: Any, args: str) -> SlashResult:
 def _resume(source: Any, args: str) -> SlashResult:
     """/resume：列出历史会话或就地恢复指定会话。
 
-    无参数 → 列出最近 10 条会话供选择；
+    无参数 → 返回交互式选择候选（TUI 弹出浮层，Enter 恢复）；
     有参数 → 加载该 session-id 的历史并写入 agent.history，
     同步更新 source.session_short_id 供状态栏显示。
     """
@@ -301,11 +307,16 @@ def _resume(source: Any, args: str) -> SlashResult:
         metas = list_sessions()
         if not metas:
             return SlashResult(text="没有历史会话")
-        lines = ["最近会话（输入 /resume <id> 恢复）:"]
+        select: list[tuple[str, str]] = []
         for m in metas[:10]:
-            title = f" — {m.title}" if m.title else ""
-            lines.append(f"  {m.id}  {m.turns} turn(s)  ${m.cost_usd:.4f}{title}")
-        return SlashResult(text="\n".join(lines))
+            title = m.title or "(无标题)"
+            label = f"{title}  [{m.id}]  {m.turns}turn  ${m.cost_usd:.4f}"
+            select.append((label, m.id))
+        return SlashResult(
+            select=select,
+            select_title="选择要恢复的会话",
+            select_command="resume",
+        )
 
     try:
         meta, history = load_session(stripped)

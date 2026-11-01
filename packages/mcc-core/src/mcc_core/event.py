@@ -108,6 +108,38 @@ class PermissionDecision:
     feedback: str = ""
 
 
+@dataclass
+class SelectionOption:
+    """一个可选项：label 供浮层展示，value 回传给事件源。"""
+
+    label: str
+    value: str
+
+
+@dataclass
+class SelectionRequest:
+    """请求用户从候选列表中选择一项（AgentLoop → TUI）。
+
+    用于 /resume 等需要交互式选择的 slash 命令：事件源发出请求
+    后挂起，TUI 渲染浮层并回传 SelectionDecision。
+    """
+
+    id: str
+    title: str
+    options: list[SelectionOption]
+
+
+@dataclass
+class SelectionDecision:
+    """用户对选择请求的决策（TUI → AgentLoop 回传）。
+
+    value 为 None 表示用户按 Esc 取消。
+    """
+
+    request_id: str
+    value: str | None
+
+
 AgentEvent = (
     UserEcho
     | TextDelta
@@ -120,4 +152,5 @@ AgentEvent = (
     | GoalStatus
     | Error
     | PermissionRequest
+    | SelectionRequest
 )

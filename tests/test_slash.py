@@ -536,7 +536,7 @@ class TestSkillsCompletion:
 
         provider = make_provider(
             [("help", "帮助"), ("status", "状态")],
-            skill_names=["code-review", "debug-fix"],
+            skill_items=[("code-review", "审查代码"), ("debug-fix", "修复缺陷")],
         )
         inserts = [item.insert for item in provider("/")]
         assert "/help" in inserts
@@ -556,7 +556,9 @@ class TestSkillsCompletion:
     def test_skill_prefix_filter(self, prefix: str, expected: list[str]) -> None:
         from mcc_tui.completions import make_provider
 
-        provider = make_provider([], skill_names=["code-review", "debug-fix"])
+        provider = make_provider(
+            [], skill_items=[("code-review", ""), ("debug-fix", "")]
+        )
         inserts = [item.insert for item in provider(prefix)]
         assert inserts == expected
 
@@ -567,14 +569,23 @@ class TestSkillsCompletion:
         inserts = [item.insert for item in provider("/")]
         assert inserts == ["/help"]
 
-    def test_skill_hint_label(self) -> None:
+    def test_skill_hint_uses_description(self) -> None:
+        """skill 候选的 hint 为 manifest.description 而非硬编码 'skill'。"""
         from mcc_tui.completions import make_provider
 
-        provider = make_provider([], skill_names=["my-skill"])
+        provider = make_provider([], skill_items=[("my-skill", "修复代码缺陷")])
         items = provider("/")
         assert len(items) == 1
-        assert items[0].hint == "skill"
+        assert items[0].hint == "修复代码缺陷"
         assert items[0].label == "/my-skill"
+
+    def test_skill_hint_fallback_when_no_description(self) -> None:
+        """description 为空时 hint 回退为 'skill'。"""
+        from mcc_tui.completions import make_provider
+
+        provider = make_provider([], skill_items=[("my-skill", "")])
+        items = provider("/")
+        assert items[0].hint == "skill"
 
 
 # -- /resume --
@@ -630,14 +641,23 @@ class TestResumeCommand:
         assert result is not None and result.text is not None
         assert "没有历史会话" in result.text
 
-    async def test_list_shows_sessions(self, home: Path) -> None:
+    async def test_list_returns_select_structure(self, home: Path) -> None:
+        """无参 /resume 返回 select 候选供 TUI 弹出选择浮层。"""
         _write_session(home, "abc12345", turns=2, title="my task")
+        _write_session(home, "xyz99999", turns=1)
         registry = build_default_registry()
         result = await registry.dispatch("/resume", _source(slash_registry=registry))
-        assert result is not None and result.text is not None
-        assert "abc12345" in result.text
-        assert "2 turn" in result.text
-        assert "my task" in result.text
+        assert result is not None
+        assert result.select is not None
+        assert result.select_title == "选择要恢复的会话"
+        assert result.select_command == "resume"
+        assert len(result.select) == 2
+        labels = [label for label, _value in result.select]
+        values = [_value for _label, _value in result.select]
+        assert "abc12345" in values
+        assert "xyz99999" in values
+        assert any("my task" in label for label in labels)
+        assert any("2turn" in label for label in labels)
 
     async def test_resume_by_id_loads_history(self, home: Path) -> None:
         _write_session(home, "xyz99999", turns=1)
@@ -673,20 +693,109 @@ class TestResumeCommand:
         assert "resume" in commands
 
 
-class TestEventSourceSkillNames:
-    """AgentEventSource 暴露 skill_names 供 TUI 补全消费。"""
+class TestEventSourceSkillItems:
+    """AgentEventSource 暴露 skill_items 供 TUI 补全消费。"""
 
-    def test_skill_names_defaults_to_empty_list(self) -> None:
+    def test_skill_items_defaults_to_empty_list(self) -> None:
         from mcc_cli.events import AgentEventSource
 
         source = AgentEventSource(agent=SimpleNamespace())
-        assert source.skill_names == []
+        assert source.skill_items == []
 
-    def test_skill_names_stored(self) -> None:
+    def test_skill_items_stored(self) -> None:
         from mcc_cli.events import AgentEventSource
 
         source = AgentEventSource(
             agent=SimpleNamespace(),
-            skill_names=["code-review", "debug-fix"],
+            skill_items=[("code-review", "审查代码"), ("debug-fix", "修复缺陷")],
         )
-        assert source.skill_names == ["code-review", "debug-fix"]
+        assert source.skill_items == [
+            ("code-review", "审查代码"),
+            ("debug-fix", "修复缺陷"),
+        ]
+
+
+# -- /resume 选择浮层事件流 --
+
+
+class TestResumeSelectionFlow:
+    """/resume 无参经事件流：SelectionRequest → 用户选择 → 重新 dispatch。"""
+
+    def _build(self):
+        from mcc_cli.events import AgentEventSource
+
+        llm = MockLlm([single_text_turn("agent reply")])
+        import tempfile
+
+        from mcc_core import ToolContext
+        from mcc_harness import AgentLoopBuilder
+        from mcc_tools import ToolRegistry
+
+        ctx = ToolContext(cwd=Path(tempfile.mkdtemp()), session_id="t", depth=0)
+        agent = (
+            AgentLoopBuilder(llm, ToolRegistry(), ctx)
+            .model("claude-haiku-4-5-20251001")
+            .build()
+        )
+        return AgentEventSource(
+            agent,
+            slash_registry=build_default_registry(),
+            config=Config(),
+        )
+
+    async def test_headless_fallback_lists_text(self, home: Path) -> None:
+        """selection_responses 为 None 时回退为文本列出候选。"""
+        from mcc_core import Notice, TurnEnd
+
+        _write_session(home, "abc12345", turns=2, title="my task")
+        source = self._build()
+        events = [e async for e in source.run("/resume")]
+        notices = [e for e in events if isinstance(e, Notice)]
+        assert any("abc12345" in e.text for e in notices)
+        assert any(isinstance(e, TurnEnd) for e in events)
+
+    async def test_selection_request_then_load(self, home: Path) -> None:
+        """TUI 模式：发 SelectionRequest → 用户 Enter → 重新 dispatch 加载历史。"""
+        import asyncio
+
+        from mcc_core import Notice, SelectionDecision, SelectionRequest, TurnEnd
+
+        _write_session(home, "abc12345", turns=1)
+        source = self._build()
+        sel_queue: asyncio.Queue = asyncio.Queue()
+        source.selection_responses = sel_queue
+        events = []
+        async for ev in source.run("/resume"):
+            events.append(ev)
+            if isinstance(ev, SelectionRequest):
+                sel_queue.put_nowait(
+                    SelectionDecision(request_id=ev.id, value="abc12345")
+                )
+        assert any(isinstance(e, SelectionRequest) for e in events)
+        notices = [e for e in events if isinstance(e, Notice)]
+        assert any("已恢复" in e.text for e in notices)
+        assert any(isinstance(e, TurnEnd) for e in events)
+
+    async def test_selection_cancel_ends_turn(self, home: Path) -> None:
+        """用户 Esc 取消选择 → 直接 TurnEnd，不加载任何会话。"""
+        import asyncio
+
+        from mcc_core import SelectionDecision, SelectionRequest, TurnEnd
+
+        _write_session(home, "abc12345", turns=1)
+        source = self._build()
+        sel_queue: asyncio.Queue = asyncio.Queue()
+        source.selection_responses = sel_queue
+        events = []
+        async for ev in source.run("/resume"):
+            events.append(ev)
+            if isinstance(ev, SelectionRequest):
+                sel_queue.put_nowait(
+                    SelectionDecision(request_id=ev.id, value=None)
+                )
+        assert any(isinstance(e, SelectionRequest) for e in events)
+        assert any(isinstance(e, TurnEnd) for e in events)
+        from mcc_core import Notice
+
+        notices = [e for e in events if isinstance(e, Notice)]
+        assert not any("已恢复" in e.text for e in notices)

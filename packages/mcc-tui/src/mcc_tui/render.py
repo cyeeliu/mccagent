@@ -151,6 +151,18 @@ def _completion_panel(app: App) -> Panel | None:
     return Panel(text, title=" commands ", border_style="magenta")
 
 
+def _selection_panel(app: App) -> Panel | None:
+    """/resume 等选择浮层：候选列表，高亮行反色。"""
+    if app.pending_selection is None:
+        return None
+    req = app.pending_selection
+    text = Text()
+    for idx, opt in enumerate(req.options[:_COMP_MAX_ROWS]):
+        style = "reverse" if idx == app.sel_index else ""
+        text.append(opt.label + "\n", style=style)
+    return Panel(text, title=f" {req.title} ", border_style="magenta")
+
+
 def _status_info(app: App) -> Text:
     """常驻信息行：模型 · 上下文占比（颜色分级）· 缓存命中率 · 成本。"""
     text = Text()
@@ -190,6 +202,8 @@ def _status_hint(app: App) -> Text:
         status.append("●", style="yellow")
         status.append(" thinking… (Esc cancel · Ctrl-C quit)")
         return status
+    if app.pending_selection is not None:
+        return Text(" Enter: 确认 · ↑/↓: 选择 · Esc: 取消 ")
     if app.comp_active:
         return Text(" Tab/Enter: complete · ↑/↓: choose · Esc: close ")
     return Text(" Enter: send · /: commands · ↑/↓: scroll · Ctrl-C: quit ")
@@ -202,10 +216,16 @@ def build_renderable(app: App, console: Console) -> Layout:
 
     comp_panel = _completion_panel(app)
     comp_rows = (len(app.comp_items[:_COMP_MAX_ROWS]) + _PANEL_BORDERS) if comp_panel else 0
+    sel_panel = _selection_panel(app)
+    sel_rows = (
+        len(app.pending_selection.options[:_COMP_MAX_ROWS]) + _PANEL_BORDERS
+        if sel_panel
+        else 0
+    )
 
     available = max(
         5,
-        console.height - _INPUT_ROWS - _STATUS_ROWS - _PANEL_BORDERS - comp_rows,
+        console.height - _INPUT_ROWS - _STATUS_ROWS - _PANEL_BORDERS - comp_rows - sel_rows,
     )
     text_width = max(20, console.width - _PANEL_BORDERS - _TEXT_INDENT)
     app.scroll = min(app.scroll, _max_scroll(all_items, available, text_width))
@@ -255,6 +275,8 @@ def build_renderable(app: App, console: Console) -> Layout:
     rows: list[Layout] = [Layout(msg_panel, name="messages")]
     if comp_panel is not None:
         rows.append(Layout(comp_panel, name="completions", size=comp_rows))
+    if sel_panel is not None:
+        rows.append(Layout(sel_panel, name="selection", size=sel_rows))
     rows.append(Layout(input_panel, name="input", size=_INPUT_ROWS))
     rows.append(Layout(status, name="status", size=_STATUS_ROWS))
 

@@ -168,11 +168,13 @@ async def _run_tui_mode(
     input_queue: asyncio.Queue = asyncio.Queue()
     permission_queue: asyncio.Queue = asyncio.Queue()
     cancel_queue: asyncio.Queue = asyncio.Queue()
+    selection_queue: asyncio.Queue = asyncio.Queue()
     session_short_id = session_id or uuid.uuid4().hex[:8]
 
     agent = getattr(source, "agent", None)
     if agent is not None:
         agent.permission_responses = permission_queue
+    source.selection_responses = selection_queue
 
     for ev in replay or []:
         event_queue.put_nowait(ev)
@@ -288,7 +290,7 @@ async def _run_tui_mode(
     try:
         slash_registry = getattr(source, "slash_registry", None)
         commands = slash_registry.list_commands() if slash_registry is not None else []
-        skill_names = getattr(source, "skill_names", None) or []
+        skill_items = getattr(source, "skill_items", None) or []
         agent_obj = getattr(source, "agent", None)
         model_id = getattr(agent_obj, "model", "") or ""
         handles = TuiHandles(
@@ -297,7 +299,8 @@ async def _run_tui_mode(
             session_short_id=session_short_id,
             permission_tx=permission_queue,
             cancel_tx=cancel_queue,
-            completions=make_provider(commands, skill_names=skill_names),
+            selection_tx=selection_queue,
+            completions=make_provider(commands, skill_items=skill_items),
             model_id=model_id,
             context_limit=context_window(model_id) if model_id else 0,
         )

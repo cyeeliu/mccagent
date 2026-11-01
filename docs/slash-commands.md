@@ -17,7 +17,7 @@
 - **Skills**（`~/.mcc/skills/*/SKILL.md` 与 `./skills/*/SKILL.md` 的 name）
 
 ↑↓ 选择、Tab/Enter 补全高亮项、Esc 关闭浮层。skill 候选 hint
-标记为 `skill` 以区分内置命令。
+显示该 skill 的 `manifest.description`（空描述回退 `skill`）以区分内置命令。
 
 ## 内置命令
 
@@ -28,7 +28,7 @@
 | `/model` | 无参显示当前模型；`/model <id>` 切换主模型（即刻生效并写配置）；`/model <main\|subagent\|summarize> <id>` 指定类型 |
 | `/config` | 无参查看生效配置摘要（凭据脱敏）；`/config get <key>`；`/config set <key> <value>` |
 | `/goal` | 查看/设置/清除 goal loop（`/goal clear` 清除；`/goal <文本>` 设置并把文本作为任务输入） |
-| `/resume` | 无参列出最近 10 条历史会话；`/resume <id>` 就地恢复：加载历史写入 agent.history 并更新状态栏 session id |
+| `/resume` | 无参弹出交互式选择列表（↑↓ 选择、Enter 恢复、Esc 取消），列出最近 10 条历史会话；`/resume <id>` 就地恢复：加载历史写入 agent.history 并更新状态栏 session id |
 
 ### /config set 白名单与生效语义
 
@@ -72,4 +72,5 @@ home settings 无 `llm.api_key`/`base_url`）时进入交互式向导：
 `SlashRegistry.register(name, description, handler)` 可注册
 自定义本地命令。handler 签名 `(source, args) -> SlashResult`
 （可 async），`SlashResult.text` 回显、`SlashResult.prompt`
-替换输入继续走后续链路。
+替换输入继续走后续链路、`SlashResult.select`（配合 `select_title`/`select_command`）
+弹出交互式选择浮层，用户选择后以 `/{select_command} {value}` 重新走 slash 链路。

@@ -14,6 +14,9 @@ from mcc_core import (
     AgentEvent,
     ModelChanged,
     Notice,
+    SelectionDecision,
+    SelectionOption,
+    SelectionRequest,
     TextDelta,
     ToolCallEnd,
     ToolCallStart,
@@ -78,8 +81,9 @@ class AgentEventSource(EventSource):
         config: Any | None = None,
         work_dir: Any | None = None,
         skills_catalog: str | None = None,
-        skill_names: list[str] | None = None,
+        skill_items: list[tuple[str, str]] | None = None,
         session_short_id: str | None = None,
+        selection_responses: asyncio.Queue[SelectionDecision] | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
@@ -92,8 +96,9 @@ class AgentEventSource(EventSource):
         self.config = config
         self.work_dir = work_dir
         self.skills_catalog = skills_catalog
-        self.skill_names = skill_names or []
+        self.skill_items = skill_items or []
         self.session_short_id = session_short_id
+        self.selection_responses = selection_responses
 
     @property
     def goal_controller(self) -> GoalController | None:
@@ -101,18 +106,50 @@ class AgentEventSource(EventSource):
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
         # slash 本地命令：/model /config /help /status /goal ——注册表
-        # 分发，不进 AgentLoop；prompt 非空时替换输入继续（goal set）
+        # 分发，不进 AgentLoop；prompt 非空时替换输入继续（goal set）。
+        # /resume 等命令返回 select 候选时，发 SelectionRequest 等用户
+        # 选择后以 /<command> <value> 重新分发（while 循环）。
         if self.slash_registry is not None:
-            result = await self.slash_registry.dispatch(prompt, self)
-            if result is not None:
+            while True:
+                result = await self.slash_registry.dispatch(prompt, self)
+                if result is None:
+                    break
                 if result.model_update:
                     yield ModelChanged(model_id=result.model_update)
                 if result.text:
                     yield Notice(text=result.text)
+                if result.select is not None:
+                    if self.selection_responses is None:
+                        # headless 回退：文本列出候选后结束
+                        lines = [result.select_title or "选择:"]
+                        for label, _value in result.select:
+                            lines.append(f"  {label}")
+                        yield Notice(text="\n".join(lines))
+                        yield TurnEnd(cost_usd=0.0)
+                        return
+                    from uuid import uuid4
+
+                    req_id = f"sel-{uuid4().hex[:8]}"
+                    options = [
+                        SelectionOption(label=lbl, value=val)
+                        for lbl, val in result.select
+                    ]
+                    yield SelectionRequest(
+                        id=req_id,
+                        title=result.select_title,
+                        options=options,
+                    )
+                    decision = await self.selection_responses.get()
+                    if decision.value is None:
+                        yield TurnEnd(cost_usd=0.0)
+                        return
+                    prompt = f"/{result.select_command} {decision.value}"
+                    continue
                 if result.prompt is None:
                     yield TurnEnd(cost_usd=0.0)
                     return
                 prompt = result.prompt
+                break
         if self._slash_resolver is not None:
             resolved = self._slash_resolver(prompt)
             if resolved is not None:

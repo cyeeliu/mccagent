@@ -37,16 +37,17 @@ def filter_completions(
 
 
 def make_provider(
-    commands: list[tuple[str, str]], skill_names: list[str] | None = None
+    commands: list[tuple[str, str]],
+    skill_items: list[tuple[str, str]] | None = None,
 ) -> CompletionProvider:
-    """把 slash 命令表与 skill 名合成为补全 provider。"""
+    """把 slash 命令表与 skill（name, description）合成为补全 provider。"""
 
     items = [
         CompletionItem(insert=f"/{name}", label=f"/{name}", hint=desc)
         for name, desc in commands
     ] + [
-        CompletionItem(insert=f"/{name}", label=f"/{name}", hint="skill")
-        for name in (skill_names or [])
+        CompletionItem(insert=f"/{name}", label=f"/{name}", hint=desc or "skill")
+        for name, desc in (skill_items or [])
     ]
 
     def _provider(prefix: str) -> list[CompletionItem]:

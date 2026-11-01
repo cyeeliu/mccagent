@@ -250,7 +250,7 @@ def _wire_prompt_system(config, work_dir: Path, registry, no_skills: bool):
 
     slash_resolver = None
     skills_catalog = None
-    skill_names: list[str] = []
+    skill_items: list[tuple[str, str]] = []
     if config.skills.enabled and not no_skills:
         from functools import partial
 
@@ -267,7 +267,10 @@ def _wire_prompt_system(config, work_dir: Path, registry, no_skills: bool):
             work_dir / "skills",
         )
         if skills:
-            skill_names = list(skills.keys())
+            skill_items = [
+                (sk.manifest.name, sk.manifest.description)
+                for sk in skills.values()
+            ]
             catalog = SkillRouter(skills).catalog_for_prompt()
             if catalog:
                 system = f"{system}\n\n{catalog}"
@@ -281,7 +284,7 @@ def _wire_prompt_system(config, work_dir: Path, registry, no_skills: bool):
         if commands:
             slash_resolver = partial(resolve_slash, commands)
 
-    return system, slash_resolver, skills_catalog, skill_names
+    return system, slash_resolver, skills_catalog, skill_items
 
 
 def _wire_subagent_workflow(
@@ -619,7 +622,7 @@ def build_source(
     cron_scheduler = _wire_cron(config, work_dir, registry)
     _wire_mcp(config, registry)
     todo_manager, task_store = _wire_todo_tasks(config, work_dir, registry)
-    system, slash_resolver, skills_catalog, skill_names = _wire_prompt_system(
+    system, slash_resolver, skills_catalog, skill_items = _wire_prompt_system(
         config, work_dir, registry, no_skills
     )
     llm = _wire_llm(config, mock, mock_script, llm_base_url)
@@ -663,6 +666,6 @@ def build_source(
         config=config,
         work_dir=work_dir,
         skills_catalog=skills_catalog,
-        skill_names=skill_names,
+        skill_items=skill_items,
         session_short_id=sid,
     )

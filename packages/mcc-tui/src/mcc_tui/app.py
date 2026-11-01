@@ -17,6 +17,7 @@ from mcc_core import (
     ModelChanged,
     Notice,
     PermissionRequest,
+    SelectionRequest,
     TextDelta,
     ToolCallEnd,
     ToolCallStart,
@@ -82,6 +83,9 @@ class App:
     comp_items: list[CompletionItem] = field(default_factory=list)
     comp_index: int = 0
     comp_dismissed: bool = False
+    # 选择浮层：/resume 等命令返回 select 候选时由 SelectionRequest 激活
+    pending_selection: SelectionRequest | None = None
+    sel_index: int = 0
 
     @property
     def comp_active(self) -> bool:
@@ -224,3 +228,6 @@ class App:
                 self.pending_permission = ev
             else:
                 self.permission_queue.append(ev)
+        elif isinstance(ev, SelectionRequest):
+            self.pending_selection = ev
+            self.sel_index = 0

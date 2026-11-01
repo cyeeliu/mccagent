@@ -59,11 +59,13 @@ def test_make_provider_commands():
 
 
 def test_make_provider_with_skills():
-    provider = make_provider([("help", "show")], skill_names=["review", "test"])
+    provider = make_provider(
+        [("help", "show")], skill_items=[("review", "code review"), ("test", "run tests")]
+    )
     result = provider("/")
     assert {r.insert for r in result} == {"/help", "/review", "/test"}
     skill = next(r for r in result if r.insert == "/review")
-    assert skill.hint == "skill"
+    assert skill.hint == "code review"
 
 
 def test_make_provider_empty():
