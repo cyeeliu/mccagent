@@ -227,10 +227,19 @@ async def _run_tui_mode(
             )
             if cancel_task in done and not turn_task.done():
                 turn_task.cancel()
+                # 先清空中断前已入队的事件，再等 turn 结束：await
+                # 会让出控制权，若不先 drain，TUI 会在等待期间
+                # 渲染残留的 TextDelta chunk。cancel 后 run_turn 不
+                # 再向 event_queue put 新事件，drain 可清掉全部积压。
+                while True:
+                    try:
+                        event_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
                 with contextlib.suppress(asyncio.CancelledError):
                     await turn_task
-                await event_queue.put(NoticeEvent(text="⏹ 已中断"))
-                await event_queue.put(TurnEndEvent(cost_usd=0.0))
+                event_queue.put_nowait(NoticeEvent(text="⏹ 已中断"))
+                event_queue.put_nowait(TurnEndEvent(cost_usd=0.0))
             else:
                 if cancel_task not in done:
                     cancel_task.cancel()

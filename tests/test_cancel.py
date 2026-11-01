@@ -148,6 +148,35 @@ async def test_normal_turn_completes_without_cancel(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_cancel_drains_pending_streaming_events(tmp_path: Path):
+    """cancel 后已入队但未消费的流式事件应被清空，不残留闪现。"""
+    import mcc_cli
+    from mcc_core import TextDelta
+
+    class BurstThenBlockSource:
+        async def run(self, prompt: str):
+            yield UserEcho(text=prompt)
+            for i in range(20):
+                yield TextDelta(text=f"chunk{i} ")
+            await asyncio.sleep(10)
+            yield TurnEnd(cost_usd=0.0)
+
+    source = BurstThenBlockSource()
+    captured: list = []
+    install, restore = _patch_run_tui(captured, send_cancel=True)
+    install()
+    try:
+        await mcc_cli._run_tui_mode(source, work_dir=tmp_path)
+    finally:
+        restore()
+
+    text_deltas = [e for e in captured if isinstance(e, TextDelta)]
+    assert text_deltas == [], f"残留流式事件未清空: {text_deltas}"
+    notices = [e for e in captured if isinstance(e, Notice)]
+    assert any("已中断" in n.text for n in notices)
+
+
+@pytest.mark.asyncio
 async def test_stale_cancel_signal_does_not_break_next_turn(tmp_path: Path):
     """残留取消信号不应误中断下一个正常 turn。"""
     import mcc_cli
