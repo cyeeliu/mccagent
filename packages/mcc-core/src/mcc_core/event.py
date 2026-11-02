@@ -73,6 +73,17 @@ class ModelChanged:
 
 
 @dataclass
+class SessionChanged:
+    """会话切换事件（/resume 恢复历史会话时触发）。
+
+    TUI 据此更新状态栏 session id；agent.history 已由 slash handler
+    即刻改写，本事件仅用于通知前端同步展示。
+    """
+
+    session_id: str
+
+
+@dataclass
 class GoalStatus:
     """Goal Loop 状态变更事件。
 
@@ -149,6 +160,7 @@ AgentEvent = (
     | TurnEnd
     | Notice
     | ModelChanged
+    | SessionChanged
     | GoalStatus
     | Error
     | PermissionRequest

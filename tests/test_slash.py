@@ -649,7 +649,7 @@ class TestResumeCommand:
         result = await registry.dispatch("/resume", _source(slash_registry=registry))
         assert result is not None
         assert result.select is not None
-        assert result.select_title == "选择要恢复的会话"
+        assert result.select_title.startswith("选择要恢复的会话")
         assert result.select_command == "resume"
         assert len(result.select) == 2
         labels = [label for label, _value in result.select]
@@ -691,6 +691,44 @@ class TestResumeCommand:
         registry = build_default_registry()
         commands = dict(registry.list_commands())
         assert "resume" in commands
+
+    async def test_list_marks_current_session(self, home: Path) -> None:
+        """无参 /resume 在 label 中用 ● 标记当前会话并排到首位。"""
+        _write_session(home, "abc12345", turns=2, title="current")
+        _write_session(home, "xyz99999", turns=1, title="other")
+        registry = build_default_registry()
+        source = _source(slash_registry=registry, session_short_id="abc12345")
+        result = await registry.dispatch("/resume", source)
+        assert result is not None and result.select is not None
+        labels = [label for label, _ in result.select]
+        assert any(label.startswith("●") and "current" in label for label in labels)
+        assert any(label.startswith("  ") and "other" in label for label in labels)
+        # 当前会话应排在第一位
+        assert "current" in labels[0]
+
+    async def test_resume_by_id_generates_replay(self, home: Path) -> None:
+        """/resume <id> 在 SlashResult.replay 中携带历史重放事件。"""
+        from mcc_core import TextDelta, TurnEnd, UserEcho
+
+        _write_session(home, "xyz99999", turns=1)
+        registry = build_default_registry()
+        source = _source(slash_registry=registry)
+        result = await registry.dispatch("/resume xyz99999", source)
+        assert result is not None
+        assert result.replay is not None
+        assert len(result.replay) > 0
+        assert any(isinstance(e, UserEcho) for e in result.replay)
+        assert any(isinstance(e, TextDelta) for e in result.replay)
+        assert isinstance(result.replay[-1], TurnEnd)
+
+    async def test_resume_by_id_sets_session_update(self, home: Path) -> None:
+        """/resume <id> 在 SlashResult.session_update 中携带新会话 id。"""
+        _write_session(home, "xyz99999", turns=1)
+        registry = build_default_registry()
+        source = _source(slash_registry=registry)
+        result = await registry.dispatch("/resume xyz99999", source)
+        assert result is not None
+        assert result.session_update == "xyz99999"
 
 
 class TestEventSourceSkillItems:
@@ -799,3 +837,32 @@ class TestResumeSelectionFlow:
 
         notices = [e for e in events if isinstance(e, Notice)]
         assert not any("已恢复" in e.text for e in notices)
+
+    async def test_selection_yields_replay_and_session_changed(self, home: Path) -> None:
+        """TUI 模式：用户选中 → 事件流包含 replay 事件与 SessionChanged。"""
+        import asyncio
+
+        from mcc_core import (
+            SelectionDecision,
+            SelectionRequest,
+            SessionChanged,
+            TextDelta,
+            UserEcho,
+        )
+
+        _write_session(home, "abc12345", turns=1)
+        source = self._build()
+        sel_queue: asyncio.Queue = asyncio.Queue()
+        source.selection_responses = sel_queue
+        events = []
+        async for ev in source.run("/resume"):
+            events.append(ev)
+            if isinstance(ev, SelectionRequest):
+                sel_queue.put_nowait(
+                    SelectionDecision(request_id=ev.id, value="abc12345")
+                )
+        assert any(isinstance(e, SessionChanged) and e.session_id == "abc12345"
+                   for e in events)
+        assert any(isinstance(e, UserEcho) for e in events)
+        assert any(isinstance(e, TextDelta) for e in events)
+        assert source.session_short_id == "abc12345"

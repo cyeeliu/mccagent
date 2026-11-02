@@ -18,6 +18,7 @@ from mcc_core import (
     Notice,
     PermissionRequest,
     SelectionRequest,
+    SessionChanged,
     TextDelta,
     ToolCallEnd,
     ToolCallStart,
@@ -217,6 +218,8 @@ class App:
             self.turn_out = 0
         elif isinstance(ev, ModelChanged):
             self.model_id = ev.model_id
+        elif isinstance(ev, SessionChanged):
+            self.session_short_id = ev.session_id
         elif isinstance(ev, Notice):
             self.push(RenderItem(kind="notice", text=ev.text))
         elif isinstance(ev, Error):

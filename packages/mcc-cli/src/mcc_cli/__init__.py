@@ -16,7 +16,7 @@ from pathlib import Path
 
 import click
 
-from mcc_cli.events import EchoEventSource, EventSource
+from mcc_cli.events import EchoEventSource, EventSource, history_events
 from mcc_cli.headless import run_headless
 
 # 装配层已拆至 mcc_cli.wiring（各 _wire_* 子系统构造 + build_source
@@ -80,43 +80,8 @@ def _build_source(
     )
 
 def _history_events(history: list, cost_usd: float = 0.0) -> list:
-    """把恢复的消息历史转换为 TUI 重放事件序列。
-
-    历史只传给 AgentLoop 时 LLM 具备上下文，但渲染层从未
-    收到事件，界面会是空白；此处按 user/assistant/tool 消息
-    逐条还原轨迹，末尾以 TurnEnd 收尾（携带会话累计成本）。
-    """
-    from mcc_core import Role, TextBlock, ToolResultBlock, ToolUseBlock
-    from mcc_core.event import TextDelta, ToolCallEnd, ToolCallStart, TurnEnd, UserEcho
-
-    events = []
-    for m in history:
-        if m.role == Role.user:
-            for b in m.content:
-                if isinstance(b, TextBlock) and b.text.strip():
-                    events.append(UserEcho(text=b.text))
-        elif m.role == Role.assistant:
-            for b in m.content:
-                if isinstance(b, TextBlock) and b.text.strip():
-                    events.append(TextDelta(text=b.text))
-                elif isinstance(b, ToolUseBlock):
-                    events.append(ToolCallStart(
-                        id=b.id, name=b.name,
-                        args_preview=json.dumps(b.input, ensure_ascii=False)
-                        if b.input else "",
-                    ))
-        elif m.role == Role.tool:
-            for b in m.content:
-                if isinstance(b, ToolResultBlock):
-                    events.append(
-                        ToolCallEnd(
-                            id=b.tool_use_id,
-                            output=b.content[:500],
-                            is_error=b.is_error,
-                        )
-                    )
-    events.append(TurnEnd(cost_usd=cost_usd))
-    return events
+    """向后兼容包装：实际逻辑在 mcc_cli.events.history_events。"""
+    return history_events(history, cost_usd=cost_usd)
 
 
 def _dump_metrics_snapshot(sink, work_dir: Path | None) -> None:
@@ -169,7 +134,11 @@ async def _run_tui_mode(
     permission_queue: asyncio.Queue = asyncio.Queue()
     cancel_queue: asyncio.Queue = asyncio.Queue()
     selection_queue: asyncio.Queue = asyncio.Queue()
-    session_short_id = session_id or uuid.uuid4().hex[:8]
+    session_short_id = (
+        session_id
+        or getattr(source, "session_short_id", "")
+        or uuid.uuid4().hex[:8]
+    )
 
     agent = getattr(source, "agent", None)
     if agent is not None:

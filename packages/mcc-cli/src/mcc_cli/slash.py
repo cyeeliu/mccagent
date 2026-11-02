@@ -28,6 +28,10 @@ class SlashResult:
     ``select`` 非空 → 请求用户从候选列表交互式选择一项，选中后事件源
     以 ``/{select_command} {value}`` 重新分发（如 /resume <id>）；
     ``select_title`` 为浮层标题。
+    ``replay`` 非空 → 历史重放事件列表，事件源逐个 yield 让前端
+    渲染历史轨迹（/resume 恢复会话时使用）。
+    ``session_update`` 非空 → 会话 id 被切换，事件源据此发 SessionChanged
+    通知前端同步状态栏。
     """
 
     text: str | None = None
@@ -36,6 +40,8 @@ class SlashResult:
     select: list[tuple[str, str]] | None = None
     select_title: str = ""
     select_command: str = ""
+    replay: list | None = None
+    session_update: str | None = None
 
 
 SlashHandler = Callable[[Any, str], "SlashResult | Awaitable[SlashResult]"]
@@ -296,9 +302,11 @@ def _goal_handler(source: Any, args: str) -> SlashResult:
 def _resume(source: Any, args: str) -> SlashResult:
     """/resume：列出历史会话或就地恢复指定会话。
 
-    无参数 → 返回交互式选择候选（TUI 弹出浮层，Enter 恢复）；
+    无参数 → 返回交互式选择候选（TUI 弹出浮层，Enter 恢复），
+    当前会话用 ● 标记并排到列表首位；
     有参数 → 加载该 session-id 的历史并写入 agent.history，
-    同步更新 source.session_short_id 供状态栏显示。
+    同步更新 source.session_short_id 供状态栏显示，
+    生成 replay 事件序列供前端渲染历史轨迹。
     """
     from mcc_session import SessionNotFoundError, list_sessions, load_session
 
@@ -307,14 +315,21 @@ def _resume(source: Any, args: str) -> SlashResult:
         metas = list_sessions()
         if not metas:
             return SlashResult(text="没有历史会话")
+        current_sid = getattr(source, "session_short_id", "")
+        sorted_metas = sorted(metas[:10], key=lambda m: m.id != current_sid)
         select: list[tuple[str, str]] = []
-        for m in metas[:10]:
+        for m in sorted_metas:
             title = m.title or "(无标题)"
-            label = f"{title}  [{m.id}]  {m.turns}turn  ${m.cost_usd:.4f}"
+            is_current = m.id == current_sid
+            marker = "● " if is_current else "  "
+            suffix = "  (当前)" if is_current else ""
+            label = f"{marker}{title}  [{m.id}]  {m.turns}turn  ${m.cost_usd:.4f}{suffix}"
             select.append((label, m.id))
         return SlashResult(
             select=select,
-            select_title="选择要恢复的会话",
+            select_title=f"选择要恢复的会话（● 标记当前会话 {current_sid}）"
+            if current_sid
+            else "选择要恢复的会话",
             select_command="resume",
         )
 
@@ -329,9 +344,15 @@ def _resume(source: Any, args: str) -> SlashResult:
     agent.history = history
     source.session_short_id = meta.id
     title = f" — {meta.title}" if meta.title else ""
+
+    from mcc_cli.events import history_events
+
+    replay = history_events(history, cost_usd=meta.cost_usd)
     return SlashResult(
         text=f"已恢复会话 {meta.id}（{meta.turns} turn(s), "
-        f"${meta.cost_usd:.4f}）{title}"
+        f"${meta.cost_usd:.4f}）{title}",
+        replay=replay,
+        session_update=meta.id,
     )
 
 

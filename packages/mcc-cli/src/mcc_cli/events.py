@@ -7,6 +7,7 @@ EventSource 协议定义 Agent 事件流的统一接口，
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol, runtime_checkable
 
@@ -17,6 +18,7 @@ from mcc_core import (
     SelectionDecision,
     SelectionOption,
     SelectionRequest,
+    SessionChanged,
     TextDelta,
     ToolCallEnd,
     ToolCallStart,
@@ -31,6 +33,45 @@ class EventSource(Protocol):
     """事件源协议：接收用户输入，产出 AgentEvent 事件流。"""
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]: ...
+
+
+def history_events(history: list, cost_usd: float = 0.0) -> list:
+    """把恢复的消息历史转换为 TUI 重放事件序列。
+
+    历史只传给 AgentLoop 时 LLM 具备上下文，但渲染层从未
+    收到事件，界面会是空白；此处按 user/assistant/tool 消息
+    逐条还原轨迹，末尾以 TurnEnd 收尾（携带会话累计成本）。
+    """
+    from mcc_core import Role, TextBlock, ToolResultBlock, ToolUseBlock
+
+    events = []
+    for m in history:
+        if m.role == Role.user:
+            for b in m.content:
+                if isinstance(b, TextBlock) and b.text.strip():
+                    events.append(UserEcho(text=b.text))
+        elif m.role == Role.assistant:
+            for b in m.content:
+                if isinstance(b, TextBlock) and b.text.strip():
+                    events.append(TextDelta(text=b.text))
+                elif isinstance(b, ToolUseBlock):
+                    events.append(ToolCallStart(
+                        id=b.id, name=b.name,
+                        args_preview=json.dumps(b.input, ensure_ascii=False)
+                        if b.input else "",
+                    ))
+        elif m.role == Role.tool:
+            for b in m.content:
+                if isinstance(b, ToolResultBlock):
+                    events.append(
+                        ToolCallEnd(
+                            id=b.tool_use_id,
+                            output=b.content[:500],
+                            is_error=b.is_error,
+                        )
+                    )
+    events.append(TurnEnd(cost_usd=cost_usd))
+    return events
 
 
 class EchoEventSource:
@@ -116,8 +157,14 @@ class AgentEventSource(EventSource):
                     break
                 if result.model_update:
                     yield ModelChanged(model_id=result.model_update)
+                if result.session_update:
+                    self.session_short_id = result.session_update
+                    yield SessionChanged(session_id=result.session_update)
                 if result.text:
                     yield Notice(text=result.text)
+                if result.replay:
+                    for ev in result.replay:
+                        yield ev
                 if result.select is not None:
                     if self.selection_responses is None:
                         # headless 回退：文本列出候选后结束
