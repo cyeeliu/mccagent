@@ -69,6 +69,14 @@
 
 **修复**：`_run_tui_mode` 接受 `session_id` 参数，resume 时传入 `meta.id`；新建会话仍随机生成。
 
+### 方向键被误判为 ESC 导致补全浮层无法导航
+
+**现象**：TUI 中输入 `/` 弹出补全浮层后，按上下方向键无法切换高亮项，浮层被关闭。
+
+**根因**：`KeyReader._read_escape` 用 `select.select([self._stream], ...)` 检查是否有后续字节，但 `self._stream`（`sys.stdin`）是带缓冲的 `TextIOWrapper`，底层 `BufferedReader` 一次性从 fd 读取所有字节到内部缓冲区。`_read_char` 读到 `\x1b` 后，escape sequence 后续字节（如 `[A`）留在 Python 缓冲层而非 fd 层面，`select` 检查 fd 时误判为无数据，返回 `""` → `_decode_escape("")` 返回 `Key.escape`，方向键被当作纯 ESC 处理。
+
+**修复**：`_read_char` 和 `_read_escape` 改用 `os.read(self._fd, 1)` 直接从 fd 读取字节，绕过 Python 缓冲层，使 `select` 和 `read` 在同一 fd 层面操作。新增 `tests/test_keys_pty.py` 用 PTY 模拟真实终端字节流覆盖方向键、Home/End/PageUp/PageDown 及纯 ESC 等场景。
+
 ### click `nargs=-1` 参数收不到未知选项
 
 **现象**：`mcc sessions purge --older-than 30d` 报"no such option"，因为 `args` 是 `nargs=-1` 的可变参数，click 不允许在可变参数后跟未注册的选项。

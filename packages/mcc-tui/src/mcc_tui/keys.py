@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import select
 import sys
 import termios
@@ -78,22 +79,27 @@ class KeyReader:
         return ch, None
 
     def _read_char(self) -> str:
-        return self._stream.read(1)
+        # 直接从 fd 读取，绕过 TextIO 缓冲层，确保 select 和 read
+        # 在同一层面操作，避免缓冲层吞掉 escape sequence 后续字节。
+        ch = os.read(self._fd, 1)
+        return ch.decode("latin-1") if ch else ""
 
     def _read_escape(self) -> str:
         # 纯 ESC 键无后续字符；方向键等 escape sequence 在几毫秒内
         # 连续到达。短超时内无可读字符则判定为单独的 ESC，避免
         # read(1) 阻塞导致 ESC 按键要凑满 4 次循环才返回。
-        rlist, _, _ = select.select([self._stream], [], [], 0.05)
+        # 用 fd 而非 stream 做 select，与 os.read 同层操作。
+        rlist, _, _ = select.select([self._fd], [], [], 0.05)
         if not rlist:
             return ""
         seq = ""
         for _ in range(4):
-            ch = self._stream.read(1)
-            if ch == "":
+            ch = os.read(self._fd, 1)
+            if not ch:
                 break
-            seq += ch
-            if ch.isalpha() or ch == "~":
+            c = ch.decode("latin-1")
+            seq += c
+            if c.isalpha() or c == "~":
                 break
         return seq
 
