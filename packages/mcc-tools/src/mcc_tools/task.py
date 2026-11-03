@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import secrets
+import time
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -75,6 +77,7 @@ class Task:
     error: str | None = None
     result_ref: str | None = None
     version: int = 0
+    lease_expires_at: float | None = None
 
 
 class TaskError(ValueError):
@@ -149,6 +152,7 @@ class TaskStore:
         data.setdefault("error", None)
         data.setdefault("result_ref", None)
         data.setdefault("version", 0)
+        data.setdefault("lease_expires_at", None)
         task = Task(**data)
         if task.id != task_id:
             raise TaskError(f"task file ID mismatch: {task_id}")
@@ -178,10 +182,16 @@ class TaskStore:
         return task
 
     def _check_owner(self, task: Task, owner: str) -> None:
-        if task.owner != owner:
+        actual = task.owner_agent_id or task.owner
+        if actual != owner:
             raise TaskError(
-                f"task {task.id} owned by {task.owner}, not {owner}"
+                f"task {task.id} owned by {actual}, not {owner}"
             )
+
+    def _is_lease_expired(self, task: Task) -> bool:
+        if task.lease_expires_at is None:
+            return False
+        return time.time() > task.lease_expires_at
 
     def list(self) -> list[Task]:
         if not self.directory.exists():
@@ -246,21 +256,62 @@ class TaskStore:
                 return False
         return True
 
-    def claim(self, task_id: str, owner: str = "agent") -> Task:
+    def claim(
+        self,
+        task_id: str,
+        owner: str,
+        *,
+        lease_seconds: float = 300.0,
+    ) -> Task:
+        path = self._path(task_id)
+        if not path.is_file():
+            raise TaskError(f"task not found: {task_id}")
+        with path.open("r+") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            task = self.load(task_id)
+            if task.status == TaskStatus.IN_PROGRESS.value:
+                if not self._is_lease_expired(task):
+                    raise TaskError(
+                        f"task {task_id} is in_progress, cannot claim"
+                    )
+            elif task.status != TaskStatus.PENDING.value:
+                raise TaskError(
+                    f"task {task_id} is {task.status}, cannot claim"
+                )
+            incomplete = [
+                d for d in task.blockedBy
+                if not self.exists(d) or self.load(d).status != TaskStatus.COMPLETED.value
+            ]
+            if incomplete:
+                raise TaskError(f"blocked by: {incomplete}")
+            task.owner = owner
+            task.owner_agent_id = owner
+            task.lease_expires_at = time.time() + lease_seconds
+            if task.status == TaskStatus.IN_PROGRESS.value:
+                task.version += 1
+                self.save(task)
+            else:
+                task = self._transition(task, TaskStatus.IN_PROGRESS)
+            return task
+
+    def renew_lease(
+        self,
+        task_id: str,
+        owner: str,
+        *,
+        lease_seconds: float = 300.0,
+    ) -> Task:
         task = self.load(task_id)
-        if task.status != TaskStatus.PENDING.value:
-            raise TaskError(f"task {task_id} is {task.status}, cannot claim")
-        incomplete = [
-            d for d in task.blockedBy
-            if not self.exists(d) or self.load(d).status != TaskStatus.COMPLETED.value
-        ]
-        if incomplete:
-            raise TaskError(f"blocked by: {incomplete}")
-        task.owner = owner
-        task = self._transition(task, TaskStatus.IN_PROGRESS)
+        if task.status != TaskStatus.IN_PROGRESS.value:
+            raise TaskError(
+                f"task {task_id} is {task.status}, cannot renew lease"
+            )
+        self._check_owner(task, owner)
+        task.lease_expires_at = time.time() + lease_seconds
+        self.save(task)
         return task
 
-    def complete(self, task_id: str, owner: str = "agent") -> Task:
+    def complete(self, task_id: str, owner: str) -> Task:
         task = self.load(task_id)
         if task.status != TaskStatus.IN_PROGRESS.value:
             raise TaskError(f"task {task_id} is {task.status}, cannot complete")
@@ -268,7 +319,7 @@ class TaskStore:
         return self._transition(task, TaskStatus.COMPLETED)
 
     def fail(
-        self, task_id: str, owner: str = "agent", error: str = ""
+        self, task_id: str, owner: str, error: str = ""
     ) -> Task:
         task = self.load(task_id)
         if task.status != TaskStatus.IN_PROGRESS.value:
@@ -278,7 +329,7 @@ class TaskStore:
             task, TaskStatus.FAILED, error=error or "task failed"
         )
 
-    def timeout(self, task_id: str, owner: str = "agent") -> Task:
+    def timeout(self, task_id: str, owner: str) -> Task:
         task = self.load(task_id)
         if task.status != TaskStatus.IN_PROGRESS.value:
             raise TaskError(f"task {task_id} is {task.status}, cannot timeout")
@@ -294,7 +345,7 @@ class TaskStore:
         reason: str = "",
     ) -> Task:
         task = self.load(task_id)
-        if owner is not None and task.owner is not None:
+        if owner is not None and task.owner_agent_id is not None:
             self._check_owner(task, owner)
         return self._transition(
             task, TaskStatus.CANCELLED, error=reason or "task cancelled"
@@ -315,6 +366,7 @@ class TaskStore:
         task.owner = None
         task.owner_agent_id = None
         task.error = None
+        task.lease_expires_at = None
         return self._transition(task, TaskStatus.PENDING)
 
 
@@ -471,13 +523,15 @@ class ClaimTaskTool(_TaskToolBase):
             "required": ["task_id"],
             "properties": {
                 "task_id": {"type": "string", "pattern": _TASK_ID_PATTERN},
+                "agent_id": {"type": "string"},
             },
         }
 
     async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         task_id = input.get("task_id", "")
+        agent_id = input.get("agent_id") or ctx.session_id
         try:
-            task = self._store.claim(task_id, owner="agent")
+            task = self._store.claim(task_id, owner=agent_id)
         except TaskError as e:
             return ToolOutput.err(str(e))
         return ToolOutput.ok(f"Claimed {task.id} ({task.subject})")
@@ -498,13 +552,15 @@ class CompleteTaskTool(_TaskToolBase):
             "required": ["task_id"],
             "properties": {
                 "task_id": {"type": "string", "pattern": _TASK_ID_PATTERN},
+                "agent_id": {"type": "string"},
             },
         }
 
     async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         task_id = input.get("task_id", "")
+        agent_id = input.get("agent_id") or ctx.session_id
         try:
-            task = self._store.complete(task_id, owner="agent")
+            task = self._store.complete(task_id, owner=agent_id)
         except TaskError as e:
             return ToolOutput.err(str(e))
         unblocked = [

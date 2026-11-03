@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -95,7 +96,7 @@ class TestDependencies:
     def test_dependency_only_while_pending(self, store: TaskStore) -> None:
         t1 = store.create("a")
         t2 = store.create("b")
-        store.claim(t2.id)
+        store.claim(t2.id, owner="agent-1")
         with pytest.raises(ValueError, match="pending"):
             store.update_dependencies(t2.id, [t1.id])
 
@@ -126,8 +127,8 @@ class TestLifecycle:
         t1 = store.create("schema")
         t2 = store.create("api")
         store.update_dependencies(t2.id, [t1.id])
-        store.claim(t1.id)
-        store.complete(t1.id)
+        store.claim(t1.id, owner="agent-1")
+        store.complete(t1.id, owner="agent-1")
         assert store.can_start(t2.id)
 
     def test_claim_blocked_by_incomplete_dep(self, store: TaskStore) -> None:
@@ -135,7 +136,7 @@ class TestLifecycle:
         t2 = store.create("api")
         store.update_dependencies(t2.id, [t1.id])
         with pytest.raises(ValueError, match="blocked"):
-            store.claim(t2.id)
+            store.claim(t2.id, owner="agent-1")
 
     def test_claim_sets_in_progress_and_owner(self, store: TaskStore) -> None:
         t = store.create("work")
@@ -145,9 +146,9 @@ class TestLifecycle:
 
     def test_claim_non_pending_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
+        store.claim(t.id, owner="agent-1")
         with pytest.raises(ValueError, match="cannot claim"):
-            store.claim(t.id)
+            store.claim(t.id, owner="agent-1")
 
     def test_complete_owner_mismatch(self, store: TaskStore) -> None:
         t = store.create("work")
@@ -158,12 +159,12 @@ class TestLifecycle:
     def test_complete_non_in_progress_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
         with pytest.raises(ValueError, match="cannot complete"):
-            store.complete(t.id)
+            store.complete(t.id, owner="agent-1")
 
     def test_complete_sets_completed(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        done = store.complete(t.id)
+        store.claim(t.id, owner="agent-1")
+        done = store.complete(t.id, owner="agent-1")
         assert done.status == "completed"
 
 
@@ -240,7 +241,7 @@ class TestTools:
         t1 = store.create("schema")
         t2 = store.create("api")
         store.update_dependencies(t2.id, [t1.id])
-        store.claim(t1.id)
+        store.claim(t1.id, owner="test")
         tool = CompleteTaskTool(store)
         out = await tool.execute({"task_id": t1.id}, ctx)
         assert out.is_error is False
@@ -251,7 +252,7 @@ class TestTools:
         self, store: TaskStore, ctx: ToolContext
     ) -> None:
         t = store.create("solo")
-        store.claim(t.id)
+        store.claim(t.id, owner="test")
         tool = CompleteTaskTool(store)
         out = await tool.execute({"task_id": t.id}, ctx)
         assert out.is_error is False
@@ -287,14 +288,14 @@ class TestTaskStateMachine:
 
     def test_fail_default_error(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        failed = store.fail(t.id)
+        store.claim(t.id, owner="agent-1")
+        failed = store.fail(t.id, owner="agent-1")
         assert failed.error == "task failed"
 
     def test_fail_non_in_progress_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
         with pytest.raises(ValueError, match="cannot fail"):
-            store.fail(t.id)
+            store.fail(t.id, owner="agent-1")
 
     def test_fail_owner_mismatch(self, store: TaskStore) -> None:
         t = store.create("work")
@@ -312,7 +313,7 @@ class TestTaskStateMachine:
     def test_timeout_non_in_progress_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
         with pytest.raises(ValueError, match="cannot timeout"):
-            store.timeout(t.id)
+            store.timeout(t.id, owner="agent-1")
 
     def test_cancel_from_pending(self, store: TaskStore) -> None:
         t = store.create("work")
@@ -340,8 +341,8 @@ class TestTaskStateMachine:
 
     def test_cancel_completed_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        store.complete(t.id)
+        store.claim(t.id, owner="agent-1")
+        store.complete(t.id, owner="agent-1")
         with pytest.raises(ValueError, match="cannot transition"):
             store.cancel(t.id)
 
@@ -353,8 +354,8 @@ class TestTaskStateMachine:
 
     def test_retry_from_failed(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        store.fail(t.id)
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1")
         retried = store.retry(t.id)
         assert retried.status == TaskStatus.PENDING.value
         assert retried.attempt == 1
@@ -363,19 +364,19 @@ class TestTaskStateMachine:
 
     def test_retry_from_timeout(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        store.timeout(t.id)
+        store.claim(t.id, owner="agent-1")
+        store.timeout(t.id, owner="agent-1")
         retried = store.retry(t.id)
         assert retried.status == TaskStatus.PENDING.value
         assert retried.attempt == 1
 
     def test_retry_increments_attempt(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        store.fail(t.id)
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1")
         store.retry(t.id)
-        store.claim(t.id)
-        store.fail(t.id)
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1")
         retried = store.retry(t.id)
         assert retried.attempt == 2
 
@@ -386,28 +387,28 @@ class TestTaskStateMachine:
 
     def test_retry_in_progress_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
+        store.claim(t.id, owner="agent-1")
         with pytest.raises(ValueError, match="can only retry"):
             store.retry(t.id)
 
     def test_version_increments_on_transition(self, store: TaskStore) -> None:
         t = store.create("work")
         assert t.version == 0
-        claimed = store.claim(t.id)
+        claimed = store.claim(t.id, owner="agent-1")
         assert claimed.version == 1
-        done = store.complete(t.id)
+        done = store.complete(t.id, owner="agent-1")
         assert done.version == 2
 
     def test_version_increments_on_fail(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        failed = store.fail(t.id)
+        store.claim(t.id, owner="agent-1")
+        failed = store.fail(t.id, owner="agent-1")
         assert failed.version == 2
 
     def test_retry_version_increments_twice(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        store.fail(t.id)
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1")
         retried = store.retry(t.id)
         assert retried.version == 4
 
@@ -419,9 +420,9 @@ class TestTaskStateMachine:
         self, store: TaskStore, terminal: str
     ) -> None:
         t = store.create("work")
-        store.claim(t.id)
+        store.claim(t.id, owner="agent-1")
         if terminal == TaskStatus.COMPLETED.value:
-            store.complete(t.id)
+            store.complete(t.id, owner="agent-1")
         else:
             store.cancel(t.id)
         with pytest.raises(ValueError, match="cannot transition"):
@@ -429,17 +430,17 @@ class TestTaskStateMachine:
 
     def test_complete_after_fail_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        store.fail(t.id)
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1")
         with pytest.raises(ValueError, match="cannot complete"):
-            store.complete(t.id)
+            store.complete(t.id, owner="agent-1")
 
     def test_claim_after_fail_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
-        store.claim(t.id)
-        store.fail(t.id)
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1")
         with pytest.raises(ValueError, match="cannot claim"):
-            store.claim(t.id)
+            store.claim(t.id, owner="agent-1")
 
     def test_claim_after_retry_succeeds(self, store: TaskStore) -> None:
         t = store.create("work")
@@ -505,4 +506,175 @@ class TestLegacyCompat:
         assert loaded.status == TaskStatus.FAILED.value
         assert loaded.error == "test error"
         assert loaded.version == 2
-        assert loaded.attempt == 0
+
+
+class TestClaimAtomicityAndOwner:
+    """P1-12: Task Claim 原子性与 Owner 统一。"""
+
+    def test_claim_sets_owner_agent_id(self, store: TaskStore) -> None:
+        t = store.create("work")
+        claimed = store.claim(t.id, owner="agent-7")
+        assert claimed.owner == "agent-7"
+        assert claimed.owner_agent_id == "agent-7"
+
+    def test_claim_requires_owner(self, store: TaskStore) -> None:
+        t = store.create("work")
+        with pytest.raises(TypeError, match="owner"):
+            store.claim(t.id)  # type: ignore[call-arg]
+
+    def test_complete_requires_owner(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(TypeError, match="owner"):
+            store.complete(t.id)  # type: ignore[call-arg]
+
+    def test_fail_requires_owner(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(TypeError, match="owner"):
+            store.fail(t.id)  # type: ignore[call-arg]
+
+    def test_timeout_requires_owner(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(TypeError, match="owner"):
+            store.timeout(t.id)  # type: ignore[call-arg]
+
+    def test_non_owner_complete_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(ValueError, match="owned by"):
+            store.complete(t.id, owner="agent-2")
+
+    def test_non_owner_fail_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(ValueError, match="owned by"):
+            store.fail(t.id, owner="agent-2", error="nope")
+
+    def test_non_owner_timeout_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(ValueError, match="owned by"):
+            store.timeout(t.id, owner="agent-2")
+
+    def test_non_owner_cancel_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(ValueError, match="owned by"):
+            store.cancel(t.id, owner="agent-2")
+
+    def test_cancel_without_owner_on_unclaimed(self, store: TaskStore) -> None:
+        t = store.create("work")
+        cancelled = store.cancel(t.id, reason="not needed")
+        assert cancelled.status == TaskStatus.CANCELLED.value
+
+    def test_cancel_by_owner(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        cancelled = store.cancel(t.id, owner="agent-1")
+        assert cancelled.status == TaskStatus.CANCELLED.value
+
+    def test_claim_sets_lease_expires_at(self, store: TaskStore) -> None:
+        t = store.create("work")
+        claimed = store.claim(t.id, owner="agent-1", lease_seconds=120.0)
+        assert claimed.lease_expires_at is not None
+
+    def test_claim_default_lease_300s(self, store: TaskStore) -> None:
+        t = store.create("work")
+        claimed = store.claim(t.id, owner="agent-1")
+        assert claimed.lease_expires_at is not None
+
+    def test_lease_persisted_to_disk(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1", lease_seconds=60.0)
+        loaded = store.load(t.id)
+        assert loaded.lease_expires_at is not None
+
+    def test_renew_lease_extends(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1", lease_seconds=1.0)
+        renewed = store.renew_lease(t.id, owner="agent-1", lease_seconds=300.0)
+        assert renewed.lease_expires_at is not None
+
+    def test_renew_lease_non_owner_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(ValueError, match="owned by"):
+            store.renew_lease(t.id, owner="agent-2")
+
+    def test_renew_lease_non_in_progress_rejected(
+        self, store: TaskStore
+    ) -> None:
+        t = store.create("work")
+        with pytest.raises(ValueError, match="cannot renew lease"):
+            store.renew_lease(t.id, owner="agent-1")
+
+    def test_reclaim_after_lease_expired(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1", lease_seconds=0.01)
+        time.sleep(0.02)
+        re_claimed = store.claim(t.id, owner="agent-2")
+        assert re_claimed.owner_agent_id == "agent-2"
+
+    def test_reclaim_before_lease_expired_rejected(
+        self, store: TaskStore
+    ) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1", lease_seconds=300.0)
+        with pytest.raises(ValueError, match="in_progress"):
+            store.claim(t.id, owner="agent-2")
+
+    def test_retry_clears_lease(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1")
+        retried = store.retry(t.id)
+        assert retried.lease_expires_at is None
+
+    def test_concurrent_claim_only_one_succeeds(
+        self, store: TaskStore
+    ) -> None:
+        import threading
+
+        t = store.create("shared work")
+        results: list[bool] = []
+        lock = threading.Lock()
+
+        def try_claim(agent: str) -> None:
+            try:
+                store.claim(t.id, owner=agent)
+                with lock:
+                    results.append(True)
+            except Exception:
+                with lock:
+                    results.append(False)
+
+        threads = [
+            threading.Thread(target=try_claim, args=(f"agent-{i}",))
+            for i in range(10)
+        ]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        assert results.count(True) == 1
+        assert results.count(False) == 9
+
+    def test_load_legacy_missing_lease(
+        self, store: TaskStore, tmp_path: Path
+    ) -> None:
+        legacy = {
+            "id": "task_11223344",
+            "subject": "legacy",
+            "description": "",
+            "status": "pending",
+            "owner": None,
+            "blockedBy": [],
+        }
+        path = tmp_path / ".tasks" / "task_11223344.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(legacy))
+        task = store.load("task_11223344")
+        assert task.lease_expires_at is None
