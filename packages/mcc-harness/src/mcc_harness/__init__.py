@@ -106,6 +106,7 @@ from mcc_harness.subagent import (
     SubagentResult,
     SubagentRunner,
     SubagentSpec,
+    SubagentStatus,
     default_presets,
     token_budget_to_usd,
 )
@@ -236,6 +237,7 @@ __all__ = [
     "SubagentResult",
     "SubagentRunner",
     "SubagentSpec",
+    "SubagentStatus",
     "SubmitPlanTool",
     "TeammateInfo",
     "TeammateManager",

@@ -8,7 +8,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from mcc_core import ToolContext, ToolOutput, Usage
@@ -34,14 +37,39 @@ class SubagentSpec:
     timeout_secs: float = 120.0
 
 
+class SubagentStatus(StrEnum):
+    """子代理生命周期状态。
+
+    所有终止路径汇聚到统一出口，区分成功、超时、取消、
+    预算超限与模型/工具异常。
+    """
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    BUDGET_EXCEEDED = "budget_exceeded"
+    ERROR = "error"
+
+
 @dataclass
 class SubagentResult:
-    """子代理运行结果：精炼结论与用量。"""
+    """子代理运行结果：统一终止出口的状态与用量。
+
+    usage 为 None 表示用量未知（超时/取消/异常时无法获取），
+    不伪造为零消耗；成功时从 AgentRun.total_usage 填充真实值。
+    """
 
     name: str
     summary: str
-    usage: Usage = field(default_factory=Usage)
+    status: SubagentStatus = SubagentStatus.RUNNING
+    usage: Usage | None = None
+    cost_usd: float = 0.0
     stopped_reason: str = "end_turn"
+    error: str | None = None
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    partial_result: str | None = None
 
 
 def token_budget_to_usd(budget_tokens: int, model: str) -> float:
@@ -146,7 +174,13 @@ class SubagentRunner:
     async def run(
         self, spec: SubagentSpec, task: str, parent: ToolContext
     ) -> SubagentResult:
-        """执行一个子代理：隔离上下文 + 超时 + 预算护栏。"""
+        """执行一个子代理：隔离上下文 + 超时 + 预算护栏。
+
+        所有终止路径（成功、超时、取消、预算超限、异常）汇聚到
+        统一出口，保证 ON_SUBAGENT_STOP Hook 在每条路径触发且只触发一次。
+        CancelledError 不在此捕获（BaseException），Hook 经 finally 触发
+        后取消信号继续向上传播。
+        """
         async with self._semaphore:
             ctx = ToolContext(
                 cwd=parent.cwd,
@@ -167,37 +201,66 @@ class SubagentRunner:
                 hooks=self.hooks,
             )
 
+            started_at = time.monotonic()
+            status = SubagentStatus.RUNNING
+            summary = ""
+            usage: Usage | None = None
+            cost_usd = 0.0
+            stopped_reason = "end_turn"
+            error: str | None = None
+
             try:
                 run = await asyncio.wait_for(
                     agent.run(task), timeout=spec.timeout_secs
                 )
+                status = SubagentStatus.COMPLETED
+                summary = run.final_text
+                usage = run.total_usage
+                cost_usd = run.cost_usd
             except TimeoutError:
-                return SubagentResult(
-                    name=spec.name,
-                    summary=(
-                        f"subagent timed out after {spec.timeout_secs:.0f}s; "
-                        "partial work was cancelled"
-                    ),
-                    usage=Usage(),
-                    stopped_reason="timeout",
+                status = SubagentStatus.TIMEOUT
+                summary = (
+                    f"subagent timed out after {spec.timeout_secs:.0f}s; "
+                    "partial work was cancelled"
                 )
-
-            if self.hooks:
-                await self.hooks.run_hooks(
-                    HookType.ON_SUBAGENT_STOP,
-                    HookContext(
-                        hook_type=HookType.ON_SUBAGENT_STOP,
-                        session_id=ctx.session_id,
-                        depth=ctx.depth,
-                        cwd=ctx.cwd,
-                    ),
-                )
+                stopped_reason = "timeout"
+            except Exception as e:
+                err_str = str(e)
+                lowered = err_str.lower()
+                if "budget" in lowered or "cost" in lowered or "max_cost" in lowered:
+                    status = SubagentStatus.BUDGET_EXCEEDED
+                    stopped_reason = "budget_exceeded"
+                else:
+                    status = SubagentStatus.ERROR
+                    stopped_reason = "error"
+                summary = f"subagent failed: {err_str}"
+                error = err_str
+            finally:
+                finished_at = time.monotonic()
+                if self.hooks:
+                    with contextlib.suppress(Exception):
+                        await self.hooks.run_hooks(
+                            HookType.ON_SUBAGENT_STOP,
+                            HookContext(
+                                hook_type=HookType.ON_SUBAGENT_STOP,
+                                session_id=ctx.session_id,
+                                depth=ctx.depth,
+                                cwd=ctx.cwd,
+                                cost_usd=cost_usd,
+                                is_error=(status != SubagentStatus.COMPLETED),
+                            ),
+                        )
 
             return SubagentResult(
                 name=spec.name,
-                summary=run.final_text,
-                usage=run.total_usage,
-                stopped_reason="end_turn",
+                summary=summary,
+                status=status,
+                usage=usage,
+                cost_usd=cost_usd,
+                stopped_reason=stopped_reason,
+                error=error,
+                started_at=started_at,
+                finished_at=finished_at,
             )
 
 
@@ -266,11 +329,16 @@ class SpawnSubagentTool:
         except Exception as e:
             return ToolOutput.err(f"subagent failed: {e}")
 
+        if r.usage is not None:
+            tokens = f"{r.usage.input_tokens}in/{r.usage.output_tokens}out"
+        else:
+            tokens = "unknown"
+
         content = (
-            f"[subagent={r.name} tokens={r.usage.input_tokens}in/"
-            f"{r.usage.output_tokens}out reason={r.stopped_reason}]\n{r.summary}"
+            f"[subagent={r.name} status={r.status.value} "
+            f"tokens={tokens} reason={r.stopped_reason}]\n{r.summary}"
         )
-        if r.stopped_reason == "end_turn":
+        if r.status == SubagentStatus.COMPLETED:
             return ToolOutput.ok(content)
         return ToolOutput.err(content)
 
@@ -283,6 +351,7 @@ __all__ = [
     "SubagentResult",
     "SubagentRunner",
     "SubagentSpec",
+    "SubagentStatus",
     "default_presets",
     "token_budget_to_usd",
 ]

@@ -20,6 +20,7 @@ from mcc_harness import (
     SpawnSubagentTool,
     SubagentRunner,
     SubagentSpec,
+    SubagentStatus,
     default_presets,
     permission_request_for,
     token_budget_to_usd,
@@ -69,6 +70,14 @@ class SlowLlm:
         yield TextDelta(text="slow")
         await asyncio.sleep(10)
         yield MessageStop(stop_reason="end_turn", usage=Usage())
+
+
+class ErrorLlm:
+    """立即抛出异常的 LLM，用于测试异常终止路径。"""
+
+    async def stream(self, req):
+        raise RuntimeError("model crashed")
+        yield  # pragma: no cover — 使 stream 成为 async generator
 
 
 # ---------- 预设库 ----------
@@ -177,7 +186,10 @@ class TestSpawnSubagentToolContract:
             {"preset": "summarizer", "task": "find entrypoint"}, ctx
         )
         assert not out.is_error
-        assert "[subagent=summarizer tokens=7in/3out reason=end_turn]" in out.content
+        assert (
+            "[subagent=summarizer status=completed tokens=7in/3out reason=end_turn]"
+            in out.content
+        )
         assert "found entrypoint" in out.content
 
 
@@ -348,6 +360,303 @@ class TestSubagentRunner:
         assert result.stopped_reason == "end_turn"
         assert result.summary == "denied"
         assert outputs == []
+
+
+# ---------- 统一生命周期出口 (P1-09) ----------
+
+
+class TestSubagentLifecycle:
+    """所有终止路径汇聚到统一出口，返回 SubagentResult with 正确 status。
+
+    验收标准：
+    - 成功、超时、取消、模型异常、预算超限均返回对应状态
+    - Usage 缺失时为 None（不伪造为零消耗）
+    - ON_SUBAGENT_STOP Hook 在每条终止路径触发且只触发一次
+    """
+
+    async def test_completed_returns_real_usage(self, registry, ctx):
+        """成功路径：status=COMPLETED, usage 为真实值, cost_usd > 0。"""
+        llm = MockLlm(
+            [single_text_turn("done", Usage(input_tokens=100, output_tokens=50))]
+        )
+        runner = SubagentRunner(llm, registry)
+        result = await runner.run(default_presets()["summarizer"], "task", ctx)
+        assert result.status == SubagentStatus.COMPLETED
+        assert result.usage is not None
+        assert result.usage.input_tokens == 100
+        assert result.usage.output_tokens == 50
+        assert result.cost_usd > 0
+        assert result.error is None
+        assert result.stopped_reason == "end_turn"
+
+    async def test_timeout_usage_is_none_not_zero(self, registry, ctx):
+        """超时：usage=None（不伪造零消耗），status=TIMEOUT。"""
+        spec = SubagentSpec(
+            name="slow",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            timeout_secs=0.05,
+        )
+        runner = SubagentRunner(SlowLlm(), registry)
+        result = await runner.run(spec, "task", ctx)
+        assert result.status == SubagentStatus.TIMEOUT
+        assert result.usage is None
+        assert result.stopped_reason == "timeout"
+        assert result.error is None
+        assert "timed out" in result.summary
+
+    async def test_timeout_triggers_hook(self, registry, ctx):
+        """超时也触发 ON_SUBAGENT_STOP Hook（修复前不触发）。"""
+        hook_calls: list = []
+
+        async def on_stop(hook_ctx):
+            hook_calls.append(hook_ctx)
+            return HookResult()
+
+        hooks = HookRegistry()
+        hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
+
+        spec = SubagentSpec(
+            name="slow",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            timeout_secs=0.05,
+        )
+        runner = SubagentRunner(SlowLlm(), registry, hooks=hooks)
+        result = await runner.run(spec, "task", ctx)
+        assert result.status == SubagentStatus.TIMEOUT
+        assert len(hook_calls) == 1
+        assert hook_calls[0].is_error is True
+
+    async def test_error_status_and_usage_none(self, registry, ctx):
+        """模型异常：status=ERROR, usage=None, error 有值。"""
+        runner = SubagentRunner(ErrorLlm(), registry)
+        result = await runner.run(default_presets()["summarizer"], "task", ctx)
+        assert result.status == SubagentStatus.ERROR
+        assert result.usage is None
+        assert result.error is not None
+        assert "model crashed" in result.error
+        assert result.stopped_reason == "error"
+
+    async def test_error_triggers_hook(self, registry, ctx):
+        """异常也触发 ON_SUBAGENT_STOP Hook。"""
+        hook_calls: list = []
+
+        async def on_stop(hook_ctx):
+            hook_calls.append(hook_ctx)
+            return HookResult()
+
+        hooks = HookRegistry()
+        hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
+
+        runner = SubagentRunner(ErrorLlm(), registry, hooks=hooks)
+        result = await runner.run(default_presets()["summarizer"], "task", ctx)
+        assert result.status == SubagentStatus.ERROR
+        assert len(hook_calls) == 1
+        assert hook_calls[0].is_error is True
+
+    async def test_budget_exceeded_status(self, registry, ctx):
+        """预算超限：status=BUDGET_EXCEEDED, stopped_reason=budget_exceeded。"""
+        spec = SubagentSpec(
+            name="big_spender",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["read_file"],
+            budget_tokens=1_000,
+        )
+        turn1 = [
+            ToolUseStart(id="r1", name="read_file"),
+            ToolUseInputDelta(partial_json=json.dumps({"path": "whatever.txt"})),
+            MessageStop(
+                stop_reason="tool_use",
+                usage=Usage(input_tokens=1_000_000, output_tokens=0),
+            ),
+        ]
+        llm = MockLlm([turn1, single_text_turn("never reached")])
+        runner = SubagentRunner(llm, registry)
+        result = await runner.run(spec, "task", ctx)
+        assert result.status == SubagentStatus.BUDGET_EXCEEDED
+        assert result.stopped_reason == "budget_exceeded"
+        assert result.usage is None
+        assert result.error is not None
+
+    async def test_budget_exceeded_triggers_hook(self, registry, ctx):
+        """预算超限也触发 ON_SUBAGENT_STOP Hook。"""
+        hook_calls: list = []
+
+        async def on_stop(hook_ctx):
+            hook_calls.append(hook_ctx)
+            return HookResult()
+
+        hooks = HookRegistry()
+        hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
+
+        spec = SubagentSpec(
+            name="big_spender",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["read_file"],
+            budget_tokens=1_000,
+        )
+        turn1 = [
+            ToolUseStart(id="r1", name="read_file"),
+            ToolUseInputDelta(partial_json=json.dumps({"path": "whatever.txt"})),
+            MessageStop(
+                stop_reason="tool_use",
+                usage=Usage(input_tokens=1_000_000, output_tokens=0),
+            ),
+        ]
+        llm = MockLlm([turn1, single_text_turn("never reached")])
+        runner = SubagentRunner(llm, registry, hooks=hooks)
+        result = await runner.run(spec, "task", ctx)
+        assert result.status == SubagentStatus.BUDGET_EXCEEDED
+        assert len(hook_calls) == 1
+        assert hook_calls[0].is_error is True
+
+    async def test_cancelled_propagates(self, registry, ctx):
+        """取消：CancelledError 传播，不被误判为超时或异常。"""
+        runner = SubagentRunner(SlowLlm(), registry)
+        spec = default_presets()["summarizer"]
+
+        task_obj = asyncio.create_task(runner.run(spec, "task", ctx))
+        await asyncio.sleep(0.01)
+        task_obj.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task_obj
+
+    async def test_hook_fires_exactly_once_on_success(self, registry, ctx):
+        """Hook 在成功路径只触发一次。"""
+        hook_calls: list = []
+
+        async def on_stop(hook_ctx):
+            hook_calls.append(hook_ctx)
+            return HookResult()
+
+        hooks = HookRegistry()
+        hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
+
+        runner = SubagentRunner(
+            MockLlm([single_text_turn("ok")]), registry, hooks=hooks
+        )
+        await runner.run(default_presets()["summarizer"], "task", ctx)
+        assert len(hook_calls) == 1
+
+    async def test_started_and_finished_at_recorded(self, registry, ctx):
+        """started_at 和 finished_at 被记录，且 finished >= started。"""
+        llm = MockLlm([single_text_turn("done")])
+        runner = SubagentRunner(llm, registry)
+        result = await runner.run(default_presets()["summarizer"], "task", ctx)
+        assert result.started_at > 0
+        assert result.finished_at >= result.started_at
+
+    async def test_hook_context_carries_cost_and_is_error(
+        self, registry, ctx
+    ):
+        """Hook context 携带 cost_usd 和 is_error 标志。"""
+        hook_calls: list = []
+
+        async def on_stop(hook_ctx):
+            hook_calls.append(hook_ctx)
+            return HookResult()
+
+        hooks = HookRegistry()
+        hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
+
+        llm = MockLlm(
+            [single_text_turn("done", Usage(input_tokens=100, output_tokens=50))]
+        )
+        runner = SubagentRunner(llm, registry, hooks=hooks)
+        result = await runner.run(default_presets()["summarizer"], "task", ctx)
+        assert len(hook_calls) == 1
+        assert hook_calls[0].cost_usd == result.cost_usd
+        assert hook_calls[0].cost_usd > 0
+        assert hook_calls[0].is_error is False
+
+    @pytest.mark.parametrize(
+        "status,expected_is_error",
+        [
+            (SubagentStatus.COMPLETED, False),
+            (SubagentStatus.TIMEOUT, True),
+            (SubagentStatus.ERROR, True),
+            (SubagentStatus.BUDGET_EXCEEDED, True),
+        ],
+    )
+    async def test_is_error_flag_per_status(
+        self, registry, ctx, status, expected_is_error
+    ):
+        """各终止路径的 Hook context.is_error 正确反映成功/失败。"""
+        hook_calls: list = []
+
+        async def on_stop(hook_ctx):
+            hook_calls.append(hook_ctx)
+            return HookResult()
+
+        hooks = HookRegistry()
+        hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
+
+        if status == SubagentStatus.COMPLETED:
+            runner = SubagentRunner(
+                MockLlm([single_text_turn("ok")]), registry, hooks=hooks
+            )
+            await runner.run(default_presets()["summarizer"], "task", ctx)
+        elif status == SubagentStatus.TIMEOUT:
+            spec = SubagentSpec(
+                name="slow", system="s", model="claude-haiku-4-5",
+                tools=[], timeout_secs=0.05,
+            )
+            runner = SubagentRunner(SlowLlm(), registry, hooks=hooks)
+            await runner.run(spec, "task", ctx)
+        elif status == SubagentStatus.ERROR:
+            runner = SubagentRunner(ErrorLlm(), registry, hooks=hooks)
+            await runner.run(default_presets()["summarizer"], "task", ctx)
+        elif status == SubagentStatus.BUDGET_EXCEEDED:
+            spec = SubagentSpec(
+                name="big", system="s", model="claude-haiku-4-5",
+                tools=["read_file"], budget_tokens=1_000,
+            )
+            turn1 = [
+                ToolUseStart(id="r1", name="read_file"),
+                ToolUseInputDelta(
+                    partial_json=json.dumps({"path": "whatever.txt"})
+                ),
+                MessageStop(
+                    stop_reason="tool_use",
+                    usage=Usage(input_tokens=1_000_000, output_tokens=0),
+                ),
+            ]
+            llm = MockLlm([turn1, single_text_turn("x")])
+            runner = SubagentRunner(llm, registry, hooks=hooks)
+            await runner.run(spec, "task", ctx)
+
+        assert len(hook_calls) == 1
+        assert hook_calls[0].is_error is expected_is_error
+
+    async def test_tool_output_unknown_tokens_on_timeout(self, registry, ctx):
+        """超时时工具输出 tokens=unknown（usage 未知）。"""
+        spec = SubagentSpec(
+            name="slowpoke", system="s", model="claude-haiku-4-5",
+            tools=[], timeout_secs=0.05,
+        )
+        tool = _tool(SlowLlm(), registry, {"slowpoke": spec})
+        out = await tool.execute({"preset": "slowpoke", "task": "t"}, ctx)
+        assert out.is_error
+        assert "tokens=unknown" in out.content
+        assert "status=timeout" in out.content
+
+    async def test_tool_output_status_on_success(self, registry, ctx):
+        """成功时工具输出含 status=completed。"""
+        llm = MockLlm(
+            [single_text_turn("result", Usage(input_tokens=5, output_tokens=3))]
+        )
+        tool = _tool(llm, registry)
+        out = await tool.execute(
+            {"preset": "summarizer", "task": "t"}, ctx
+        )
+        assert not out.is_error
+        assert "status=completed" in out.content
 
 
 # ---------- 并发护栏 ----------
