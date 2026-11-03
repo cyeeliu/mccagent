@@ -21,6 +21,8 @@ from mcc_core.event import (
 from mcc_harness import (
     AgentLoopBuilder,
     Allow,
+    BudgetAllocation,
+    BudgetLedger,
     Deny,
     HookRegistry,
     HookType,
@@ -32,6 +34,7 @@ from mcc_harness import (
     SubagentRunner,
     SubagentSpec,
     SubagentStatus,
+    UsageRecord,
     default_presets,
     permission_request_for,
     token_budget_to_usd,
@@ -135,7 +138,7 @@ class TestDefaultPresets:
 class TestTokenBudget:
     def test_haiku_budget(self):
         assert token_budget_to_usd(80_000, "claude-haiku-4-5") == pytest.approx(
-            80_000 / 1_000_000 * (0.80 + 4.0) / 2
+            80_000 / 1_000_000 * (0.80 * 0.7 + 4.0 * 0.3)
         )
 
     def test_budget_scales_linearly(self):
@@ -1083,3 +1086,304 @@ class TestSubagentPermissionChannel:
         result = await runner.run(spec, "read file", ctx)
         assert result.status == SubagentStatus.COMPLETED
         assert result.permission_audit == []
+
+
+class TestBudgetLedger:
+    """BudgetLedger 单元测试。"""
+
+    async def test_allocate_success(self):
+        ledger = BudgetLedger(total_tokens=100_000)
+        alloc = await ledger.allocate("agent-1", 40_000)
+        assert alloc is not None
+        assert alloc.agent_id == "agent-1"
+        assert alloc.allocated_tokens == 40_000
+        assert alloc.consumed_tokens == 0
+
+    async def test_allocate_insufficient(self):
+        ledger = BudgetLedger(total_tokens=50_000)
+        a1 = await ledger.allocate("agent-1", 30_000)
+        assert a1 is not None
+        a2 = await ledger.allocate("agent-2", 30_000)
+        assert a2 is None
+
+    async def test_allocate_exact_fit(self):
+        ledger = BudgetLedger(total_tokens=60_000)
+        a1 = await ledger.allocate("agent-1", 30_000)
+        a2 = await ledger.allocate("agent-2", 30_000)
+        assert a1 is not None
+        assert a2 is not None
+
+    async def test_remaining_tokens(self):
+        ledger = BudgetLedger(total_tokens=100_000)
+        await ledger.allocate("agent-1", 30_000)
+        await ledger.allocate("agent-2", 20_000)
+        remaining = await ledger.remaining_tokens()
+        assert remaining == 50_000
+
+    async def test_release_reclaims(self):
+        ledger = BudgetLedger(total_tokens=100_000)
+        await ledger.allocate("agent-1", 40_000)
+        await ledger.release("agent-1")
+        remaining = await ledger.remaining_tokens()
+        assert remaining == 100_000
+
+    async def test_report_consumption(self):
+        ledger = BudgetLedger(total_tokens=100_000)
+        await ledger.allocate("agent-1", 50_000)
+        usage = Usage(input_tokens=10_000, output_tokens=5_000)
+        await ledger.report("agent-1", "claude-haiku-4-5", usage, 0.02, 1.5)
+        consumed = await ledger.total_consumed_tokens()
+        assert consumed == 15_000
+        cost = await ledger.total_consumed_cost_usd()
+        assert cost == pytest.approx(0.02)
+
+    async def test_is_exceeded_false(self):
+        ledger = BudgetLedger(total_tokens=100_000)
+        await ledger.allocate("agent-1", 50_000)
+        await ledger.report(
+            "agent-1", "m", Usage(input_tokens=10, output_tokens=5), 0.0, 1.0
+        )
+        assert not await ledger.is_exceeded()
+
+    async def test_is_exceeded_true(self):
+        ledger = BudgetLedger(total_tokens=100)
+        await ledger.allocate("agent-1", 100)
+        await ledger.report(
+            "agent-1", "m", Usage(input_tokens=80, output_tokens=50), 0.0, 1.0
+        )
+        assert await ledger.is_exceeded()
+
+    async def test_summary_by_agent(self):
+        ledger = BudgetLedger(total_tokens=1_000_000)
+        await ledger.allocate("agent-1", 100_000)
+        await ledger.report(
+            "agent-1", "claude-haiku-4-5",
+            Usage(input_tokens=100, output_tokens=50), 0.001, 1.0,
+        )
+        await ledger.report(
+            "agent-1", "claude-haiku-4-5",
+            Usage(input_tokens=200, output_tokens=100), 0.002, 2.0,
+        )
+        summary = await ledger.summary_by_agent()
+        assert "agent-1" in summary
+        rec = summary["agent-1"]
+        assert rec.usage.input_tokens == 300
+        assert rec.usage.output_tokens == 150
+        assert rec.cost_usd == pytest.approx(0.003)
+
+    async def test_summary_by_model(self):
+        ledger = BudgetLedger(total_tokens=1_000_000)
+        await ledger.allocate("agent-1", 100_000)
+        await ledger.allocate("agent-2", 100_000)
+        await ledger.report(
+            "agent-1", "claude-haiku-4-5",
+            Usage(input_tokens=100, output_tokens=50), 0.001, 1.0,
+        )
+        await ledger.report(
+            "agent-2", "claude-haiku-4-5",
+            Usage(input_tokens=200, output_tokens=100), 0.002, 2.0,
+        )
+        summary = await ledger.summary_by_model()
+        assert "claude-haiku-4-5" in summary
+        rec = summary["claude-haiku-4-5"]
+        assert rec.usage.input_tokens == 300
+        assert rec.usage.output_tokens == 150
+
+    async def test_records_stored(self):
+        ledger = BudgetLedger(total_tokens=1_000_000)
+        await ledger.allocate("agent-1", 100_000)
+        await ledger.report(
+            "agent-1", "m", Usage(input_tokens=10, output_tokens=5), 0.01, 0.5,
+        )
+        records = ledger.records()
+        assert len(records) == 1
+        assert isinstance(records[0], UsageRecord)
+        assert records[0].agent_id == "agent-1"
+
+
+class TestBudgetAllocation:
+    """BudgetAllocation 单元测试。"""
+
+    def test_remaining_tokens(self):
+        alloc = BudgetAllocation(
+            agent_id="a", allocated_tokens=1000, consumed_tokens=300
+        )
+        assert alloc.remaining_tokens == 700
+
+    def test_remaining_tokens_floor_zero(self):
+        alloc = BudgetAllocation(
+            agent_id="a", allocated_tokens=1000, consumed_tokens=1500
+        )
+        assert alloc.remaining_tokens == 0
+
+    def test_is_exceeded_false(self):
+        alloc = BudgetAllocation(
+            agent_id="a", allocated_tokens=1000, consumed_tokens=500
+        )
+        assert not alloc.is_exceeded
+
+    def test_is_exceeded_true(self):
+        alloc = BudgetAllocation(
+            agent_id="a", allocated_tokens=1000, consumed_tokens=1001
+        )
+        assert alloc.is_exceeded
+
+
+class TestTokenBudgetToUsd:
+    """token_budget_to_usd 加权计算测试。"""
+
+    def test_default_ratio_07(self):
+        usd = token_budget_to_usd(1_000_000, "claude-haiku-4-5")
+        in_m, out_m = 0.80, 4.0
+        expected = in_m * 0.7 + out_m * 0.3
+        assert usd == pytest.approx(expected)
+
+    def test_custom_ratio(self):
+        usd = token_budget_to_usd(
+            1_000_000, "claude-haiku-4-5", input_ratio=0.5
+        )
+        in_m, out_m = 0.80, 4.0
+        expected = in_m * 0.5 + out_m * 0.5
+        assert usd == pytest.approx(expected)
+
+    def test_ratio_affects_result(self):
+        usd_07 = token_budget_to_usd(1_000_000, "claude-haiku-4-5")
+        usd_03 = token_budget_to_usd(
+            1_000_000, "claude-haiku-4-5", input_ratio=0.3
+        )
+        assert usd_03 > usd_07
+
+
+class TestSubagentBudgetLedger:
+    """SubagentRunner + BudgetLedger 集成测试。"""
+
+    async def test_ledger_tracks_consumption(
+        self, registry, ctx, tmp_path
+    ):
+        """子代理完成后，账本记录实际消耗。"""
+        spec = SubagentSpec(
+            name="worker", system="s", model="claude-haiku-4-5",
+            tools=[], max_iterations=1, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            single_text_turn("done", Usage(input_tokens=100, output_tokens=50)),
+        ])
+        ledger = BudgetLedger(total_tokens=100_000)
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            budget_ledger=ledger,
+        )
+        result = await runner.run(spec, "say done", ctx)
+        assert result.status == SubagentStatus.COMPLETED
+        consumed = await ledger.total_consumed_tokens()
+        assert consumed == 150
+        records = ledger.records()
+        assert len(records) == 1
+        assert records[0].model == "claude-haiku-4-5"
+
+    async def test_budget_exhausted_returns_budget_exceeded(
+        self, registry, ctx
+    ):
+        """预算耗尽时返回 BUDGET_EXCEEDED。"""
+        spec = SubagentSpec(
+            name="worker", system="s", model="claude-haiku-4-5",
+            tools=[], max_iterations=1, max_tokens=256,
+            budget_tokens=50_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        ledger = BudgetLedger(total_tokens=60_000)
+        await ledger.allocate("other-agent", 50_000)
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            budget_ledger=ledger,
+        )
+        result = await runner.run(spec, "say done", ctx)
+        assert result.status == SubagentStatus.BUDGET_EXCEEDED
+        assert "budget exhausted" in result.summary
+
+    async def test_concurrent_subagents_share_budget(
+        self, registry, ctx, tmp_path
+    ):
+        """并发子代理共享同一预算账本，总分配不超过上限。"""
+        spec1 = SubagentSpec(
+            name="worker-a", system="s", model="claude-haiku-4-5",
+            tools=[], max_iterations=1, max_tokens=256,
+            budget_tokens=30_000, timeout_secs=10,
+        )
+        spec2 = SubagentSpec(
+            name="worker-b", system="s", model="claude-haiku-4-5",
+            tools=[], max_iterations=1, max_tokens=256,
+            budget_tokens=30_000, timeout_secs=10,
+        )
+        llm1 = MockLlm([
+            single_text_turn("a", Usage(input_tokens=100, output_tokens=50)),
+        ])
+        llm2 = MockLlm([
+            single_text_turn("b", Usage(input_tokens=200, output_tokens=100)),
+        ])
+        ledger = BudgetLedger(total_tokens=50_000)
+        runner1 = SubagentRunner(
+            llm1, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            budget_ledger=ledger,
+        )
+        runner2 = SubagentRunner(
+            llm2, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            budget_ledger=ledger,
+        )
+        r1, r2 = await asyncio.gather(
+            runner1.run(spec1, "a", ctx),
+            runner2.run(spec2, "b", ctx),
+        )
+        assert r1.status == SubagentStatus.COMPLETED
+        assert r2.status == SubagentStatus.BUDGET_EXCEEDED
+        consumed = await ledger.total_consumed_tokens()
+        assert consumed == 150
+
+    async def test_release_reclaims_after_completion(
+        self, registry, ctx
+    ):
+        """子代理完成后释放分配，额度可复用。"""
+        spec = SubagentSpec(
+            name="worker", system="s", model="claude-haiku-4-5",
+            tools=[], max_iterations=1, max_tokens=256,
+            budget_tokens=40_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        ledger = BudgetLedger(total_tokens=50_000)
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            budget_ledger=ledger,
+        )
+        await runner.run(spec, "first", ctx)
+        remaining = await ledger.remaining_tokens()
+        assert remaining == 50_000
+        result2 = await runner.run(spec, "second", ctx)
+        assert result2.status == SubagentStatus.COMPLETED
+
+    async def test_no_ledger_works_as_before(self, registry, ctx):
+        """无账本时行为与之前一致。"""
+        spec = SubagentSpec(
+            name="worker", system="s", model="claude-haiku-4-5",
+            tools=[], max_iterations=1, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+        )
+        result = await runner.run(spec, "say done", ctx)
+        assert result.status == SubagentStatus.COMPLETED
+        assert result.summary == "done"

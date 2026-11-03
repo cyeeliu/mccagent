@@ -188,13 +188,199 @@ class SubagentResult:
     permission_audit: list[PermissionAuditEntry] = field(default_factory=list)
 
 
-def token_budget_to_usd(budget_tokens: int, model: str) -> float:
+@dataclass
+class UsageRecord:
+    """结构化用量记录：按 Agent/Model 汇总的审计单元。"""
+
+    agent_id: str
+    model: str
+    usage: Usage
+    cost_usd: float
+    elapsed_secs: float
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class BudgetAllocation:
+    """子代理预算分配句柄：跟踪预分配与实际消耗。"""
+
+    agent_id: str
+    allocated_tokens: int
+    consumed_tokens: int = 0
+    consumed_cost_usd: float = 0.0
+    released: bool = False
+
+    @property
+    def remaining_tokens(self) -> int:
+        return max(0, self.allocated_tokens - self.consumed_tokens)
+
+    @property
+    def is_exceeded(self) -> bool:
+        return self.consumed_tokens > self.allocated_tokens
+
+
+class BudgetLedger:
+    """共享预算账本：父级总预算统筹多个并发子代理的分配与消耗。
+
+    - allocate() 预分配 token 额度，余额不足时返回 None
+    - report() 记录实际消耗（tokens + USD）
+    - release() 结算并回收未使用额度
+    - 并发安全：所有操作通过 asyncio.Lock 串行化
+    - 审计：UsageRecord 列表可按 agent_id / model 汇总
+    """
+
+    def __init__(
+        self,
+        total_tokens: int,
+        *,
+        total_cost_usd: float = 0.0,
+    ) -> None:
+        self._total_tokens = total_tokens
+        self._total_cost_usd = total_cost_usd
+        self._allocations: dict[str, BudgetAllocation] = {}
+        self._records: list[UsageRecord] = []
+        self._lock = asyncio.Lock()
+
+    @property
+    def total_tokens(self) -> int:
+        return self._total_tokens
+
+    @property
+    def total_cost_usd(self) -> float:
+        return self._total_cost_usd
+
+    async def allocate(
+        self, agent_id: str, tokens: int
+    ) -> BudgetAllocation | None:
+        """预分配 token 额度。余额不足时返回 None。"""
+        async with self._lock:
+            already = sum(
+                a.allocated_tokens
+                for aid, a in self._allocations.items()
+                if aid != agent_id and not a.released
+            )
+            if already + tokens > self._total_tokens:
+                return None
+            alloc = BudgetAllocation(
+                agent_id=agent_id, allocated_tokens=tokens
+            )
+            self._allocations[agent_id] = alloc
+            return alloc
+
+    async def report(
+        self,
+        agent_id: str,
+        model: str,
+        usage: Usage,
+        cost_usd: float,
+        elapsed_secs: float,
+    ) -> None:
+        """记录实际消耗并更新分配句柄。"""
+        total_tokens = (
+            usage.input_tokens
+            + usage.output_tokens
+            + usage.cache_creation_input_tokens
+            + usage.cache_read_input_tokens
+        )
+        async with self._lock:
+            self._records.append(
+                UsageRecord(
+                    agent_id=agent_id,
+                    model=model,
+                    usage=usage,
+                    cost_usd=cost_usd,
+                    elapsed_secs=elapsed_secs,
+                )
+            )
+            alloc = self._allocations.get(agent_id)
+            if alloc is not None:
+                alloc.consumed_tokens = total_tokens
+                alloc.consumed_cost_usd = cost_usd
+
+    async def release(self, agent_id: str) -> BudgetAllocation | None:
+        """结算并回收未使用额度。"""
+        async with self._lock:
+            alloc = self._allocations.get(agent_id)
+            if alloc is not None:
+                alloc.released = True
+            return alloc
+
+    async def remaining_tokens(self) -> int:
+        """未分配的剩余 token 额度。"""
+        async with self._lock:
+            allocated = sum(
+                a.allocated_tokens
+                for a in self._allocations.values()
+                if not a.released
+            )
+            return max(0, self._total_tokens - allocated)
+
+    async def total_consumed_tokens(self) -> int:
+        async with self._lock:
+            return sum(a.consumed_tokens for a in self._allocations.values())
+
+    async def total_consumed_cost_usd(self) -> float:
+        async with self._lock:
+            return sum(
+                a.consumed_cost_usd for a in self._allocations.values()
+            )
+
+    async def is_exceeded(self) -> bool:
+        """总消耗是否超过总预算。"""
+        consumed = await self.total_consumed_tokens()
+        return consumed > self._total_tokens
+
+    def records(self) -> list[UsageRecord]:
+        return list(self._records)
+
+    async def summary_by_agent(self) -> dict[str, UsageRecord]:
+        async with self._lock:
+            result: dict[str, UsageRecord] = {}
+            for r in self._records:
+                if r.agent_id not in result:
+                    result[r.agent_id] = r
+                else:
+                    prev = result[r.agent_id]
+                    result[r.agent_id] = UsageRecord(
+                        agent_id=r.agent_id,
+                        model=r.model,
+                        usage=prev.usage + r.usage,
+                        cost_usd=prev.cost_usd + r.cost_usd,
+                        elapsed_secs=prev.elapsed_secs + r.elapsed_secs,
+                    )
+            return result
+
+    async def summary_by_model(self) -> dict[str, UsageRecord]:
+        async with self._lock:
+            result: dict[str, UsageRecord] = {}
+            for r in self._records:
+                if r.model not in result:
+                    result[r.model] = r
+                else:
+                    prev = result[r.model]
+                    result[r.model] = UsageRecord(
+                        agent_id="*",
+                        model=r.model,
+                        usage=prev.usage + r.usage,
+                        cost_usd=prev.cost_usd + r.cost_usd,
+                        elapsed_secs=prev.elapsed_secs + r.elapsed_secs,
+                    )
+            return result
+
+
+def token_budget_to_usd(
+    budget_tokens: int, model: str, *, input_ratio: float = 0.7
+) -> float:
     """token 总预算折算为单次运行的美元上限。
 
-    按 input/output 单价均摊估算，保守起见不区分流向。
+    按输入/输出流向加权估算（默认 70% 输入、30% 输出），
+    比 (in+out)/2 均摊更贴近真实 agentic 用量分布。
     """
     in_m, out_m = model_price_per_1m(model)
-    return budget_tokens / 1_000_000.0 * (in_m + out_m) / 2.0
+    output_ratio = 1.0 - input_ratio
+    return budget_tokens / 1_000_000.0 * (
+        in_m * input_ratio + out_m * output_ratio
+    )
 
 
 CODE_EXPLORER_SYSTEM = """\
@@ -281,6 +467,7 @@ class SubagentRunner:
         permission: PermissionChecker | None = None,
         permission_auto_allow: frozenset[str] = frozenset(),
         permission_timeout_secs: float = 30.0,
+        budget_ledger: BudgetLedger | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -290,6 +477,7 @@ class SubagentRunner:
         self.permission = permission
         self._permission_auto_allow = permission_auto_allow
         self._permission_timeout_secs = permission_timeout_secs
+        self._budget_ledger = budget_ledger
 
     async def run(
         self,
@@ -316,6 +504,25 @@ class SubagentRunner:
                 session_id=f"{parent.session_id}::{spec.name}",
                 depth=parent.depth + 1,
             )
+
+            allocation: BudgetAllocation | None = None
+            if self._budget_ledger is not None:
+                allocation = await self._budget_ledger.allocate(
+                    ctx.session_id, spec.budget_tokens
+                )
+                if allocation is None:
+                    return SubagentResult(
+                        name=spec.name,
+                        summary=(
+                            f"budget exhausted: cannot allocate "
+                            f"{spec.budget_tokens} tokens for {spec.name}"
+                        ),
+                        status=SubagentStatus.BUDGET_EXCEEDED,
+                        stopped_reason="budget_exceeded",
+                        error="insufficient budget",
+                        started_at=time.monotonic(),
+                        finished_at=time.monotonic(),
+                    )
 
             if channel is None:
                 channel = PermissionChannel(
@@ -390,6 +597,16 @@ class SubagentRunner:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await pump_task
                 finished_at = time.monotonic()
+                if self._budget_ledger is not None and allocation is not None:
+                    report_usage = usage if usage is not None else Usage()
+                    await self._budget_ledger.report(
+                        agent_id=ctx.session_id,
+                        model=spec.model,
+                        usage=report_usage,
+                        cost_usd=cost_usd,
+                        elapsed_secs=finished_at - started_at,
+                    )
+                    await self._budget_ledger.release(ctx.session_id)
                 if self.hooks:
                     with contextlib.suppress(Exception):
                         await self.hooks.run_hooks(
@@ -501,6 +718,8 @@ __all__ = [
     "CODE_EXPLORER_SYSTEM",
     "SUMMARIZER_SYSTEM",
     "TEST_RUNNER_SYSTEM",
+    "BudgetAllocation",
+    "BudgetLedger",
     "PermissionAuditEntry",
     "PermissionChannel",
     "PermissionChannelRequest",
@@ -509,6 +728,7 @@ __all__ = [
     "SubagentRunner",
     "SubagentSpec",
     "SubagentStatus",
+    "UsageRecord",
     "default_presets",
     "token_budget_to_usd",
 ]

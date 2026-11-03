@@ -102,6 +102,8 @@ from mcc_harness.security import (
     wrap_untrusted,
 )
 from mcc_harness.subagent import (
+    BudgetAllocation,
+    BudgetLedger,
     PermissionAuditEntry,
     PermissionChannel,
     PermissionChannelRequest,
@@ -110,6 +112,7 @@ from mcc_harness.subagent import (
     SubagentRunner,
     SubagentSpec,
     SubagentStatus,
+    UsageRecord,
     default_presets,
     token_budget_to_usd,
 )
@@ -201,7 +204,9 @@ __all__ = [
     "Ask",
     "BashAction",
     "BackgroundInterceptor",
+    "BudgetAllocation",
     "BudgetInterceptor",
+    "BudgetLedger",
     "CronInterceptor",
     "Decision",
     "Deny",
@@ -271,6 +276,7 @@ __all__ = [
     "RunnerOutput",
     "SimpleJsonSchema",
     "SubagentWorkflowRunner",
+    "UsageRecord",
     "WorkflowInputError",
     "WorkflowJournal",
     "WorkflowRunner",
