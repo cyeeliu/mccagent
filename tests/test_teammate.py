@@ -17,8 +17,10 @@ from mcc_harness import (
 )
 from mcc_harness.plan import PlanError, PlanRequest
 from mcc_harness.teammate import (
+    _TEAMMATE_TRANSITIONS,
     LEAD_NAME,
     CreateWorktreeTool,
+    CurrentExecution,
     ListTeammatesTool,
     RequestShutdownTool,
     ReviewPlanTool,
@@ -28,6 +30,9 @@ from mcc_harness.teammate import (
     SubmitPlanTool,
     TeammateRuntime,
     TeammateSpec,
+    TeammateStateError,
+    TeammateStatus,
+    TransitionRecord,
 )
 from mcc_llm.mock import MockLlm, single_text_turn
 from mcc_tools import ToolRegistry
@@ -476,3 +481,180 @@ class TestTeammateTools:
         result = await tool.execute({"plan": "bad plan"}, ctx)
         assert result.is_error
         assert "rejected" in result.content.lower()
+
+
+# -- P1-07: Teammate 生命周期状态机 --
+
+
+class TestTeammateStatusMatrix:
+    """状态迁移矩阵校验：合法迁移允许，非法迁移拒绝。"""
+
+    @pytest.mark.parametrize("frm,to", [
+        (TeammateStatus.CREATED, TeammateStatus.STARTING),
+        (TeammateStatus.CREATED, TeammateStatus.SHUTTING_DOWN),
+        (TeammateStatus.STARTING, TeammateStatus.IDLE),
+        (TeammateStatus.STARTING, TeammateStatus.ASSIGNED),
+        (TeammateStatus.IDLE, TeammateStatus.ASSIGNED),
+        (TeammateStatus.ASSIGNED, TeammateStatus.PLANNING),
+        (TeammateStatus.ASSIGNED, TeammateStatus.RUNNING),
+        (TeammateStatus.PLANNING, TeammateStatus.WAITING_APPROVAL),
+        (TeammateStatus.PLANNING, TeammateStatus.FAILED),
+        (TeammateStatus.WAITING_APPROVAL, TeammateStatus.RUNNING),
+        (TeammateStatus.WAITING_APPROVAL, TeammateStatus.IDLE),
+        (TeammateStatus.RUNNING, TeammateStatus.REPORTING),
+        (TeammateStatus.RUNNING, TeammateStatus.FAILED),
+        (TeammateStatus.RUNNING, TeammateStatus.TIMEOUT),
+        (TeammateStatus.RUNNING, TeammateStatus.CANCELLED),
+        (TeammateStatus.REPORTING, TeammateStatus.IDLE),
+        (TeammateStatus.FAILED, TeammateStatus.IDLE),
+        (TeammateStatus.FAILED, TeammateStatus.RESTARTING),
+        (TeammateStatus.TIMEOUT, TeammateStatus.RESTARTING),
+        (TeammateStatus.CANCELLED, TeammateStatus.IDLE),
+        (TeammateStatus.RESTARTING, TeammateStatus.IDLE),
+        (TeammateStatus.SHUTTING_DOWN, TeammateStatus.SHUTDOWN),
+    ])
+    def test_legal_transition_allowed(self, frm, to):
+        assert to in _TEAMMATE_TRANSITIONS[frm]
+
+    @pytest.mark.parametrize("frm,to", [
+        (TeammateStatus.CREATED, TeammateStatus.IDLE),
+        (TeammateStatus.CREATED, TeammateStatus.RUNNING),
+        (TeammateStatus.IDLE, TeammateStatus.RUNNING),
+        (TeammateStatus.IDLE, TeammateStatus.PLANNING),
+        (TeammateStatus.RUNNING, TeammateStatus.IDLE),
+        (TeammateStatus.RUNNING, TeammateStatus.ASSIGNED),
+        (TeammateStatus.SHUTDOWN, TeammateStatus.IDLE),
+        (TeammateStatus.SHUTDOWN, TeammateStatus.SHUTTING_DOWN),
+        (TeammateStatus.IDLE, TeammateStatus.CREATED),
+        (TeammateStatus.REPORTING, TeammateStatus.RUNNING),
+    ])
+    def test_illegal_transition_blocked(self, frm, to):
+        assert to not in _TEAMMATE_TRANSITIONS[frm]
+
+    def test_shutdown_is_terminal(self):
+        assert _TEAMMATE_TRANSITIONS[TeammateStatus.SHUTDOWN] == frozenset()
+
+    def test_all_statuses_covered(self):
+        assert set(_TEAMMATE_TRANSITIONS) == set(TeammateStatus)
+
+    def test_no_self_transition(self):
+        for frm, targets in _TEAMMATE_TRANSITIONS.items():
+            assert frm not in targets
+
+
+class TestTeammateTransitionMethod:
+    """_transition 方法：校验、更新、记录。"""
+
+    def _make_rt(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        registry = ToolRegistry()
+        llm = MockLlm([single_text_turn("done")])
+        spec = TeammateSpec(name="t", role="coder", system="s", model="m")
+        return TeammateRuntime(
+            spec=spec, llm=llm, registry=registry, bus=bus, plan_store=plan_store,
+        )
+
+    def test_illegal_raises(self, tmp_path):
+        rt = self._make_rt(tmp_path)
+        with pytest.raises(TeammateStateError, match="cannot transition"):
+            rt._transition(TeammateStatus.IDLE)
+
+    def test_legal_updates_status(self, tmp_path):
+        rt = self._make_rt(tmp_path)
+        rt._transition(TeammateStatus.STARTING, reason="start")
+        assert rt.status == "starting"
+
+    def test_records_transition(self, tmp_path):
+        rt = self._make_rt(tmp_path)
+        rt._transition(TeammateStatus.STARTING, reason="start")
+        rec = rt._last_transition
+        assert rec.from_status == TeammateStatus.CREATED
+        assert rec.to_status == TeammateStatus.STARTING
+        assert rec.reason == "start"
+        assert rec.timestamp > 0
+
+    def test_info_exposes_last_transition(self, tmp_path):
+        rt = self._make_rt(tmp_path)
+        rt._transition(TeammateStatus.STARTING, reason="start")
+        info = rt.info()
+        assert info.last_transition == "created->starting (start)"
+
+    def test_safe_shutdown_graceful(self, tmp_path):
+        rt = self._make_rt(tmp_path)
+        rt._safe_shutdown()
+        assert rt.status == "shutdown"
+        assert rt._last_transition.reason == "graceful exit"
+
+    def test_safe_shutdown_forced(self, tmp_path):
+        rt = self._make_rt(tmp_path)
+        rt._force_stop = True
+        rt._safe_shutdown()
+        assert rt.status == "shutdown"
+        assert rt._last_transition.reason == "force terminated"
+
+    def test_safe_shutdown_idempotent(self, tmp_path):
+        rt = self._make_rt(tmp_path)
+        rt._safe_shutdown()
+        rt._safe_shutdown()
+        assert rt.status == "shutdown"
+
+
+class TestCurrentExecution:
+    """CurrentExecution：active 判定与 clear。"""
+
+    def test_default_inactive(self):
+        ce = CurrentExecution()
+        assert not ce.active
+        assert ce.task_id is None
+        assert ce.assignment is None
+        assert ce.work_version == 0
+
+    def test_active_with_task(self):
+        ce = CurrentExecution(task_id="t1", assignment="work")
+        assert ce.active
+
+    def test_active_with_assignment_only(self):
+        ce = CurrentExecution(assignment="work")
+        assert ce.active
+
+    def test_clear_resets_all(self):
+        ce = CurrentExecution(
+            task_id="t1", assignment="work", work_version=3, started_at=1.0,
+        )
+        ce.clear()
+        assert ce.task_id is None
+        assert ce.assignment is None
+        assert ce.work_version == 0
+        assert ce.started_at is None
+        assert not ce.active
+
+    def test_cancel_token_default_none(self):
+        ce = CurrentExecution()
+        assert ce.cancel_token is None
+
+
+class TestTeammateRecovery:
+    """P1-07: 异常退出后状态识别与 CurrentExecution 清空。"""
+
+    async def test_normal_completion_clears_current(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        registry = ToolRegistry()
+        llm = MockLlm([single_text_turn("done")])
+        spec = TeammateSpec(name="rec", role="coder", system="s", model="m")
+        rt = TeammateRuntime(
+            spec=spec, llm=llm, registry=registry, bus=bus, plan_store=plan_store,
+        )
+        await rt.start("do work")
+        await asyncio.sleep(0.3)
+        await rt.shutdown()
+        assert rt.status == "shutdown"
+        assert not rt._current.active
+
+    async def test_graceful_shutdown_via_manager(self, tmp_path):
+        mgr = _make_manager(tmp_path)
+        await mgr.spawn("w", "coder", "task")
+        await asyncio.sleep(0.3)
+        await mgr.request_shutdown("w")
+        assert mgr.list_active() == []

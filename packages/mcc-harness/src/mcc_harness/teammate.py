@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,122 @@ from .permission import PermissionChecker
 from .plan import PlanStore
 
 LEAD_NAME = "lead"
+
+
+class TeammateStatus(StrEnum):
+    CREATED = "created"
+    STARTING = "starting"
+    IDLE = "idle"
+    ASSIGNED = "assigned"
+    PLANNING = "planning"
+    WAITING_APPROVAL = "waiting_approval"
+    RUNNING = "running"
+    REPORTING = "reporting"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    RESTARTING = "restarting"
+    SHUTTING_DOWN = "shutting_down"
+    SHUTDOWN = "shutdown"
+
+
+_TEAMMATE_TRANSITIONS: dict[TeammateStatus, frozenset[TeammateStatus]] = {
+    TeammateStatus.CREATED: frozenset({
+        TeammateStatus.STARTING,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.STARTING: frozenset({
+        TeammateStatus.IDLE,
+        TeammateStatus.ASSIGNED,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.IDLE: frozenset({
+        TeammateStatus.ASSIGNED,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.ASSIGNED: frozenset({
+        TeammateStatus.PLANNING,
+        TeammateStatus.RUNNING,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.PLANNING: frozenset({
+        TeammateStatus.WAITING_APPROVAL,
+        TeammateStatus.FAILED,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.WAITING_APPROVAL: frozenset({
+        TeammateStatus.RUNNING,
+        TeammateStatus.IDLE,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.RUNNING: frozenset({
+        TeammateStatus.REPORTING,
+        TeammateStatus.FAILED,
+        TeammateStatus.TIMEOUT,
+        TeammateStatus.CANCELLED,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.REPORTING: frozenset({
+        TeammateStatus.IDLE,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.FAILED: frozenset({
+        TeammateStatus.IDLE,
+        TeammateStatus.RESTARTING,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.TIMEOUT: frozenset({
+        TeammateStatus.IDLE,
+        TeammateStatus.RESTARTING,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.CANCELLED: frozenset({
+        TeammateStatus.IDLE,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.RESTARTING: frozenset({
+        TeammateStatus.IDLE,
+        TeammateStatus.SHUTTING_DOWN,
+    }),
+    TeammateStatus.SHUTTING_DOWN: frozenset({TeammateStatus.SHUTDOWN}),
+    TeammateStatus.SHUTDOWN: frozenset(),
+}
+
+
+class TeammateStateError(RuntimeError):
+    """teammate 状态迁移非法。"""
+
+
+@dataclass
+class TransitionRecord:
+    """单次状态迁移记录：来源、目标、原因与时间戳。"""
+
+    from_status: TeammateStatus
+    to_status: TeammateStatus
+    reason: str
+    timestamp: float
+
+
+@dataclass
+class CurrentExecution:
+    """当前执行上下文：任务终态后必须清空。"""
+
+    task_id: str | None = None
+    assignment: str | None = None
+    work_version: int = 0
+    started_at: float | None = None
+    cancel_token: asyncio.Event | None = None
+
+    def clear(self) -> None:
+        self.task_id = None
+        self.assignment = None
+        self.work_version = 0
+        self.started_at = None
+        self.cancel_token = None
+
+    @property
+    def active(self) -> bool:
+        return self.task_id is not None or self.assignment is not None
 
 
 @dataclass
@@ -51,6 +169,7 @@ class TeammateInfo:
     status: str
     task_id: str | None = None
     worktree: str | None = None
+    last_transition: str | None = None
 
 
 class TeammateRuntime:
@@ -90,11 +209,11 @@ class TeammateRuntime:
         self._task: asyncio.Task[None] | None = None
         self._shutdown_evt = asyncio.Event()
         self._wake = asyncio.Event()
-        self._assignment: str | None = None
-        self._task_id: str | None = None
-        self._work_version = 0
+        self._current = CurrentExecution()
         self._worktree: Path | None = None
-        self._status = "idle"
+        self._status = TeammateStatus.CREATED
+        self._last_transition: TransitionRecord | None = None
+        self._force_stop = False
 
     @property
     def name(self) -> str:
@@ -102,18 +221,48 @@ class TeammateRuntime:
 
     @property
     def status(self) -> str:
-        return self._status
+        return self._status.value
 
     @property
     def alive(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def _transition(self, target: TeammateStatus, reason: str = "") -> None:
+        current = self._status
+        allowed = _TEAMMATE_TRANSITIONS.get(current, frozenset())
+        if target not in allowed:
+            raise TeammateStateError(
+                f"teammate {self.name} cannot transition from "
+                f"{current.value} to {target.value}"
+            )
+        self._status = target
+        self._last_transition = TransitionRecord(
+            from_status=current,
+            to_status=target,
+            reason=reason,
+            timestamp=time.monotonic(),
+        )
+
+    def _safe_shutdown(self, reason: str = "") -> None:
+        if self._status == TeammateStatus.SHUTDOWN:
+            return
+        if self._status != TeammateStatus.SHUTTING_DOWN:
+            self._transition(
+                TeammateStatus.SHUTTING_DOWN,
+                reason=reason or ("force stop" if self._force_stop else "graceful"),
+            )
+        self._transition(
+            TeammateStatus.SHUTDOWN,
+            reason="force terminated" if self._force_stop else "graceful exit",
+        )
+
     async def start(self, initial_prompt: str, task_id: str | None = None) -> None:
         """启动 teammate 后台任务。"""
-        self._assignment = initial_prompt
-        self._task_id = task_id
-        self._work_version = 0
-        self._status = "working"
+        self._transition(TeammateStatus.STARTING, reason="start")
+        self._current.assignment = initial_prompt
+        self._current.task_id = task_id
+        self._current.work_version = 0
+        self._current.started_at = time.monotonic()
         self._task = asyncio.create_task(self._run_loop())
 
     def notify(self) -> None:
@@ -122,6 +271,13 @@ class TeammateRuntime:
 
     async def _run_loop(self) -> None:
         try:
+            if self._current.assignment:
+                self._transition(
+                    TeammateStatus.ASSIGNED, reason="initial assignment"
+                )
+            else:
+                self._transition(TeammateStatus.IDLE, reason="no initial work")
+
             while not self._shutdown_evt.is_set():
                 self._wake.clear()
 
@@ -132,16 +288,20 @@ class TeammateRuntime:
                 if self._shutdown_evt.is_set():
                     break
 
-                if self._assignment:
-                    self._status = "working"
+                if self._current.assignment:
+                    if self._status == TeammateStatus.IDLE:
+                        self._transition(
+                            TeammateStatus.ASSIGNED, reason="assignment ready"
+                        )
                     await self._do_work()
-                    self._assignment = None
+                    self._current.assignment = None
                     continue
 
-                self._status = "idle"
                 if self._try_claim_task():
                     continue
 
+                if self._status != TeammateStatus.IDLE:
+                    self._transition(TeammateStatus.IDLE, reason="idle")
                 await self._wake.wait()
         except Exception as e:
             await self._bus.send(
@@ -150,67 +310,87 @@ class TeammateRuntime:
                 kind="error",
             )
         finally:
-            self._status = "shutdown"
+            self._safe_shutdown(reason="loop exit")
 
     def _handle_messages(self, inbox: list) -> None:
         for msg in inbox:
             if msg.kind == "shutdown":
                 self._shutdown_evt.set()
             elif msg.kind == "assignment":
-                self._assignment = msg.content
+                self._current.assignment = msg.content
                 tid = msg.meta.get("task_id")
                 if tid:
-                    self._task_id = tid
-                self._work_version += 1
+                    self._current.task_id = tid
+                self._current.work_version += 1
             elif msg.kind == "plan_approval_response":
                 pass
             else:
-                self._assignment = msg.content
-                self._work_version += 1
+                self._current.assignment = msg.content
+                self._current.work_version += 1
 
     async def _do_work(self) -> None:
         if self.spec.require_plan:
+            self._transition(TeammateStatus.PLANNING, reason="require_plan")
             approved = await self._submit_and_wait_plan()
             if not approved:
+                self._transition(TeammateStatus.IDLE, reason="plan rejected")
+                self._current.clear()
                 return
+            self._transition(TeammateStatus.RUNNING, reason="plan approved")
+        else:
+            self._transition(TeammateStatus.RUNNING, reason="start work")
 
         cwd = self._prepare_worktree()
 
         agent = self._build_agent(cwd)
+        outcome: TeammateStatus
         try:
             run = await asyncio.wait_for(
-                agent.run(self._assignment), timeout=self.spec.timeout_secs
+                agent.run(self._current.assignment), timeout=self.spec.timeout_secs
             )
             summary = run.final_text or "(no output)"
+            outcome = TeammateStatus.REPORTING
         except TimeoutError:
             summary = f"teammate timed out after {self.spec.timeout_secs:.0f}s"
+            outcome = TeammateStatus.TIMEOUT
         except Exception as e:
             summary = f"teammate error: {type(e).__name__}: {e}"
+            outcome = TeammateStatus.FAILED
+
+        self._transition(outcome, reason=f"agent {outcome.value}")
 
         await self._bus.send(
             self.name, self._lead_name, summary,
             kind="work_done",
-            meta={"task_id": self._task_id} if self._task_id else {},
+            meta={"task_id": self._current.task_id} if self._current.task_id else {},
         )
 
-        if self._task_id and self._task_store:
+        if self._current.task_id and self._task_store:
             with contextlib.suppress(Exception):
-                self._task_store.complete(self._task_id, owner=self.name)
+                self._task_store.complete(self._current.task_id, owner=self.name)
 
         self._cleanup_worktree()
+
+        self._transition(
+            TeammateStatus.IDLE, reason=f"recover from {outcome.value}"
+        )
+        self._current.clear()
 
     async def _submit_and_wait_plan(self) -> bool:
         plan_req = await self._plan_store.create(
             sender=self.name,
-            plan=self._assignment or "",
-            task_id=self._task_id,
-            work_version=self._work_version,
+            plan=self._current.assignment or "",
+            task_id=self._current.task_id,
+            work_version=self._current.work_version,
         )
         await self._bus.send(
             self.name, self._lead_name,
-            f"Plan submitted for review:\n{self._assignment}",
+            f"Plan submitted for review:\n{self._current.assignment}",
             kind="plan_submitted",
             meta={"request_id": plan_req.request_id},
+        )
+        self._transition(
+            TeammateStatus.WAITING_APPROVAL, reason="plan submitted"
         )
         reviewed = await self._plan_store.wait_for_review(plan_req.request_id)
         if reviewed.status == "rejected":
@@ -223,13 +403,13 @@ class TeammateRuntime:
         return True
 
     def _prepare_worktree(self) -> Path | None:
-        if not self._worktree_enabled or not self._base_dir or not self._task_id:
+        if not self._worktree_enabled or not self._base_dir or not self._current.task_id:
             return None
         from .worktree import WorktreeError, create_worktree
 
-        wt_name = f"{self.name}_{self._work_version}"
+        wt_name = f"{self.name}_{self._current.work_version}"
         try:
-            wt = create_worktree(wt_name, self._task_id, self._base_dir)
+            wt = create_worktree(wt_name, self._current.task_id, self._base_dir)
             self._worktree = wt
             return wt
         except WorktreeError:
@@ -240,7 +420,7 @@ class TeammateRuntime:
             return
         from .worktree import remove_worktree
 
-        wt_name = f"{self.name}_{self._work_version}"
+        wt_name = f"{self.name}_{self._current.work_version}"
         with contextlib.suppress(Exception):
             remove_worktree(wt_name, self._base_dir)
         self._worktree = None
@@ -298,9 +478,10 @@ class TeammateRuntime:
                 continue
             with contextlib.suppress(Exception):
                 self._task_store.claim(t.id, owner=self.name)
-                self._assignment = t.description or t.subject
-                self._task_id = t.id
-                self._work_version += 1
+                self._current.assignment = t.description or t.subject
+                self._current.task_id = t.id
+                self._current.work_version += 1
+                self._current.started_at = time.monotonic()
                 return True
         return False
 
@@ -312,16 +493,25 @@ class TeammateRuntime:
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
             except TimeoutError:
+                self._force_stop = True
                 self._task.cancel()
                 await asyncio.gather(self._task, return_exceptions=True)
 
     def info(self) -> TeammateInfo:
+        last = None
+        if self._last_transition is not None:
+            last = (
+                f"{self._last_transition.from_status.value}"
+                f"->{self._last_transition.to_status.value}"
+                f" ({self._last_transition.reason})"
+            )
         return TeammateInfo(
             name=self.name,
             role=self.spec.role,
-            status=self._status,
-            task_id=self._task_id,
+            status=self._status.value,
+            task_id=self._current.task_id,
             worktree=str(self._worktree) if self._worktree else None,
+            last_transition=last,
         )
 
 
@@ -814,6 +1004,7 @@ def register_team_tools(registry: ToolRegistry, manager: TeammateManager) -> Non
 
 __all__ = [
     "CreateWorktreeTool",
+    "CurrentExecution",
     "LEAD_NAME",
     "ListTeammatesTool",
     "MessageBus",
@@ -828,6 +1019,9 @@ __all__ = [
     "TeammateManager",
     "TeammateRuntime",
     "TeammateSpec",
+    "TeammateStateError",
+    "TeammateStatus",
+    "TransitionRecord",
     "format_team_events",
     "register_team_tools",
 ]

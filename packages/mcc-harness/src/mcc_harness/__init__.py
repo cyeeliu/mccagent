@@ -111,6 +111,7 @@ from mcc_harness.subagent import (
 )
 from mcc_harness.teammate import (
     CreateWorktreeTool,
+    CurrentExecution,
     ListTeammatesTool,
     RequestShutdownTool,
     ReviewPlanTool,
@@ -122,6 +123,9 @@ from mcc_harness.teammate import (
     TeammateManager,
     TeammateRuntime,
     TeammateSpec,
+    TeammateStateError,
+    TeammateStatus,
+    TransitionRecord,
     format_team_events,
     register_team_tools,
 )
@@ -176,6 +180,7 @@ __all__ = [
     "cache_hit_rate",
     "context_window",
     "CreateWorktreeTool",
+    "CurrentExecution",
     "FlakyProvider",
     "GoalController",
     "GoalError",
@@ -236,6 +241,9 @@ __all__ = [
     "TeammateRuntime",
     "ThrottledLlm",
     "TeammateSpec",
+    "TeammateStateError",
+    "TeammateStatus",
+    "TransitionRecord",
     "TurnTimeoutInterceptor",
     "WorktreeError",
     "MISS",
