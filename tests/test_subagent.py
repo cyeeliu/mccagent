@@ -9,13 +9,24 @@ from pathlib import Path
 import pytest
 from mcc_config import PermissionConfig
 from mcc_core import ToolContext, Usage
-from mcc_core.event import TextDelta, ToolCallEnd, ToolCallStart
+from mcc_core.event import (
+    PermissionDecision,
+    TextDelta,
+    ToolCallEnd,
+    ToolCallStart,
+)
+from mcc_core.event import (
+    PermissionRequest as PermissionRequestEvent,
+)
 from mcc_harness import (
     AgentLoopBuilder,
     Allow,
     Deny,
     HookRegistry,
     HookType,
+    PermissionAuditEntry,
+    PermissionChannel,
+    PermissionChannelRequest,
     PermissionChecker,
     SpawnSubagentTool,
     SubagentRunner,
@@ -767,3 +778,308 @@ class TestFanOutE2E:
 
         text = "".join(e.text for e in events if isinstance(e, TextDelta))
         assert text == "architecture overview"
+
+
+# ---------- 权限审批通道 ----------
+
+
+def _write_turn(path: str = "out.txt", content: str = "x"):
+    """构造一个 write_file 工具调用轮次。"""
+    return [
+        ToolUseStart(id="w1", name="write_file"),
+        ToolUseInputDelta(
+            partial_json=json.dumps({"path": path, "content": content})
+        ),
+        MessageStop(stop_reason="tool_use", usage=Usage(input_tokens=10, output_tokens=5)),
+    ]
+
+
+class TestPermissionChannel:
+    """PermissionChannel 单元测试。"""
+
+    async def test_auto_allow_skips_pending(self):
+        """委托范围内的请求自动允许，不进入 pending。"""
+        ch = PermissionChannel("a1", auto_allow=frozenset({"Write"}))
+        ev = PermissionRequestEvent(
+            id=42, message="write_file: confirmation required",
+            tool_name="write_file",
+            tool_input={"path": "x.txt", "content": "y"},
+        )
+        await ch.handle_event(ev)
+        assert ch.pending.empty()
+        decision = await asyncio.wait_for(ch.response_queue.get(), timeout=1)
+        assert decision.request_id == 42
+        assert decision.action == "allow"
+        audit = ch.audit_log()
+        assert len(audit) == 1
+        assert audit[0].decision == "auto_allow"
+        assert audit[0].category == "Write"
+
+    async def test_non_auto_allow_goes_to_pending(self):
+        """委托范围外的请求进入 pending 等外部响应。"""
+        ch = PermissionChannel("a1", auto_allow=frozenset({"Read"}))
+        ev = PermissionRequestEvent(
+            id=99, message="write_file: confirmation required",
+            tool_name="write_file",
+            tool_input={"path": "x.txt", "content": "y"},
+        )
+        await ch.handle_event(ev)
+        assert not ch.pending.empty()
+        req = await ch.pending.get()
+        assert req.request_id == 99
+        assert req.category == "Write"
+        assert req.tool_name == "write_file"
+        assert ch.response_queue.empty()
+
+    async def test_respond_puts_decision(self):
+        """外部 respond() 把决策放入 response_queue。"""
+        ch = PermissionChannel("a1")
+        await ch.respond(PermissionDecision(request_id=7, action="allow"))
+        decision = await asyncio.wait_for(ch.response_queue.get(), timeout=1)
+        assert decision.request_id == 7
+        assert decision.action == "allow"
+        audit = ch.audit_log()
+        assert len(audit) == 1
+        assert audit[0].decision == "allow"
+
+    async def test_audit_records_multiple(self):
+        """多次决策都记入审计。"""
+        ch = PermissionChannel("a1", auto_allow=frozenset({"Read"}))
+        ev1 = PermissionRequestEvent(
+            id=1, message="r", tool_name="read_file", tool_input={"path": "a"}
+        )
+        await ch.handle_event(ev1)
+        await ch.respond(PermissionDecision(request_id=2, action="deny"))
+        audit = ch.audit_log()
+        assert len(audit) == 2
+        assert audit[0].decision == "auto_allow"
+        assert audit[1].decision == "deny"
+
+
+class TestSubagentPermissionChannel:
+    """子代理权限审批通道集成测试。"""
+
+    async def test_auto_allow_write_executes(
+        self, registry, ctx, tmp_path
+    ):
+        """auto_allow={"Write"} 时子代理的 write_file 自动允许。"""
+        spec = SubagentSpec(
+            name="writer", system="s", model="claude-haiku-4-5",
+            tools=["write_file"], max_iterations=2, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            _write_turn(str(tmp_path / "out.txt"), "hello"),
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            permission_auto_allow=frozenset({"Write"}),
+            permission_timeout_secs=5,
+        )
+        result = await runner.run(spec, "write file", ctx)
+        assert result.status == SubagentStatus.COMPLETED
+        assert result.summary == "done"
+        audit = result.permission_audit
+        assert any(e.decision == "auto_allow" and e.category == "Write" for e in audit)
+
+    async def test_no_channel_denies_write(self, registry, ctx, tmp_path):
+        """无 auto_allow 且无外部响应时 write_file 超时拒绝。"""
+        spec = SubagentSpec(
+            name="writer", system="s", model="claude-haiku-4-5",
+            tools=["write_file"], max_iterations=2, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            _write_turn(str(tmp_path / "out.txt"), "hello"),
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            permission_auto_allow=frozenset(),
+            permission_timeout_secs=0.3,
+        )
+        result = await runner.run(spec, "write file", ctx)
+        assert result.status == SubagentStatus.COMPLETED
+        assert not (tmp_path / "out.txt").exists()
+
+    async def test_external_allow_via_channel(self, registry, ctx, tmp_path):
+        """外部通过 channel.respond() 允许子代理的 write_file。"""
+        spec = SubagentSpec(
+            name="writer", system="s", model="claude-haiku-4-5",
+            tools=["write_file"], max_iterations=2, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            _write_turn(str(tmp_path / "out.txt"), "hello"),
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            permission_timeout_secs=5,
+        )
+        channel = PermissionChannel("test-agent", timeout_secs=5)
+
+        async def responder():
+            req = await asyncio.wait_for(channel.pending.get(), timeout=5)
+            await channel.respond(
+                PermissionDecision(request_id=req.request_id, action="allow")
+            )
+
+        resp_task = asyncio.create_task(responder())
+        result = await runner.run(spec, "write file", ctx, channel=channel)
+        await resp_task
+        assert result.status == SubagentStatus.COMPLETED
+        assert result.summary == "done"
+
+    async def test_external_deny_via_channel(self, registry, ctx, tmp_path):
+        """外部通过 channel.respond() 拒绝子代理的 write_file。"""
+        spec = SubagentSpec(
+            name="writer", system="s", model="claude-haiku-4-5",
+            tools=["write_file"], max_iterations=2, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            _write_turn(str(tmp_path / "out.txt"), "hello"),
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            permission_timeout_secs=5,
+        )
+        channel = PermissionChannel("test-agent", timeout_secs=5)
+
+        async def responder():
+            req = await asyncio.wait_for(channel.pending.get(), timeout=5)
+            await channel.respond(
+                PermissionDecision(request_id=req.request_id, action="deny")
+            )
+
+        resp_task = asyncio.create_task(responder())
+        result = await runner.run(spec, "write file", ctx, channel=channel)
+        await resp_task
+        assert result.status == SubagentStatus.COMPLETED
+        assert not (tmp_path / "out.txt").exists()
+
+    async def test_permission_timeout_default_deny(
+        self, registry, ctx, tmp_path
+    ):
+        """审批超时后默认拒绝。"""
+        spec = SubagentSpec(
+            name="writer", system="s", model="claude-haiku-4-5",
+            tools=["write_file"], max_iterations=2, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            _write_turn(str(tmp_path / "out.txt"), "hello"),
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            permission_timeout_secs=0.3,
+        )
+        channel = PermissionChannel("test-agent", timeout_secs=0.3)
+        result = await runner.run(spec, "write file", ctx, channel=channel)
+        assert result.status == SubagentStatus.COMPLETED
+        assert not (tmp_path / "out.txt").exists()
+
+    async def test_concurrent_channels_no_cross_talk(
+        self, registry, ctx, tmp_path
+    ):
+        """两个并发子代理的权限请求互不串线。"""
+        spec = SubagentSpec(
+            name="writer", system="s", model="claude-haiku-4-5",
+            tools=["write_file"], max_iterations=2, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm1 = MockLlm([
+            _write_turn(str(tmp_path / "a.txt"), "a"),
+            single_text_turn("a-done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        llm2 = MockLlm([
+            _write_turn(str(tmp_path / "b.txt"), "b"),
+            single_text_turn("b-done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        ch1 = PermissionChannel("agent-1", auto_allow=frozenset({"Write"}))
+        ch2 = PermissionChannel("agent-2", auto_allow=frozenset({"Write"}))
+
+        runner1 = SubagentRunner(
+            llm1, registry,
+            permission=PermissionChecker(PermissionConfig()),
+        )
+        runner2 = SubagentRunner(
+            llm2, registry,
+            permission=PermissionChecker(PermissionConfig()),
+        )
+        r1, r2 = await asyncio.gather(
+            runner1.run(spec, "write a", ctx, channel=ch1),
+            runner2.run(spec, "write b", ctx, channel=ch2),
+        )
+        assert r1.status == SubagentStatus.COMPLETED
+        assert r2.status == SubagentStatus.COMPLETED
+        assert r1.summary == "a-done"
+        assert r2.summary == "b-done"
+        a1 = ch1.audit_log()
+        a2 = ch2.audit_log()
+        assert all(e.agent_id == "agent-1" for e in a1)
+        assert all(e.agent_id == "agent-2" for e in a2)
+        assert len(a1) >= 1
+        assert len(a2) >= 1
+
+    async def test_audit_in_result(self, registry, ctx, tmp_path):
+        """SubagentResult 携带权限审计日志。"""
+        spec = SubagentSpec(
+            name="writer", system="s", model="claude-haiku-4-5",
+            tools=["write_file"], max_iterations=2, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        llm = MockLlm([
+            _write_turn(str(tmp_path / "out.txt"), "hello"),
+            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            permission_auto_allow=frozenset({"Write"}),
+        )
+        result = await runner.run(spec, "write file", ctx)
+        assert len(result.permission_audit) >= 1
+        entry = result.permission_audit[0]
+        assert isinstance(entry, PermissionAuditEntry)
+        assert entry.decision == "auto_allow"
+        assert entry.category == "Write"
+
+    async def test_read_auto_allowed_by_default(
+        self, registry, ctx, tmp_path
+    ):
+        """Read 类别在 PermissionChecker 中默认 Allow，不触发通道。"""
+        spec = SubagentSpec(
+            name="reader", system="s", model="claude-haiku-4-5",
+            tools=["read_file", "list_dir", "grep"],
+            max_iterations=2, max_tokens=256,
+            budget_tokens=10_000, timeout_secs=10,
+        )
+        turn1 = [
+            ToolUseStart(id="r1", name="read_file"),
+            ToolUseInputDelta(
+                partial_json=json.dumps({"path": str(tmp_path / "x.txt")})
+            ),
+            MessageStop(stop_reason="tool_use", usage=Usage(input_tokens=10, output_tokens=5)),
+        ]
+        llm = MockLlm([
+            turn1,
+            single_text_turn("read-done", Usage(input_tokens=5, output_tokens=3)),
+        ])
+        runner = SubagentRunner(
+            llm, registry,
+            permission=PermissionChecker(PermissionConfig()),
+            permission_timeout_secs=5,
+        )
+        result = await runner.run(spec, "read file", ctx)
+        assert result.status == SubagentStatus.COMPLETED
+        assert result.permission_audit == []

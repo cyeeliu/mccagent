@@ -15,12 +15,127 @@ from enum import StrEnum
 from typing import Any
 
 from mcc_core import ToolContext, ToolOutput, Usage
+from mcc_core.event import PermissionDecision
+from mcc_core.event import PermissionRequest as PermissionRequestEvent
 from mcc_llm import LlmProvider
 from mcc_tools import ToolRegistry
 
-from .agent import AgentLoop, model_price_per_1m
+from .agent import AgentLoop, model_price_per_1m, permission_request_for
 from .hooks import HookContext, HookRegistry, HookType
 from .permission import PermissionChecker
+
+
+@dataclass
+class PermissionChannelRequest:
+    """通道中的权限请求，供外部消费后响应。"""
+
+    request_id: int
+    agent_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    category: str
+    message: str
+
+
+@dataclass
+class PermissionAuditEntry:
+    """权限审批审计记录。"""
+
+    agent_id: str
+    tool_name: str
+    category: str
+    decision: str
+    reason: str = ""
+    timestamp: float = 0.0
+
+
+class PermissionChannel:
+    """权限审批通道：子代理 ↔ 外部决策者。
+
+    子代理运行时遇到 Ask 权限决策，通过通道发出请求。
+    外部（父代理 / TUI）通过 respond() 响应。
+
+    委托权限范围（auto_allow）内的请求自动允许，不阻塞等待；
+    范围外的高风险操作转发到 pending 队列等外部响应。
+    超时默认拒绝。所有决策记入审计日志。
+    每个通道绑定唯一 agent_id，多个并发子代理互不串线。
+    """
+
+    def __init__(
+        self,
+        agent_id: str,
+        *,
+        auto_allow: frozenset[str] = frozenset(),
+        timeout_secs: float = 30.0,
+    ) -> None:
+        self.agent_id = agent_id
+        self._auto_allow = auto_allow
+        self._timeout_secs = timeout_secs
+        self._responses: asyncio.Queue[PermissionDecision] = asyncio.Queue()
+        self._pending: asyncio.Queue[PermissionChannelRequest] = asyncio.Queue()
+        self._audit: list[PermissionAuditEntry] = []
+
+    @property
+    def response_queue(self) -> asyncio.Queue[PermissionDecision]:
+        """传给 AgentLoop 的 permission_responses 队列。"""
+        return self._responses
+
+    @property
+    def pending(self) -> asyncio.Queue[PermissionChannelRequest]:
+        """外部消费的待处理请求队列。"""
+        return self._pending
+
+    @property
+    def timeout_secs(self) -> float:
+        return self._timeout_secs
+
+    async def handle_event(self, ev: PermissionRequestEvent) -> None:
+        """处理从子代理 tx 队列提取的权限请求事件。
+
+        委托范围内自动允许并记审计；否则转发到 pending 等外部响应。
+        """
+        preq = permission_request_for(ev.tool_name, ev.tool_input)
+        if preq.category in self._auto_allow:
+            self._audit.append(
+                PermissionAuditEntry(
+                    agent_id=self.agent_id,
+                    tool_name=ev.tool_name,
+                    category=preq.category,
+                    decision="auto_allow",
+                    timestamp=time.time(),
+                )
+            )
+            await self._responses.put(
+                PermissionDecision(request_id=ev.id, action="allow")
+            )
+        else:
+            await self._pending.put(
+                PermissionChannelRequest(
+                    request_id=ev.id,
+                    agent_id=self.agent_id,
+                    tool_name=ev.tool_name,
+                    tool_input=ev.tool_input,
+                    category=preq.category,
+                    message=ev.message,
+                )
+            )
+
+    async def respond(self, decision: PermissionDecision) -> None:
+        """外部响应权限请求，记入审计。"""
+        self._audit.append(
+            PermissionAuditEntry(
+                agent_id=self.agent_id,
+                tool_name="",
+                category="",
+                decision=decision.action,
+                timestamp=time.time(),
+            )
+        )
+        await self._responses.put(decision)
+
+    def audit_log(self) -> list[PermissionAuditEntry]:
+        """返回审计记录副本。"""
+        return list(self._audit)
 
 
 @dataclass
@@ -70,6 +185,7 @@ class SubagentResult:
     started_at: float = 0.0
     finished_at: float = 0.0
     partial_result: str | None = None
+    permission_audit: list[PermissionAuditEntry] = field(default_factory=list)
 
 
 def token_budget_to_usd(budget_tokens: int, model: str) -> float:
@@ -163,6 +279,8 @@ class SubagentRunner:
         concurrency: int = 4,
         hooks: HookRegistry | None = None,
         permission: PermissionChecker | None = None,
+        permission_auto_allow: frozenset[str] = frozenset(),
+        permission_timeout_secs: float = 30.0,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -170,9 +288,16 @@ class SubagentRunner:
         self._semaphore = asyncio.Semaphore(concurrency)
         self.hooks = hooks
         self.permission = permission
+        self._permission_auto_allow = permission_auto_allow
+        self._permission_timeout_secs = permission_timeout_secs
 
     async def run(
-        self, spec: SubagentSpec, task: str, parent: ToolContext
+        self,
+        spec: SubagentSpec,
+        task: str,
+        parent: ToolContext,
+        *,
+        channel: PermissionChannel | None = None,
     ) -> SubagentResult:
         """执行一个子代理：隔离上下文 + 超时 + 预算护栏。
 
@@ -180,6 +305,10 @@ class SubagentRunner:
         统一出口，保证 ON_SUBAGENT_STOP Hook 在每条路径触发且只触发一次。
         CancelledError 不在此捕获（BaseException），Hook 经 finally 触发
         后取消信号继续向上传播。
+
+        权限审批通过 PermissionChannel 处理：委托范围内自动允许，
+        范围外转发到通道 pending 队列等外部响应，超时默认拒绝。
+        外部可传入预创建的 channel 以便在运行期间响应审批请求。
         """
         async with self._semaphore:
             ctx = ToolContext(
@@ -187,6 +316,14 @@ class SubagentRunner:
                 session_id=f"{parent.session_id}::{spec.name}",
                 depth=parent.depth + 1,
             )
+
+            if channel is None:
+                channel = PermissionChannel(
+                    agent_id=ctx.session_id,
+                    auto_allow=self._permission_auto_allow,
+                    timeout_secs=self._permission_timeout_secs,
+                )
+
             agent = AgentLoop(
                 llm=self.llm,
                 registry=self.registry.subset(spec.tools),
@@ -199,7 +336,20 @@ class SubagentRunner:
                 permission=self.permission,
                 max_cost_usd=token_budget_to_usd(spec.budget_tokens, spec.model),
                 hooks=self.hooks,
+                permission_responses=channel.response_queue,
+                permission_timeout_secs=self._permission_timeout_secs,
             )
+
+            tx: asyncio.Queue = asyncio.Queue()
+
+            async def pump_permission_events() -> None:
+                """从子代理事件队列提取权限请求，通过通道处理。"""
+                while True:
+                    ev = await tx.get()
+                    if isinstance(ev, PermissionRequestEvent):
+                        await channel.handle_event(ev)
+
+            pump_task = asyncio.create_task(pump_permission_events())
 
             started_at = time.monotonic()
             status = SubagentStatus.RUNNING
@@ -211,7 +361,7 @@ class SubagentRunner:
 
             try:
                 run = await asyncio.wait_for(
-                    agent.run(task), timeout=spec.timeout_secs
+                    agent.run_streaming(task, tx), timeout=spec.timeout_secs
                 )
                 status = SubagentStatus.COMPLETED
                 summary = run.final_text
@@ -236,6 +386,9 @@ class SubagentRunner:
                 summary = f"subagent failed: {err_str}"
                 error = err_str
             finally:
+                pump_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await pump_task
                 finished_at = time.monotonic()
                 if self.hooks:
                     with contextlib.suppress(Exception):
@@ -261,6 +414,7 @@ class SubagentRunner:
                 error=error,
                 started_at=started_at,
                 finished_at=finished_at,
+                permission_audit=channel.audit_log(),
             )
 
 
@@ -347,6 +501,9 @@ __all__ = [
     "CODE_EXPLORER_SYSTEM",
     "SUMMARIZER_SYSTEM",
     "TEST_RUNNER_SYSTEM",
+    "PermissionAuditEntry",
+    "PermissionChannel",
+    "PermissionChannelRequest",
     "SpawnSubagentTool",
     "SubagentResult",
     "SubagentRunner",

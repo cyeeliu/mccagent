@@ -102,6 +102,9 @@ from mcc_harness.security import (
     wrap_untrusted,
 )
 from mcc_harness.subagent import (
+    PermissionAuditEntry,
+    PermissionChannel,
+    PermissionChannelRequest,
     SpawnSubagentTool,
     SubagentResult,
     SubagentRunner,
@@ -217,6 +220,9 @@ __all__ = [
     "MessageBus",
     "ObservabilityInterceptor",
     "PathAction",
+    "PermissionAuditEntry",
+    "PermissionChannel",
+    "PermissionChannelRequest",
     "PermissionChecker",
     "PermissionRequest",
     "PlanError",
