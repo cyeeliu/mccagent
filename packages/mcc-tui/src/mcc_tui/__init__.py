@@ -16,7 +16,7 @@ from rich.live import Live
 
 from mcc_tui.app import App
 from mcc_tui.keys import Key, KeyReader
-from mcc_tui.render import build_renderable
+from mcc_tui.render import _COMP_MAX_ROWS, build_renderable
 
 
 @dataclass
@@ -192,17 +192,26 @@ def _send_decision(
 
 
 def _handle_selection_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
-    """/resume 等选择浮层：↑↓ 移动、Enter 确认、Esc 取消。"""
+    """/resume 等选择浮层：↑↓ 移动、PgUp/PgDn 翻页、Home/End 首尾、Enter 确认、Esc 取消。"""
     req = app.pending_selection
     if req is None:
         return False
     n = len(req.options)
     if n == 0:
         return False
+    visible = min(_COMP_MAX_ROWS, n)
     if key == Key.up:
         app.sel_index = (app.sel_index - 1) % n
     elif key == Key.down:
         app.sel_index = (app.sel_index + 1) % n
+    elif key == Key.page_up:
+        app.sel_index = max(0, app.sel_index - visible)
+    elif key == Key.page_down:
+        app.sel_index = min(n - 1, app.sel_index + visible)
+    elif key == Key.home:
+        app.sel_index = 0
+    elif key == Key.end:
+        app.sel_index = n - 1
     elif key == Key.enter:
         value = req.options[app.sel_index].value
         if handles.selection_tx is not None:
@@ -211,6 +220,8 @@ def _handle_selection_key(app: App, handles: TuiHandles, key: Key | str) -> bool
             )
         app.pending_selection = None
         app.sel_index = 0
+        app.sel_scroll = 0
+        return False
     elif key == Key.escape:
         if handles.selection_tx is not None:
             handles.selection_tx.put_nowait(
@@ -218,6 +229,13 @@ def _handle_selection_key(app: App, handles: TuiHandles, key: Key | str) -> bool
             )
         app.pending_selection = None
         app.sel_index = 0
+        app.sel_scroll = 0
+        return False
+
+    if app.sel_index < app.sel_scroll:
+        app.sel_scroll = app.sel_index
+    elif app.sel_index >= app.sel_scroll + visible:
+        app.sel_scroll = app.sel_index - visible + 1
     return False
 
 

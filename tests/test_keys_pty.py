@@ -75,3 +75,35 @@ def test_pure_escape_returns_escape(pty_pair):
 def test_single_byte_keys(pty_pair, seq, expected):
     result = asyncio.run(_read_one(pty_pair, seq))
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "utf8_bytes"),
+    [
+        ("你", "\u4f60".encode("utf-8")),
+        ("好", "\u597d".encode("utf-8")),
+        ("中", "\u4e2d".encode("utf-8")),
+        ("😀", "\U0001f600".encode("utf-8")),
+    ],
+    ids=["ni", "hao", "zhong", "emoji"],
+)
+def test_utf8_multibyte_char(pty_pair, text, utf8_bytes):
+    """中文/emoji 等 UTF-8 多字节字符经 KeyReader 读取为完整 Unicode 字符。"""
+    result = asyncio.run(_read_one(pty_pair, utf8_bytes))
+    assert result == text
+
+
+def test_utf8_mixed_with_ascii(pty_pair):
+    """中英文混合输入：每个字符独立读取，中文不拆字节。"""
+
+    async def _run():
+        master_fd, slave_stream = pty_pair
+        with KeyReader(stream=slave_stream) as reader:
+            os.write(master_fd, "a你b".encode())
+            await asyncio.sleep(0.05)
+            k1, _ = await reader.read_key()
+            k2, _ = await reader.read_key()
+            k3, _ = await reader.read_key()
+        return k1, k2, k3
+
+    assert asyncio.run(_run()) == ("a", "你", "b")

@@ -44,19 +44,33 @@ def _render_item(item: RenderItem) -> Text:
         for line in item.text.splitlines() or [""]:
             text.append(f"  {line}\n")
     elif item.kind == "tool_call":
-        icon, color = {
-            CallStatus.running: ("▶", "yellow"),
-            CallStatus.done: ("✓", "green"),
-            CallStatus.failed: ("✗", "red"),
-        }[item.status]
-        text.append(f" {icon} ", style=color)
-        text.append(item.name, style="bold")
-        text.append(f"({_truncate(item.args_preview, 80)})")
+        if item.agent_name:
+            icon = "✗" if item.status == CallStatus.failed else "◇"
+            color = "red" if item.status == CallStatus.failed else "cyan"
+            text.append(f" {icon} ", style=color)
+            text.append(item.agent_name, style="bold cyan")
+        else:
+            icon, color = {
+                CallStatus.running: ("▶", "yellow"),
+                CallStatus.done: ("✓", "green"),
+                CallStatus.failed: ("✗", "red"),
+            }[item.status]
+            text.append(f" {icon} ", style=color)
+            text.append(item.name, style="bold")
+            text.append(f"({_truncate(item.args_preview, 80)})")
     elif item.kind == "tool_result":
-        style = "red" if item.is_error else "dim"
-        lines = item.output.splitlines()[:8] or [""]
-        for line in lines:
-            text.append(f"    {line}\n", style=style)
+        if item.agent_name:
+            style = "red" if item.is_error else "cyan"
+            lines = item.output.splitlines()[:8] or [""]
+            for line in lines:
+                if line.startswith("[subagent="):
+                    continue
+                text.append(f"  {line}\n", style=style)
+        else:
+            style = "red" if item.is_error else "dim"
+            lines = item.output.splitlines()[:8] or [""]
+            for line in lines:
+                text.append(f"    {line}\n", style=style)
     elif item.kind == "notice":
         text.append(f"· {item.text}", style="blue")
     elif item.kind == "turn_stats":
@@ -152,14 +166,33 @@ def _completion_panel(app: App) -> Panel | None:
 
 
 def _selection_panel(app: App) -> Panel | None:
-    """/resume 等选择浮层：候选列表，高亮行反色。"""
+    """/resume 等选择浮层：候选列表滑动窗口，高亮行反色。
+
+    当选项超出可见区域时，始终预留上下指示行（不需要时用空行占位），
+    使面板高度恒定，避免滚动时布局抖动。
+    """
     if app.pending_selection is None:
         return None
     req = app.pending_selection
+    n = len(req.options)
+    visible = min(_COMP_MAX_ROWS, n)
+    scroll = min(max(0, app.sel_scroll), max(0, n - visible))
+    window = req.options[scroll : scroll + visible]
     text = Text()
-    for idx, opt in enumerate(req.options[:_COMP_MAX_ROWS]):
-        style = "reverse" if idx == app.sel_index else ""
+    needs_indicators = n > visible
+    if needs_indicators:
+        if scroll > 0:
+            text.append("  ↑ 更多\n", style="dim")
+        else:
+            text.append("\n")
+    for idx, opt in enumerate(window):
+        style = "reverse" if idx == app.sel_index - scroll else ""
         text.append(opt.label + "\n", style=style)
+    if needs_indicators:
+        if scroll + visible < n:
+            text.append("  ↓ 更多\n", style="dim")
+        else:
+            text.append("\n")
     return Panel(text, title=f" {req.title} ", border_style="magenta")
 
 
@@ -203,7 +236,7 @@ def _status_hint(app: App) -> Text:
         status.append(" thinking… (Esc cancel · Ctrl-C quit)")
         return status
     if app.pending_selection is not None:
-        return Text(" Enter: 确认 · ↑/↓: 选择 · Esc: 取消 ")
+        return Text(" Enter: 确认 · ↑/↓: 选择 · PgUp/PgDn: 翻页 · Home/End: 首尾 · Esc: 取消 ")
     if app.comp_active:
         return Text(" Tab/Enter: complete · ↑/↓: choose · Esc: close ")
     return Text(" Enter: send · /: commands · ↑/↓: scroll · Ctrl-C: quit ")
@@ -217,11 +250,13 @@ def build_renderable(app: App, console: Console) -> Layout:
     comp_panel = _completion_panel(app)
     comp_rows = (len(app.comp_items[:_COMP_MAX_ROWS]) + _PANEL_BORDERS) if comp_panel else 0
     sel_panel = _selection_panel(app)
-    sel_rows = (
-        len(app.pending_selection.options[:_COMP_MAX_ROWS]) + _PANEL_BORDERS
-        if sel_panel
-        else 0
-    )
+    if sel_panel:
+        _n = len(app.pending_selection.options)
+        _visible = min(_COMP_MAX_ROWS, _n)
+        _indicators = 2 if _n > _visible else 0
+        sel_rows = _visible + _indicators + _PANEL_BORDERS
+    else:
+        sel_rows = 0
 
     available = max(
         5,

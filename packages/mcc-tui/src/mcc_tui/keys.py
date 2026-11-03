@@ -82,7 +82,29 @@ class KeyReader:
         # 直接从 fd 读取，绕过 TextIO 缓冲层，确保 select 和 read
         # 在同一层面操作，避免缓冲层吞掉 escape sequence 后续字节。
         ch = os.read(self._fd, 1)
-        return ch.decode("latin-1") if ch else ""
+        if not ch:
+            return ""
+        first = ch[0]
+        if first < 0x80:
+            return ch.decode("latin-1")
+        # UTF-8 多字节字符：首字节前导 1 数量决定总长度
+        if first >= 0xF0:
+            need = 4
+        elif first >= 0xE0:
+            need = 3
+        elif first >= 0xC0:
+            need = 2
+        else:
+            # 10xxxxxx 续字节不应作为首字节，防御性返回
+            return ch.decode("latin-1")
+        # 终端多字节字符各字节同时到达，循环确保读满
+        buf = ch
+        while len(buf) < need:
+            extra = os.read(self._fd, need - len(buf))
+            if not extra:
+                break
+            buf += extra
+        return buf.decode("utf-8", errors="replace")
 
     def _read_escape(self) -> str:
         # 纯 ESC 键无后续字符；方向键等 escape sequence 在几毫秒内

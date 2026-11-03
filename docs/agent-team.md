@@ -127,3 +127,7 @@ teammate 发消息给 lead 时，lead 在下一轮交互前检查 inbox：
 | `.tasks/` | 共享任务记录（与 task 工具集共用） |
 
 均已加入 `.gitignore`。
+
+## TUI 渲染区分
+
+teammate 的 `spawn_teammate` / `send_teammate_message` 调用在 TUI 中与子代理同样以 `◇ {name}` 青色标识显示，区别于普通工具的 `▶` 黄色样式。详见 [subagents.md](subagents.md#tui-渲染区分)。

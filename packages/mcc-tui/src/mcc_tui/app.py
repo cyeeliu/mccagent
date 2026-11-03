@@ -6,6 +6,7 @@ App 消费 AgentEvent 事件流，维护渲染项列表与流式文本缓冲，
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -30,6 +31,12 @@ from mcc_tui.completions import CompletionItem, CompletionProvider
 
 _MAX_ITEMS = 500
 
+_AGENT_TOOLS = {
+    "spawn_subagent": "preset",
+    "spawn_teammate": "name",
+    "send_teammate_message": "name",
+}
+
 
 class CallStatus(Enum):
     running = "running"
@@ -48,6 +55,7 @@ class RenderItem:
     output: str = ""
     is_error: bool = False
     stats: str = ""
+    agent_name: str = ""
 
 
 @dataclass
@@ -87,6 +95,7 @@ class App:
     # 选择浮层：/resume 等命令返回 select 候选时由 SelectionRequest 激活
     pending_selection: SelectionRequest | None = None
     sel_index: int = 0
+    sel_scroll: int = 0
 
     @property
     def comp_active(self) -> bool:
@@ -162,6 +171,13 @@ class App:
             self.streaming_text += ev.text
         elif isinstance(ev, ToolCallStart):
             self.flush_streaming()
+            agent_name = ""
+            if ev.name in _AGENT_TOOLS:
+                try:
+                    args = json.loads(ev.args_preview)
+                    agent_name = str(args.get(_AGENT_TOOLS[ev.name], ""))
+                except (json.JSONDecodeError, TypeError):
+                    pass
             self.push(
                 RenderItem(
                     kind="tool_call",
@@ -169,12 +185,15 @@ class App:
                     name=ev.name,
                     args_preview=ev.args_preview,
                     status=CallStatus.running,
+                    agent_name=agent_name,
                 )
             )
         elif isinstance(ev, ToolCallEnd):
+            agent_name = ""
             for item in self.items:
                 if item.kind == "tool_call" and item.call_id == ev.id:
                     item.status = CallStatus.failed if ev.is_error else CallStatus.done
+                    agent_name = item.agent_name
                     break
             self.push(
                 RenderItem(
@@ -182,6 +201,7 @@ class App:
                     call_id=ev.id,
                     output=ev.output,
                     is_error=ev.is_error,
+                    agent_name=agent_name,
                 )
             )
         elif isinstance(ev, LlmUsage):
@@ -234,3 +254,4 @@ class App:
         elif isinstance(ev, SelectionRequest):
             self.pending_selection = ev
             self.sel_index = 0
+            self.sel_scroll = 0

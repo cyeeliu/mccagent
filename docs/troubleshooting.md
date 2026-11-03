@@ -200,3 +200,16 @@ restrictions」；显式 `bubblewrap` 档直接报错。
 content="[interrupted by user]")`，使消息序列合法可延续；
 `_read_escape` 增加 `select` 50 ms 超时，无后续字符即判定为单独 ESC
 立即返回。
+
+## TUI 中文输入乱码
+
+**现象**：TUI 输入框输入中文显示乱码，每个中文字符被拆成多个无关字符。
+
+**根因**：`KeyReader._read_char` 用 `os.read(fd, 1)` 每次只读 1 字节，再用
+`latin-1` 解码。中文字符在 UTF-8 下是 3 字节（emoji 4 字节），被拆成独立
+的 latin-1 字符逐个插入输入框，cursor 也只加 1，导致乱码。
+
+**修复**：`_read_char` 先读 1 字节判断首字节：ASCII（< 0x80）直接返回；
+UTF-8 多字节首字节（>= 0x80）根据前导 1 数量确定总长度（0xC0→2、0xE0→3、
+0xF0→4），循环读满剩余字节后用 `utf-8` 解码为完整 Unicode 字符。escape
+sequence 均为 ASCII 不受影响。

@@ -28,7 +28,7 @@
 | `/model` | 无参显示当前模型；`/model <id>` 切换主模型（即刻生效并写配置）；`/model <main\|subagent\|summarize> <id>` 指定类型 |
 | `/config` | 无参查看生效配置摘要（凭据脱敏）；`/config get <key>`；`/config set <key> <value>` |
 | `/goal` | 查看/设置/清除 goal loop（`/goal clear` 清除；`/goal <文本>` 设置并把文本作为任务输入） |
-| `/resume` | 无参弹出交互式选择列表（↑↓ 选择、Enter 恢复、Esc 取消），列出最近 10 条历史会话；`/resume <id>` 就地恢复：加载历史写入 agent.history 并更新状态栏 session id |
+| `/resume` | 无参弹出交互式选择列表（↑↓ 选择、PgUp/PgDn 翻页、Home/End 首尾、Enter 恢复、Esc 取消），列出最近 10 条历史会话；`/resume <id>` 就地恢复：加载历史写入 agent.history 并更新状态栏 session id |
 
 ### /config set 白名单与生效语义
 

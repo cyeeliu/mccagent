@@ -43,3 +43,17 @@
 ```
 
 `reason=timeout` 或失败时标记为错误结果，主代理可据此调整策略（换预设 / 拆小任务）。
+
+## TUI 渲染区分
+
+TUI 消息区对子代理调用与普通工具调用做视觉区分，便于一眼看出哪段输出来自哪个 agent：
+
+| 来源 | 图标 | 颜色 | 标识 |
+|------|------|------|------|
+| 主代理回复 | `◎ assistant` | 绿色粗体 | — |
+| 子代理调用 | `◇ {preset}` | 青色 | agent 名（如 `code_explorer`） |
+| 子代理输出 | 缩进2格 | 青色 | 跳过 `[subagent=...]` 元数据行 |
+| 普通工具调用 | `▶ {tool_name}(...)` | 黄色 | 工具名 + 参数预览 |
+| 普通工具输出 | 缩进4格 | 灰色 | — |
+
+实现机制：`app.py` 的 `_AGENT_TOOLS` 映射把 `spawn_subagent`（取 `preset` 字段）、`spawn_teammate` / `send_teammate_message`（取 `name` 字段）识别为 agent 派生工具，在 `ToolCallStart` 时解析参数提取 agent 名写入 `RenderItem.agent_name`；`ToolCallEnd` 时从对应 `tool_call` 项继承。渲染层 `render.py` 根据 `agent_name` 是否非空切换显示样式。teammate 调用同样适用此机制（见 [agent-team.md](agent-team.md)）。
