@@ -349,7 +349,7 @@ class TeammateRuntime:
             self._transition(TeammateStatus.FAILED, reason="worktree creation failed")
             await self._bus.send(
                 self.name, self._lead_name, summary,
-                kind="work_done",
+                kind="work_failed",
                 meta={"task_id": self._current.task_id} if self._current.task_id else {},
             )
             if self._current.task_id and self._task_store:
@@ -382,15 +382,34 @@ class TeammateRuntime:
 
         self._transition(outcome, reason=f"agent {outcome.value}")
 
+        kind = {
+            TeammateStatus.REPORTING: "work_done",
+            TeammateStatus.TIMEOUT: "work_timeout",
+            TeammateStatus.FAILED: "work_failed",
+        }[outcome]
+
         await self._bus.send(
             self.name, self._lead_name, summary,
-            kind="work_done",
+            kind=kind,
             meta={"task_id": self._current.task_id} if self._current.task_id else {},
         )
 
         if self._current.task_id and self._task_store:
             with contextlib.suppress(Exception):
-                self._task_store.complete(self._current.task_id, owner=self.name)
+                if outcome == TeammateStatus.REPORTING:
+                    self._task_store.complete(
+                        self._current.task_id, owner=self.name,
+                    )
+                elif outcome == TeammateStatus.TIMEOUT:
+                    self._task_store.timeout(
+                        self._current.task_id, owner=self.name,
+                    )
+                else:
+                    self._task_store.fail(
+                        self._current.task_id,
+                        owner=self.name,
+                        error=summary,
+                    )
 
         self._cleanup_worktree()
 

@@ -1048,3 +1048,121 @@ class TestTeammateRecovery:
         await asyncio.sleep(0.3)
         await mgr.request_shutdown("w")
         assert mgr.list_active() == []
+
+
+# -- P1-01: 任务结果分发 --
+
+
+class ErrorLlm:
+    """始终抛出异常的 LLM。"""
+
+    async def complete(self, req):
+        raise RuntimeError("LLM boom")
+
+    async def stream(self, req):
+        raise RuntimeError("LLM boom")
+        yield  # make async generator
+
+
+class SlowLlm:
+    """响应慢的 LLM，用于触发超时。"""
+
+    async def complete(self, req):
+        await asyncio.sleep(10)
+        from mcc_llm.mock import single_text_turn
+        return single_text_turn("late")
+
+    async def stream(self, req):
+        await asyncio.sleep(10)
+        yield  # make async generator
+
+
+class TestTaskOutcomeDispatch:
+    """验证任务结果正确分发：成功→COMPLETED，异常→FAILED，超时→TIMEOUT。"""
+
+    def _make_rt(self, tmp_path, llm, timeout_secs=300.0, task_store=None):
+        from mcc_tools import TaskStore as _TS
+
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        registry = ToolRegistry()
+        ts = task_store or _TS(tmp_path / ".tasks")
+        spec = TeammateSpec(
+            name="dispatch", role="coder", system="test",
+            model="claude-haiku-4-5", timeout_secs=timeout_secs,
+        )
+        rt = TeammateRuntime(
+            spec=spec, llm=llm, registry=registry, bus=bus,
+            plan_store=plan_store, task_store=ts, base_dir=tmp_path,
+        )
+        return rt, bus, ts
+
+    async def test_success_completes_task(self, tmp_path):
+        from mcc_tools import TaskStatus
+
+        llm = MockLlm([single_text_turn("done")])
+        rt, bus, ts = self._make_rt(tmp_path, llm)
+        task = ts.create("test task")
+        ts.claim(task.id, owner="dispatch")
+
+        await rt.start("do work", task_id=task.id)
+        await asyncio.sleep(0.3)
+        msgs = await bus.consume(LEAD_NAME)
+        await rt.shutdown()
+
+        assert any(m.kind == "work_done" for m in msgs)
+        final = ts.load(task.id)
+        assert final.status == TaskStatus.COMPLETED.value
+
+    async def test_exception_fails_task(self, tmp_path):
+        from mcc_tools import TaskStatus
+
+        llm = ErrorLlm()
+        rt, bus, ts = self._make_rt(tmp_path, llm)
+        task = ts.create("test task")
+        ts.claim(task.id, owner="dispatch")
+
+        await rt.start("do work", task_id=task.id)
+        await asyncio.sleep(0.3)
+        msgs = await bus.consume(LEAD_NAME)
+        await rt.shutdown()
+
+        assert any(m.kind == "work_failed" for m in msgs)
+        final = ts.load(task.id)
+        assert final.status == TaskStatus.FAILED.value
+        assert final.error is not None
+        assert "LLM boom" in final.error
+
+    async def test_timeout_times_out_task(self, tmp_path):
+        from mcc_tools import TaskStatus
+
+        llm = SlowLlm()
+        rt, bus, ts = self._make_rt(tmp_path, llm, timeout_secs=0.05)
+        task = ts.create("test task")
+        ts.claim(task.id, owner="dispatch")
+
+        await rt.start("do work", task_id=task.id)
+        await asyncio.sleep(0.3)
+        msgs = await bus.consume(LEAD_NAME)
+        await rt.shutdown()
+
+        assert any(m.kind == "work_timeout" for m in msgs)
+        final = ts.load(task.id)
+        assert final.status == TaskStatus.TIMEOUT.value
+
+    async def test_no_complete_on_failure(self, tmp_path):
+        """回归测试：异常路径不得调用 complete()。"""
+        from mcc_tools import TaskStatus
+
+        llm = ErrorLlm()
+        rt, bus, ts = self._make_rt(tmp_path, llm)
+        task = ts.create("regression task")
+        ts.claim(task.id, owner="dispatch")
+
+        await rt.start("do work", task_id=task.id)
+        await asyncio.sleep(0.3)
+        await rt.shutdown()
+
+        final = ts.load(task.id)
+        assert final.status != TaskStatus.COMPLETED.value
+        assert final.status == TaskStatus.FAILED.value
