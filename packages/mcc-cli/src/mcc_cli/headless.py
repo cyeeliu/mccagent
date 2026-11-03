@@ -13,6 +13,7 @@ from mcc_core import (
 from mcc_core import (
     Notice,
     TextDelta,
+    ThinkingDelta,
     ToolCallEnd,
     ToolCallStart,
     TurnEnd,
@@ -46,6 +47,9 @@ async def run_headless(source: EventSource, prompt: str, quiet: bool) -> int:
             had_error = True
         elif isinstance(ev, TextDelta):
             final_text += ev.text
+        elif isinstance(ev, ThinkingDelta):
+            if not quiet:
+                _eprint(f"  ✻  {ev.text}")
         elif isinstance(ev, TurnEnd):
             cost_usd = ev.cost_usd
 

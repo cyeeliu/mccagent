@@ -15,6 +15,7 @@
 - **Skills 与 Slash Commands** — 懒加载技能包：system prompt 注入轻量 catalog，模型按需 `load_skill` 读取完整指令；`/xxx` slash 命令进 AgentLoop 前替换
 - **子代理并行执行** — 预设角色（代码探索 / 测试运行 / 摘要），信号量并发上限 + 超时 + token 预算三重护栏
 - **多 provider** — Anthropic 原生 API + OpenAI 兼容端点（DeepSeek / Kimi / Qwen / Groq / vLLM / OpenRouter），`--llm-base-url` 一键接入企业自托管网关
+- **Thinking / 推理思考** — Anthropic extended thinking 与 DeepSeek/Kimi/Qwen reasoning_content 流式解析，TUI 灰色缩进渲染 `✻ thinking`，headless 输出 stderr，会话恢复回显
 - **成本优化** — Prompt Caching 降本（system 标记 ephemeral）、三层预算护栏（告警阈值 / 单轮预算 / 会话硬熔断）、逐轮成本归因与缓存命中率
 - **Goal Loop** — `/goal <condition>` 设完成条件，模型想停时由独立 evaluator 判断是否满足，未满足继续循环；block_cap 防死循环
 - **MCP** — stdio JSON-RPC 2.0 连接外部 MCP server，工具适配成 `mcp__<server>__<tool>` 注册到 ToolRegistry，AgentLoop 零改动透明使用

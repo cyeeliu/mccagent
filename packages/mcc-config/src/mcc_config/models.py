@@ -266,6 +266,19 @@ class WorkflowConfig(BaseModel):
     budget_tokens: int | None = None
 
 
+class ThinkingConfig(BaseModel):
+    """模型推理思考配置：开启 extended thinking / reasoning。
+
+    ``enabled`` 开启后，Anthropic 端在请求 body 中注入
+    ``thinking: {"type": "enabled", "budget_tokens": N}``；
+    DeepSeek/Kimi/Qwen 等推理模型默认返回 reasoning_content，
+    无需此参数即可解析。``budget_tokens`` 为思考过程的 token 预算。
+    """
+
+    enabled: bool = False
+    budget_tokens: int = 10000
+
+
 class Config(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -286,3 +299,4 @@ class Config(BaseModel):
     background: BackgroundConfig = Field(default_factory=BackgroundConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    thinking: ThinkingConfig = Field(default_factory=ThinkingConfig)

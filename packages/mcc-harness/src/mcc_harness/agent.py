@@ -16,6 +16,7 @@ from mcc_core import (
     PermissionDecision,
     Role,
     TextBlock,
+    ThinkingBlock,
     ToolContext,
     ToolResultBlock,
     ToolUseBlock,
@@ -27,6 +28,7 @@ from mcc_core.event import (
     LlmUsage,
     Notice,
     TextDelta,
+    ThinkingDelta,
     ToolCallEnd,
     ToolCallStart,
     TurnEnd,
@@ -44,6 +46,9 @@ from mcc_llm import (
 )
 from mcc_llm import (
     TextDelta as LlmTextDelta,
+)
+from mcc_llm import (
+    ThinkingDelta as LlmThinkingDelta,
 )
 from mcc_session import (
     TITLE_MODEL,
@@ -236,6 +241,7 @@ class AgentLoop:
         turn_timeout_secs: float = 0.0,
         interceptors: list[Any] | None = None,
         guards: list[Any] | None = None,
+        thinking: dict[str, Any] | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -268,6 +274,7 @@ class AgentLoop:
         self.retry_policy = retry_policy
         self.circuit_breaker = circuit_breaker
         self.turn_timeout_secs = turn_timeout_secs
+        self.thinking = thinking
         # 注入字段统一转换为拦截器/守卫（协议收敛，旧 builder 方法
         # 兼容保留）；执行顺序即注册顺序：timeout → observability →
         # background → cron → budget → hooks → 自定义扩展
@@ -402,6 +409,7 @@ class AgentLoop:
                         system=system_blocks,
                         temperature=self.temperature,
                         tools=self.registry.as_api_schema(),
+                        thinking=self.thinking,
                     )
 
                     try:
@@ -731,13 +739,17 @@ class AgentLoop:
         确保 assistant 消息顺序确定且与模型意图一致。
         """
         text_buf: list[str] = []
+        thinking_buf: list[str] = []
         tool_slots: list[tuple[str, str, str]] = []
         current_tool_idx: int | None = None
         stop_reason: str | None = None
         usage = Usage()
 
         async for ev in self.llm.stream(req):
-            if isinstance(ev, LlmTextDelta):
+            if isinstance(ev, LlmThinkingDelta):
+                await tx.put(ThinkingDelta(text=ev.text))
+                thinking_buf.append(ev.text)
+            elif isinstance(ev, LlmTextDelta):
                 await tx.put(TextDelta(text=ev.text))
                 text_buf.append(ev.text)
             elif isinstance(ev, ToolUseStart):
@@ -758,6 +770,8 @@ class AgentLoop:
                 usage = ev.usage
 
         blocks: list[ContentBlock] = []
+        if thinking_buf:
+            blocks.append(ThinkingBlock(text="".join(thinking_buf)))
         if text_buf:
             blocks.append(TextBlock(text="".join(text_buf)))
         for tid, tname, json_str in tool_slots:
@@ -990,6 +1004,7 @@ class AgentLoopBuilder:
         self._turn_timeout_secs: float = 0.0
         self._extra_interceptors: list[Any] = []
         self._extra_guards: list[Any] = []
+        self._thinking: dict[str, Any] | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
         self._system = s
@@ -1122,6 +1137,11 @@ class AgentLoopBuilder:
         self._extra_guards.append(g)
         return self
 
+    def thinking(self, config: dict[str, Any] | None) -> AgentLoopBuilder:
+        """开启模型 extended thinking（Anthropic）或透传给兼容网关。"""
+        self._thinking = config
+        return self
+
     def build(self) -> AgentLoop:
         return AgentLoop(
             llm=self._llm,
@@ -1158,4 +1178,5 @@ class AgentLoopBuilder:
             turn_timeout_secs=self._turn_timeout_secs,
             interceptors=self._extra_interceptors,
             guards=self._extra_guards,
+            thinking=self._thinking,
         )

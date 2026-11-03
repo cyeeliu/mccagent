@@ -43,6 +43,11 @@ def _render_item(item: RenderItem) -> Text:
         text.append("\n")
         for line in item.text.splitlines() or [""]:
             text.append(f"  {line}\n")
+    elif item.kind == "thinking":
+        text.append("✻ thinking", style="dim cyan")
+        text.append("\n")
+        for line in item.text.splitlines() or [""]:
+            text.append(f"  {line}\n", style="dim")
     elif item.kind == "tool_call":
         if item.agent_name:
             icon = "✗" if item.status == CallStatus.failed else "◇"
@@ -244,6 +249,8 @@ def _status_hint(app: App) -> Text:
 
 def build_renderable(app: App, console: Console) -> Layout:
     all_items: list[Text] = [_render_item(it) for it in app.items]
+    if app.streaming_thinking:
+        all_items.append(_render_item(RenderItem(kind="thinking", text=app.streaming_thinking)))
     if app.streaming_text:
         all_items.append(_render_item(RenderItem(kind="assistant", text=app.streaming_text)))
 

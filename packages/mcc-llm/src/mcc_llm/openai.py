@@ -11,7 +11,16 @@ import os
 from collections.abc import AsyncIterator
 
 import httpx
-from mcc_core import ContentBlock, Message, Role, TextBlock, ToolResultBlock, ToolUseBlock, Usage
+from mcc_core import (
+    ContentBlock,
+    Message,
+    Role,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    Usage,
+)
 
 from mcc_llm import (
     CompleteRequest,
@@ -19,6 +28,7 @@ from mcc_llm import (
     MessageStop,
     StreamEvent,
     TextDelta,
+    ThinkingDelta,
     ToolUseInputDelta,
     ToolUseStart,
 )
@@ -165,6 +175,9 @@ class OpenAiClient:
 
                 if "content" in delta and delta["content"]:
                     yield TextDelta(text=delta["content"])
+                reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    yield ThinkingDelta(text=reasoning)
                 if "tool_calls" in delta:
                     for tc in delta["tool_calls"]:
                         idx = tc.get("index", 0)
@@ -243,6 +256,9 @@ def _msg_to_text(m: Message) -> str:
 
 def _parse_oai_content(msg: dict) -> list[ContentBlock]:
     blocks: list[ContentBlock] = []
+    reasoning = msg.get("reasoning_content")
+    if reasoning:
+        blocks.append(ThinkingBlock(text=reasoning))
     if msg.get("content"):
         blocks.append(TextBlock(text=msg["content"]))
     for tc in msg.get("tool_calls", []):

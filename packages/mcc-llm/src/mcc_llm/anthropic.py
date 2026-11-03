@@ -7,7 +7,7 @@ import os
 from collections.abc import AsyncIterator
 
 import httpx
-from mcc_core import ContentBlock, TextBlock, ToolUseBlock, Usage
+from mcc_core import ContentBlock, TextBlock, ThinkingBlock, ToolUseBlock, Usage
 
 from mcc_llm import (
     CompleteRequest,
@@ -15,6 +15,7 @@ from mcc_llm import (
     MessageStop,
     StreamEvent,
     TextDelta,
+    ThinkingDelta,
     ToolUseInputDelta,
     ToolUseStart,
 )
@@ -64,6 +65,8 @@ class AnthropicClient:
             body["temperature"] = req.temperature
         if req.tools:
             body["tools"] = req.tools
+        if req.thinking:
+            body["thinking"] = req.thinking
         if stream:
             body["stream"] = True
         return body
@@ -137,6 +140,8 @@ def _parse_content_blocks(raw: list[dict]) -> list[ContentBlock]:
         t = item.get("type")
         if t == "text":
             blocks.append(TextBlock(text=item.get("text", "")))
+        elif t == "thinking":
+            blocks.append(ThinkingBlock(text=item.get("thinking", "")))
         elif t == "tool_use":
             blocks.append(
                 ToolUseBlock(
@@ -162,6 +167,10 @@ def _parse_sse(
             text = delta.get("text", "")
             if text:
                 return TextDelta(text=text)
+        elif dt == "thinking_delta":
+            text = delta.get("thinking", "")
+            if text:
+                return ThinkingDelta(text=text)
         elif dt == "input_json_delta":
             return ToolUseInputDelta(partial_json=delta.get("partial_json", ""))
     elif event_type == "message_delta":

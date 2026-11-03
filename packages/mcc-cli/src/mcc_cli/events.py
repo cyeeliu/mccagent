@@ -20,6 +20,7 @@ from mcc_core import (
     SelectionRequest,
     SessionChanged,
     TextDelta,
+    ThinkingDelta,
     ToolCallEnd,
     ToolCallStart,
     TurnEnd,
@@ -42,7 +43,7 @@ def history_events(history: list, cost_usd: float = 0.0) -> list:
     收到事件，界面会是空白；此处按 user/assistant/tool 消息
     逐条还原轨迹，末尾以 TurnEnd 收尾（携带会话累计成本）。
     """
-    from mcc_core import Role, TextBlock, ToolResultBlock, ToolUseBlock
+    from mcc_core import Role, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock
 
     events = []
     for m in history:
@@ -52,7 +53,9 @@ def history_events(history: list, cost_usd: float = 0.0) -> list:
                     events.append(UserEcho(text=b.text))
         elif m.role == Role.assistant:
             for b in m.content:
-                if isinstance(b, TextBlock) and b.text.strip():
+                if isinstance(b, ThinkingBlock) and b.text.strip():
+                    events.append(ThinkingDelta(text=b.text))
+                elif isinstance(b, TextBlock) and b.text.strip():
                     events.append(TextDelta(text=b.text))
                 elif isinstance(b, ToolUseBlock):
                     events.append(ToolCallStart(

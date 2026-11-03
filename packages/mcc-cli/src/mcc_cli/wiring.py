@@ -558,6 +558,12 @@ def _assemble_builder(
     builder = builder.warn_threshold(config.budget.warn_threshold)
     builder = builder.max_cost_per_turn(config.budget.max_usd_per_turn)
 
+    if config.thinking.enabled:
+        builder = builder.thinking({
+            "type": "enabled",
+            "budget_tokens": config.thinking.budget_tokens,
+        })
+
     if history:
         builder = builder.history(history)
 

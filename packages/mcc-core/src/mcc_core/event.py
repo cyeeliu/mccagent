@@ -21,6 +21,13 @@ class TextDelta:
 
 
 @dataclass
+class ThinkingDelta:
+    """推理/思考增量片段，流式发射给前端实时渲染。"""
+
+    text: str
+
+
+@dataclass
 class ToolCallStart:
     id: str
     name: str
@@ -154,6 +161,7 @@ class SelectionDecision:
 AgentEvent = (
     UserEcho
     | TextDelta
+    | ThinkingDelta
     | ToolCallStart
     | ToolCallEnd
     | LlmUsage

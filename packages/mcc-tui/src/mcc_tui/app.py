@@ -21,6 +21,7 @@ from mcc_core import (
     SelectionRequest,
     SessionChanged,
     TextDelta,
+    ThinkingDelta,
     ToolCallEnd,
     ToolCallStart,
     TurnEnd,
@@ -65,6 +66,7 @@ class App:
     context_limit: int = 0
     items: deque[RenderItem] = field(default_factory=lambda: deque(maxlen=_MAX_ITEMS))
     streaming_text: str = ""
+    streaming_thinking: str = ""
     input: str = ""
     cursor: int = 0
     agent_busy: bool = False
@@ -111,7 +113,7 @@ class App:
     @property
     def est_stream_tokens(self) -> int:
         """流式中的输出 token 估算（4 字符/token 业界惯例）。"""
-        return len(self.streaming_text) // 4
+        return (len(self.streaming_text) + len(self.streaming_thinking)) // 4
 
     def push(self, item: RenderItem) -> None:
         self.items.append(item)
@@ -145,6 +147,10 @@ class App:
         self.comp_dismissed = False
 
     def flush_streaming(self) -> None:
+        if self.streaming_thinking:
+            text = self.streaming_thinking
+            self.streaming_thinking = ""
+            self.push(RenderItem(kind="thinking", text=text))
         if self.streaming_text:
             text = self.streaming_text
             self.streaming_text = ""
@@ -167,6 +173,8 @@ class App:
             self._run_start_in = self.session_in
             self._run_start_out = self.session_out
             self._run_start_cache = self.cache_read_total
+        elif isinstance(ev, ThinkingDelta):
+            self.streaming_thinking += ev.text
         elif isinstance(ev, TextDelta):
             self.streaming_text += ev.text
         elif isinstance(ev, ToolCallStart):

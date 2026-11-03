@@ -77,6 +77,10 @@
   },
   "tasks": {
     "enabled": true
+  },
+  "thinking": {
+    "enabled": false,
+    "budget_tokens": 10000
   }
 }
 ```
@@ -310,6 +314,25 @@ chmod 600，凭据展示脱敏。
 | `budget_tokens` | `null` | 默认 token 预算（args.budget 可覆盖） |
 
 `.workflows/` 已 gitignore。
+
+## Thinking / 推理思考配置
+
+开启模型的 extended thinking（Anthropic）或 reasoning_content（DeepSeek / Kimi / Qwen 等推理模型）流式显示。
+
+```json
+{"thinking": {"enabled": true, "budget_tokens": 10000}}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 开启后 Anthropic 端在请求 body 注入 `thinking: {"type": "enabled", "budget_tokens": N}` |
+| `budget_tokens` | `10000` | 思考过程的 token 预算（仅 Anthropic extended thinking 生效） |
+
+**说明**：
+- DeepSeek / Kimi / Qwen 等推理模型默认返回 `reasoning_content`，无需 `enabled` 即可解析并流式显示
+- TUI 中思考内容以 `✻ thinking` 灰色缩进渲染，位于正文之前
+- headless 模式下思考内容输出到 stderr（灰色）
+- 会话恢复时历史 ThinkingBlock 作为 ThinkingDelta 回显
 
 ## 可观测性配置
 

@@ -26,6 +26,17 @@ class TextDelta:
 
 
 @dataclass
+class ThinkingDelta:
+    """推理/思考增量片段。
+
+    Anthropic extended thinking 的 thinking_delta 与 DeepSeek/Kimi/Qwen
+    等推理模型的 reasoning_content 统一映射为此类型。
+    """
+
+    text: str
+
+
+@dataclass
 class ToolUseStart:
     """工具调用开始。"""
 
@@ -48,7 +59,7 @@ class MessageStop:
     usage: Usage = field(default_factory=Usage)
 
 
-StreamEvent = TextDelta | ToolUseStart | ToolUseInputDelta | MessageStop
+StreamEvent = TextDelta | ThinkingDelta | ToolUseStart | ToolUseInputDelta | MessageStop
 
 
 # ---------- 请求 / 响应 ----------
@@ -64,6 +75,7 @@ class CompleteRequest:
     system: str | list[ContentBlock] | None = None
     temperature: float | None = None
     tools: list[dict[str, Any]] | None = None
+    thinking: dict[str, Any] | None = None
 
 
 @dataclass
@@ -117,6 +129,7 @@ __all__ = [
     "MessageStop",
     "StreamEvent",
     "TextDelta",
+    "ThinkingDelta",
     "ToolUseInputDelta",
     "ToolUseStart",
     "auto_provider_from_env",

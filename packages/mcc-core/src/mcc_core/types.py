@@ -32,6 +32,19 @@ class TextBlock(BaseModel):
     cache_control: CacheControl | None = None
 
 
+class ThinkingBlock(BaseModel):
+    """推理模型的思考过程块。
+
+    Anthropic extended thinking 与 DeepSeek/Kimi 等的 reasoning_content
+    统一映射为此类型。多轮对话时需原样回传给 LLM（Anthropic 要求
+    thinking block 在 content 中保持原序），因此与 TextBlock 同级
+    纳入 ContentBlock 联合类型。
+    """
+
+    type: Literal["thinking"] = "thinking"
+    text: str
+
+
 class ToolUseBlock(BaseModel):
     type: Literal["tool_use"] = "tool_use"
     id: str
@@ -46,7 +59,7 @@ class ToolResultBlock(BaseModel):
     is_error: bool = False
 
 
-ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
+ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock
 
 
 class Message(BaseModel):
