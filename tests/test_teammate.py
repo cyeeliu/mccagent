@@ -18,7 +18,7 @@ from mcc_harness import (
     format_team_events,
     remove_worktree,
 )
-from mcc_harness.plan import PlanError, PlanRequest
+from mcc_harness.plan import PlanError, PlanRequest, PlanStatus
 from mcc_harness.teammate import (
     _TEAMMATE_TRANSITIONS,
     LEAD_NAME,
@@ -370,6 +370,195 @@ class TestPlanStore:
         pending = await store.list_pending()
         assert len(pending) == 1
         assert pending[0].request_id == r2.request_id
+
+
+class TestPlanStoreReliability:
+    """PlanStore 超时、取消、幂等与持久化测试。"""
+
+    async def test_wait_for_review_explicit_timeout(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+        with pytest.raises(PlanError, match="timed out"):
+            await store.wait_for_review(req.request_id, timeout=0.05)
+        fetched = await store.get(req.request_id)
+        assert fetched.status == PlanStatus.EXPIRED
+
+    async def test_wait_for_review_deadline_timeout(self):
+        store = PlanStore()
+        deadline = time.time() + 0.05
+        req = await store.create("worker", "plan", deadline=deadline)
+        with pytest.raises(PlanError, match="timed out"):
+            await store.wait_for_review(req.request_id)
+        fetched = await store.get(req.request_id)
+        assert fetched.status == PlanStatus.EXPIRED
+
+    async def test_wait_for_review_succeeds_before_timeout(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+
+        async def approve_later():
+            await asyncio.sleep(0.02)
+            await store.review(req.request_id, approve=True)
+
+        asyncio.create_task(approve_later())
+        reviewed = await store.wait_for_review(req.request_id, timeout=1.0)
+        assert reviewed.status == PlanStatus.APPROVED
+
+    async def test_cancel(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+        cancelled = await store.cancel(req.request_id, reason="aborted")
+        assert cancelled.status == PlanStatus.CANCELLED
+        assert cancelled.feedback == "aborted"
+
+    async def test_cancel_non_pending(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+        await store.review(req.request_id, approve=True)
+        with pytest.raises(PlanError):
+            await store.cancel(req.request_id)
+
+    async def test_cancel_unknown(self):
+        store = PlanStore()
+        with pytest.raises(PlanError):
+            await store.cancel("nope")
+
+    async def test_cancel_wakes_waiter(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+
+        async def cancel_later():
+            await asyncio.sleep(0.02)
+            await store.cancel(req.request_id, reason="superseded")
+
+        asyncio.create_task(cancel_later())
+        result = await store.wait_for_review(req.request_id, timeout=1.0)
+        assert result.status == PlanStatus.CANCELLED
+
+    async def test_expire_overdue(self):
+        store = PlanStore()
+        past = time.time() - 1
+        await store.create("w1", "p1", deadline=past)
+        await store.create("w2", "p2", deadline=time.time() + 100)
+        expired = await store.expire_overdue()
+        assert len(expired) == 1
+        assert expired[0].status == PlanStatus.EXPIRED
+
+    async def test_expire_overdue_no_deadline(self):
+        store = PlanStore()
+        await store.create("w1", "p1")
+        expired = await store.expire_overdue()
+        assert expired == []
+
+    async def test_expire_overdue_empty(self, tmp_path):
+        store = PlanStore()
+        assert await store.expire_overdue() == []
+
+    async def test_review_idempotent_same_approve(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+        r1 = await store.review(req.request_id, approve=True, feedback="ok")
+        r2 = await store.review(req.request_id, approve=True, feedback="ok")
+        assert r1.status == r2.status == PlanStatus.APPROVED
+
+    async def test_review_idempotent_same_reject(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+        r1 = await store.review(req.request_id, approve=False, feedback="no")
+        r2 = await store.review(req.request_id, approve=False, feedback="no")
+        assert r1.status == r2.status == PlanStatus.REJECTED
+
+    async def test_review_approved_by(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+        reviewed = await store.review(req.request_id, approve=True, approved_by="lead")
+        assert reviewed.approved_by == "lead"
+        assert reviewed.approved_at is not None
+
+    async def test_plan_version_default(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan")
+        assert req.plan_version == 1
+
+    async def test_create_with_deadline(self):
+        store = PlanStore()
+        deadline = time.time() + 60
+        req = await store.create("worker", "plan", deadline=deadline)
+        assert req.deadline == deadline
+
+    async def test_create_with_worktree_id(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan", worktree_id="wt_abc")
+        assert req.worktree_id == "wt_abc"
+
+    async def test_persistence_save_load(self, tmp_path):
+        store1 = PlanStore(base_dir=tmp_path)
+        req = await store1.create("worker", "my plan", task_id="t1")
+        await store1.review(req.request_id, approve=True, feedback="good", approved_by="lead")
+        store2 = PlanStore(base_dir=tmp_path)
+        fetched = await store2.get(req.request_id)
+        assert fetched is not None
+        assert fetched.plan == "my plan"
+        assert fetched.status == PlanStatus.APPROVED
+        assert fetched.approved_by == "lead"
+
+    async def test_persistence_restore_pending(self, tmp_path):
+        store1 = PlanStore(base_dir=tmp_path)
+        req = await store1.create("worker", "pending plan")
+        store2 = PlanStore(base_dir=tmp_path)
+        fetched = await store2.get(req.request_id)
+        assert fetched is not None
+        assert fetched.status == PlanStatus.PENDING
+        pending = await store2.list_pending()
+        assert len(pending) == 1
+
+    async def test_persistence_restore_reviewed(self, tmp_path):
+        store1 = PlanStore(base_dir=tmp_path)
+        r1 = await store1.create("w1", "p1")
+        r2 = await store1.create("w2", "p2")
+        await store1.review(r1.request_id, approve=True)
+        await store1.review(r2.request_id, approve=False, feedback="redo")
+        store2 = PlanStore(base_dir=tmp_path)
+        f1 = await store2.get(r1.request_id)
+        f2 = await store2.get(r2.request_id)
+        assert f1.status == PlanStatus.APPROVED
+        assert f2.status == PlanStatus.REJECTED
+        assert f2.feedback == "redo"
+        assert await store2.list_pending() == []
+
+    async def test_persistence_counter_continues(self, tmp_path):
+        store1 = PlanStore(base_dir=tmp_path)
+        req1 = await store1.create("w1", "p1")
+        store2 = PlanStore(base_dir=tmp_path)
+        req2 = await store2.create("w2", "p2")
+        assert req2.request_id != req1.request_id
+
+    async def test_persistence_expire_overdue(self, tmp_path):
+        store1 = PlanStore(base_dir=tmp_path)
+        past = time.time() - 1
+        await store1.create("w1", "p1", deadline=past)
+        store2 = PlanStore(base_dir=tmp_path)
+        expired = await store2.expire_overdue()
+        assert len(expired) == 1
+
+    async def test_status_enum_values(self):
+        assert PlanStatus.PENDING == "pending"
+        assert PlanStatus.APPROVED == "approved"
+        assert PlanStatus.REJECTED == "rejected"
+        assert PlanStatus.EXPIRED == "expired"
+        assert PlanStatus.CANCELLED == "cancelled"
+
+    async def test_review_expired_raises(self):
+        store = PlanStore()
+        req = await store.create("worker", "plan", deadline=time.time() - 1)
+        with pytest.raises(PlanError):
+            await store.wait_for_review(req.request_id, timeout=0.01)
+        with pytest.raises(PlanError):
+            await store.review(req.request_id, approve=True)
+
+    async def test_no_persistence_by_default(self):
+        store = PlanStore()
+        assert store._base_dir is None
 
 
 # -- Worktree --

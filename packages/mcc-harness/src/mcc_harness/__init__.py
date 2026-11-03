@@ -80,7 +80,7 @@ from mcc_harness.permission import (
     PermissionRequest,
     bash_word_match,
 )
-from mcc_harness.plan import PlanError, PlanRequest, PlanStore
+from mcc_harness.plan import PlanError, PlanRequest, PlanStatus, PlanStore
 from mcc_harness.reliability import (
     CircuitBreaker,
     CircuitOpenError,
@@ -217,6 +217,7 @@ __all__ = [
     "PermissionRequest",
     "PlanError",
     "PlanRequest",
+    "PlanStatus",
     "PlanStore",
     "PythonHook",
     "ReliabilityGuard",
