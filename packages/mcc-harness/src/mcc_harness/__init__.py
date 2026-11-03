@@ -154,8 +154,11 @@ from mcc_harness.workflow import (
     workflow_run_lock,
 )
 from mcc_harness.worktree import (
+    CleanupPolicy,
     WorktreeError,
+    archive_worktree,
     create_worktree,
+    is_dirty,
     remove_worktree,
 )
 
@@ -248,7 +251,10 @@ __all__ = [
     "TeammateStatus",
     "TransitionRecord",
     "TurnTimeoutInterceptor",
+    "CleanupPolicy",
     "WorktreeError",
+    "archive_worktree",
+    "is_dirty",
     "MISS",
     "WORKFLOWS",
     "Budget",

@@ -340,7 +340,30 @@ class TeammateRuntime:
         else:
             self._transition(TeammateStatus.RUNNING, reason="start work")
 
-        cwd = self._prepare_worktree()
+        from .worktree import WorktreeError as _WtErr
+
+        try:
+            cwd = self._prepare_worktree()
+        except _WtErr as e:
+            summary = f"worktree creation failed: {e}"
+            self._transition(TeammateStatus.FAILED, reason="worktree creation failed")
+            await self._bus.send(
+                self.name, self._lead_name, summary,
+                kind="work_done",
+                meta={"task_id": self._current.task_id} if self._current.task_id else {},
+            )
+            if self._current.task_id and self._task_store:
+                with contextlib.suppress(Exception):
+                    self._task_store.fail(
+                        self._current.task_id,
+                        error=summary,
+                        owner=self.name,
+                    )
+            self._transition(
+                TeammateStatus.IDLE, reason="recover from failed"
+            )
+            self._current.clear()
+            return
 
         agent = self._build_agent(cwd)
         outcome: TeammateStatus
@@ -405,24 +428,21 @@ class TeammateRuntime:
     def _prepare_worktree(self) -> Path | None:
         if not self._worktree_enabled or not self._base_dir or not self._current.task_id:
             return None
-        from .worktree import WorktreeError, create_worktree
+        from .worktree import create_worktree
 
         wt_name = f"{self.name}_{self._current.work_version}"
-        try:
-            wt = create_worktree(wt_name, self._current.task_id, self._base_dir)
-            self._worktree = wt
-            return wt
-        except WorktreeError:
-            return None
+        wt = create_worktree(wt_name, self._current.task_id, self._base_dir)
+        self._worktree = wt
+        return wt
 
     def _cleanup_worktree(self) -> None:
         if not self._worktree or not self._base_dir:
             return
-        from .worktree import remove_worktree
+        from .worktree import CleanupPolicy, WorktreeError, remove_worktree
 
         wt_name = f"{self.name}_{self._current.work_version}"
-        with contextlib.suppress(Exception):
-            remove_worktree(wt_name, self._base_dir)
+        with contextlib.suppress(WorktreeError):
+            remove_worktree(wt_name, self._base_dir, policy=CleanupPolicy.SAFE)
         self._worktree = None
 
     def _build_agent(self, cwd: Path | None = None) -> AgentLoop:
