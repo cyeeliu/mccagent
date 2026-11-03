@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 
 import pytest
 from mcc_core import ToolContext
 from mcc_harness import (
+    Message,
     MessageBus,
     PlanStore,
     TeammateManager,
@@ -96,6 +99,208 @@ class TestMessageBus:
         msgs = await bus2.consume("b")
         assert len(msgs) == 1
         assert msgs[0].content == "persisted"
+
+
+class TestMessageBusReliability:
+    """claim/ack/nack 可靠投递协议测试。"""
+
+    async def test_claim_returns_pending(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "msg1")
+        await bus.send("a", "b", "msg2")
+        claimed = await bus.claim("b")
+        assert len(claimed) == 2
+        assert all(m.status == "claimed" for m in claimed)
+        assert all(m.claim_token is not None for m in claimed)
+
+    async def test_claim_empty(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        assert await bus.claim("nobody") == []
+
+    async def test_claim_only_pending(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "pending1")
+        claimed1 = await bus.claim("b")
+        await bus.send("a", "b", "pending2")
+        claimed2 = await bus.claim("b")
+        assert len(claimed1) == 1 and claimed1[0].content == "pending1"
+        assert len(claimed2) == 1 and claimed2[0].content == "pending2"
+
+    async def test_ack_removes_message(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "hello")
+        claimed = await bus.claim("b")
+        ok = await bus.ack("b", claimed[0].message_id, claimed[0].claim_token)
+        assert ok
+        assert await bus.claim("b") == []
+
+    async def test_ack_wrong_token(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "hello")
+        claimed = await bus.claim("b")
+        ok = await bus.ack("b", claimed[0].message_id, "wrong-token")
+        assert not ok
+        assert await bus.peek("b")
+
+    async def test_ack_nonexistent(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        ok = await bus.ack("b", "no-such-id", "no-token")
+        assert not ok
+
+    async def test_nack_retry(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "fail-me", max_attempts=3)
+        claimed = await bus.claim("b")
+        result = await bus.nack("b", claimed[0].message_id, claimed[0].claim_token, "boom")
+        assert result == "retry"
+        re_claimed = await bus.claim("b")
+        assert len(re_claimed) == 1
+        assert re_claimed[0].attempt == 1
+
+    async def test_nack_dead(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "doomed", max_attempts=1)
+        claimed = await bus.claim("b")
+        result = await bus.nack("b", claimed[0].message_id, claimed[0].claim_token, "fatal")
+        assert result == "dead"
+        dead = await bus.dead_letters("b")
+        assert len(dead) == 1
+        assert dead[0].status == "dead"
+        assert await bus.claim("b") == []
+
+    async def test_nack_reasons_recorded(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "flaky", max_attempts=2)
+        claimed = await bus.claim("b")
+        await bus.nack("b", claimed[0].message_id, claimed[0].claim_token, "timeout")
+        claimed2 = await bus.claim("b")
+        await bus.nack("b", claimed2[0].message_id, claimed2[0].claim_token, "conn-reset")
+        dead = await bus.dead_letters("b")
+        assert dead[0].meta["nack_reasons"] == ["timeout", "conn-reset"]
+
+    async def test_recover_stale_claim(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "stale")
+        claimed = await bus.claim("b")
+        assert len(claimed) == 1
+        recovered = await bus.recover("b", claim_timeout=0.0)
+        assert recovered == 1
+        re_claimed = await bus.claim("b")
+        assert len(re_claimed) == 1
+        assert re_claimed[0].content == "stale"
+
+    async def test_recover_no_stale(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "fresh")
+        claimed = await bus.claim("b")
+        assert len(claimed) == 1
+        recovered = await bus.recover("b", claim_timeout=60.0)
+        assert recovered == 0
+
+    async def test_dead_letters_empty(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "ok")
+        assert await bus.dead_letters("b") == []
+
+    async def test_send_idempotent(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        msg1 = await bus.send("a", "b", "once", message_id="fixed-id")
+        msg2 = await bus.send("a", "b", "once", message_id="fixed-id")
+        assert msg1.message_id == msg2.message_id
+        claimed = await bus.claim("b")
+        assert len(claimed) == 1
+
+    async def test_send_idempotent_allows_after_dead(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "retry-me", message_id="mid", max_attempts=1)
+        claimed = await bus.claim("b")
+        await bus.nack("b", claimed[0].message_id, claimed[0].claim_token, "fail")
+        msg2 = await bus.send("a", "b", "retry-me", message_id="mid")
+        assert msg2.status == "pending"
+        re_claimed = await bus.claim("b")
+        assert len(re_claimed) == 1
+
+    async def test_expired_message_skipped(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        past = time.time() - 10
+        await bus.send("a", "b", "old", expires_at=past)
+        await bus.send("a", "b", "new")
+        claimed = await bus.claim("b")
+        assert len(claimed) == 1
+        assert claimed[0].content == "new"
+
+    async def test_claim_max_messages(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        for i in range(5):
+            await bus.send("a", "b", f"msg{i}")
+        claimed = await bus.claim("b", max_messages=2)
+        assert len(claimed) == 2
+        claimed2 = await bus.claim("b", max_messages=2)
+        assert len(claimed2) == 2
+        claimed3 = await bus.claim("b", max_messages=2)
+        assert len(claimed3) == 1
+
+    async def test_consume_skips_bad_lines(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "good1")
+        path = bus._path("b")
+        with path.open("a", encoding="utf-8") as f:
+            f.write("{this is not valid json}\n")
+        await bus.send("a", "b", "good2")
+        msgs = await bus.consume("b")
+        contents = [m.content for m in msgs]
+        assert "good1" in contents
+        assert "good2" in contents
+        assert len(msgs) == 2
+
+    async def test_claim_recover_on_claim(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "auto-recover", max_attempts=3)
+        claimed = await bus.claim("b", claim_timeout=0.0)
+        assert len(claimed) == 1
+        claimed2 = await bus.claim("b", claim_timeout=0.0)
+        assert len(claimed2) == 1
+        assert claimed2[0].attempt == 0
+
+    async def test_full_ack_nack_cycle(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        await bus.send("a", "b", "task1", max_attempts=2)
+        await bus.send("a", "b", "task2", max_attempts=2)
+        claimed = await bus.claim("b")
+        assert len(claimed) == 2
+        t1, t2 = claimed[0], claimed[1]
+        await bus.ack("b", t1.message_id, t1.claim_token)
+        await bus.nack("b", t2.message_id, t2.claim_token, "error")
+        re_claimed = await bus.claim("b")
+        assert len(re_claimed) == 1
+        assert re_claimed[0].content == t2.content
+        await bus.ack("b", re_claimed[0].message_id, re_claimed[0].claim_token)
+        assert await bus.claim("b") == []
+
+    async def test_message_new_fields_defaults(self, tmp_path):
+        bus = MessageBus(tmp_path)
+        msg = await bus.send("a", "b", "check")
+        assert msg.message_id is not None
+        assert msg.status == "pending"
+        assert msg.attempt == 0
+        assert msg.max_attempts == 3
+        assert msg.priority == 0
+        assert msg.correlation_id is None
+        assert msg.task_id is None
+        assert msg.expires_at is None
+
+    async def test_legacy_message_compat(self, tmp_path):
+        path = tmp_path / ".mailboxes"
+        path.mkdir()
+        legacy = {"sender": "old", "recipient": "b", "content": "legacy", "kind": "message"}
+        with (path / "b.jsonl").open("w", encoding="utf-8") as f:
+            f.write(json.dumps(legacy) + "\n")
+        bus = MessageBus(tmp_path)
+        msgs = await bus.consume("b")
+        assert len(msgs) == 1
+        assert msgs[0].content == "legacy"
+        assert msgs[0].status == "pending"
+        assert msgs[0].message_id is not None
 
 
 # -- PlanStore --
@@ -320,8 +525,6 @@ class TestFormatTeamEvents:
         assert format_team_events([]) == "[team events]\n"
 
     def test_single(self):
-        from mcc_harness.mailbox import Message
-
         msgs = [Message(sender="worker", recipient="lead", content="done", kind="work_done")]
         result = format_team_events(msgs)
         assert "[team events]" in result
@@ -330,8 +533,6 @@ class TestFormatTeamEvents:
         assert "done" in result
 
     def test_multiple(self):
-        from mcc_harness.mailbox import Message
-
         msgs = [
             Message(sender="w1", recipient="lead", content="msg1", kind="message"),
             Message(sender="w2", recipient="lead", content="msg2", kind="error"),
