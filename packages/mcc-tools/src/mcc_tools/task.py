@@ -1,8 +1,7 @@
 """task 工具集：持久化任务记录与依赖图。
 
 落盘 .tasks/task_{8hex}.json，支持依赖（blockedBy）与生命周期
-pending → claim → in_progress → complete → completed。环检测防
-循环依赖，路径校验防 traversal。
+状态机管理。环检测防循环依赖，路径校验防 traversal。
 """
 
 from __future__ import annotations
@@ -10,6 +9,7 @@ from __future__ import annotations
 import json
 import secrets
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,47 @@ from mcc_core import ToolContext, ToolOutput
 
 _TASK_ID_PATTERN = "task_[0-9a-f]{8}"
 _MAX_ID_RETRIES = 100
+
+
+class TaskStatus(StrEnum):
+    PENDING = "pending"
+    READY = "ready"
+    CLAIMED = "claimed"
+    IN_PROGRESS = "in_progress"
+    BLOCKED = "blocked"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    RETRYING = "retrying"
+
+
+_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
+    TaskStatus.PENDING: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
+    TaskStatus.READY: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
+    TaskStatus.CLAIMED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
+    TaskStatus.IN_PROGRESS: frozenset({
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.TIMEOUT,
+        TaskStatus.CANCELLED,
+    }),
+    TaskStatus.BLOCKED: frozenset({TaskStatus.PENDING, TaskStatus.CANCELLED}),
+    TaskStatus.FAILED: frozenset({TaskStatus.RETRYING}),
+    TaskStatus.TIMEOUT: frozenset({TaskStatus.RETRYING}),
+    TaskStatus.RETRYING: frozenset({TaskStatus.PENDING}),
+    TaskStatus.COMPLETED: frozenset(),
+    TaskStatus.CANCELLED: frozenset(),
+}
+
+_VALID_STATUSES = frozenset(s.value for s in TaskStatus)
+
+_TERMINAL_STATUSES = frozenset({
+    TaskStatus.COMPLETED.value,
+    TaskStatus.FAILED.value,
+    TaskStatus.TIMEOUT.value,
+    TaskStatus.CANCELLED.value,
+})
 
 
 @dataclass
@@ -27,6 +68,13 @@ class Task:
     status: str
     owner: str | None
     blockedBy: list[str] = field(default_factory=list)
+    attempt: int = 0
+    max_attempts: int | None = None
+    owner_agent_id: str | None = None
+    deadline_at: str | None = None
+    error: str | None = None
+    result_ref: str | None = None
+    version: int = 0
 
 
 class TaskError(ValueError):
@@ -94,12 +142,46 @@ class TaskStore:
         if not path.is_file():
             raise TaskError(f"task not found: {task_id}")
         data = json.loads(path.read_text(encoding="utf-8"))
+        data.setdefault("attempt", 0)
+        data.setdefault("max_attempts", None)
+        data.setdefault("owner_agent_id", None)
+        data.setdefault("deadline_at", None)
+        data.setdefault("error", None)
+        data.setdefault("result_ref", None)
+        data.setdefault("version", 0)
         task = Task(**data)
         if task.id != task_id:
             raise TaskError(f"task file ID mismatch: {task_id}")
-        if task.status not in ("pending", "in_progress", "completed"):
+        if task.status not in _VALID_STATUSES:
             raise TaskError(f"invalid task status: {task.status}")
         return task
+
+    def _transition(
+        self,
+        task: Task,
+        target: TaskStatus,
+        *,
+        error: str | None = None,
+    ) -> Task:
+        current = TaskStatus(task.status)
+        allowed = _TRANSITIONS.get(current, frozenset())
+        if target not in allowed:
+            raise TaskError(
+                f"task {task.id} cannot transition from "
+                f"{current.value} to {target.value}"
+            )
+        task.status = target.value
+        if error is not None:
+            task.error = error
+        task.version += 1
+        self.save(task)
+        return task
+
+    def _check_owner(self, task: Task, owner: str) -> None:
+        if task.owner != owner:
+            raise TaskError(
+                f"task {task.id} owned by {task.owner}, not {owner}"
+            )
 
     def list(self) -> list[Task]:
         if not self.directory.exists():
@@ -136,7 +218,7 @@ class TaskStore:
         if not isinstance(add_blocked_by, list):
             raise TaskError("addBlockedBy must be a list")
         task = self.load(task_id)
-        if task.status != "pending" or task.owner is not None:
+        if task.status != TaskStatus.PENDING.value or task.owner is not None:
             raise TaskError(
                 f"task {task_id} dependencies only editable while pending"
             )
@@ -158,7 +240,7 @@ class TaskStore:
         task = self.load(task_id)
         for dep in task.blockedBy:
             try:
-                if self.load(dep).status != "completed":
+                if self.load(dep).status != TaskStatus.COMPLETED.value:
                     return False
             except TaskError:
                 return False
@@ -166,28 +248,74 @@ class TaskStore:
 
     def claim(self, task_id: str, owner: str = "agent") -> Task:
         task = self.load(task_id)
-        if task.status != "pending":
+        if task.status != TaskStatus.PENDING.value:
             raise TaskError(f"task {task_id} is {task.status}, cannot claim")
         incomplete = [
             d for d in task.blockedBy
-            if not self.exists(d) or self.load(d).status != "completed"
+            if not self.exists(d) or self.load(d).status != TaskStatus.COMPLETED.value
         ]
         if incomplete:
             raise TaskError(f"blocked by: {incomplete}")
         task.owner = owner
-        task.status = "in_progress"
-        self.save(task)
+        task = self._transition(task, TaskStatus.IN_PROGRESS)
         return task
 
     def complete(self, task_id: str, owner: str = "agent") -> Task:
         task = self.load(task_id)
-        if task.status != "in_progress":
+        if task.status != TaskStatus.IN_PROGRESS.value:
             raise TaskError(f"task {task_id} is {task.status}, cannot complete")
-        if task.owner != owner:
-            raise TaskError(f"task {task_id} owned by {task.owner}, not {owner}")
-        task.status = "completed"
-        self.save(task)
-        return task
+        self._check_owner(task, owner)
+        return self._transition(task, TaskStatus.COMPLETED)
+
+    def fail(
+        self, task_id: str, owner: str = "agent", error: str = ""
+    ) -> Task:
+        task = self.load(task_id)
+        if task.status != TaskStatus.IN_PROGRESS.value:
+            raise TaskError(f"task {task_id} is {task.status}, cannot fail")
+        self._check_owner(task, owner)
+        return self._transition(
+            task, TaskStatus.FAILED, error=error or "task failed"
+        )
+
+    def timeout(self, task_id: str, owner: str = "agent") -> Task:
+        task = self.load(task_id)
+        if task.status != TaskStatus.IN_PROGRESS.value:
+            raise TaskError(f"task {task_id} is {task.status}, cannot timeout")
+        self._check_owner(task, owner)
+        return self._transition(
+            task, TaskStatus.TIMEOUT, error="task timed out"
+        )
+
+    def cancel(
+        self,
+        task_id: str,
+        owner: str | None = None,
+        reason: str = "",
+    ) -> Task:
+        task = self.load(task_id)
+        if owner is not None and task.owner is not None:
+            self._check_owner(task, owner)
+        return self._transition(
+            task, TaskStatus.CANCELLED, error=reason or "task cancelled"
+        )
+
+    def retry(self, task_id: str) -> Task:
+        task = self.load(task_id)
+        if task.status not in (
+            TaskStatus.FAILED.value,
+            TaskStatus.TIMEOUT.value,
+        ):
+            raise TaskError(
+                f"task {task_id} is {task.status}, can only retry "
+                f"failed or timed-out tasks"
+            )
+        task = self._transition(task, TaskStatus.RETRYING)
+        task.attempt += 1
+        task.owner = None
+        task.owner_agent_id = None
+        task.error = None
+        return self._transition(task, TaskStatus.PENDING)
 
 
 def _format_task(task: Task) -> str:
@@ -282,7 +410,18 @@ class ListTasksTool(_TaskToolBase):
         tasks = self._store.list()
         if not tasks:
             return ToolOutput.ok("No tasks.")
-        markers = {"pending": "[ ]", "in_progress": "[>]", "completed": "[x]"}
+        markers = {
+            "pending": "[ ]",
+            "ready": "[R]",
+            "claimed": "[C]",
+            "in_progress": "[>]",
+            "blocked": "[B]",
+            "completed": "[x]",
+            "failed": "[!]",
+            "timeout": "[T]",
+            "cancelled": "[-]",
+            "retrying": "[~]",
+        }
         lines = [
             f"{markers.get(t.status, '[?]')} {_format_task(t)}"
             for t in tasks
@@ -370,7 +509,7 @@ class CompleteTaskTool(_TaskToolBase):
             return ToolOutput.err(str(e))
         unblocked = [
             t.subject for t in self._store.list()
-            if t.status == "pending" and t.blockedBy and self._store.can_start(t.id)
+            if t.status == TaskStatus.PENDING.value and t.blockedBy and self._store.can_start(t.id)
         ]
         msg = f"Completed {task.id} ({task.subject})"
         if unblocked:

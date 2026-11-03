@@ -23,6 +23,7 @@ from .task import (
     CreateTaskTool,
     GetTaskTool,
     ListTasksTool,
+    TaskStatus,
     TaskStore,
     UpdateTaskTool,
 )
@@ -97,6 +98,7 @@ __all__ = [
     "ReadFileTool",
     "RunBashTool",
     "TaskStore",
+    "TaskStatus",
     "TodoManager",
     "TodoWriteTool",
     "ToolRegistry",

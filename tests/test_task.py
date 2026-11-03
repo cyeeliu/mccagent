@@ -1,4 +1,4 @@
-"""task 工具集测试：TaskStore 持久化、依赖图、生命周期、6 工具转发。"""
+"""task 工具集测试：TaskStore 持久化、依赖图、生命周期、状态机、6 工具转发。"""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from mcc_tools import (
     CreateTaskTool,
     GetTaskTool,
     ListTasksTool,
+    TaskStatus,
     TaskStore,
     UpdateTaskTool,
 )
@@ -272,3 +273,236 @@ class TestTools:
         ]
         for t in tools:
             assert isinstance(t.input_schema(), dict)
+
+
+class TestTaskStateMachine:
+    """P1-04: Task 状态机重构 — 新增 fail/timeout/cancel/retry + 迁移校验。"""
+
+    def test_fail_from_in_progress(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        failed = store.fail(t.id, owner="agent-1", error="boom")
+        assert failed.status == TaskStatus.FAILED.value
+        assert failed.error == "boom"
+
+    def test_fail_default_error(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        failed = store.fail(t.id)
+        assert failed.error == "task failed"
+
+    def test_fail_non_in_progress_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        with pytest.raises(ValueError, match="cannot fail"):
+            store.fail(t.id)
+
+    def test_fail_owner_mismatch(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(ValueError, match="owned by"):
+            store.fail(t.id, owner="agent-2")
+
+    def test_timeout_from_in_progress(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        timed = store.timeout(t.id, owner="agent-1")
+        assert timed.status == TaskStatus.TIMEOUT.value
+        assert "timed out" in (timed.error or "")
+
+    def test_timeout_non_in_progress_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        with pytest.raises(ValueError, match="cannot timeout"):
+            store.timeout(t.id)
+
+    def test_cancel_from_pending(self, store: TaskStore) -> None:
+        t = store.create("work")
+        cancelled = store.cancel(t.id, reason="not needed")
+        assert cancelled.status == TaskStatus.CANCELLED.value
+        assert cancelled.error == "not needed"
+
+    def test_cancel_from_in_progress(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        cancelled = store.cancel(t.id)
+        assert cancelled.status == TaskStatus.CANCELLED.value
+
+    def test_cancel_by_owner(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        cancelled = store.cancel(t.id, owner="agent-1")
+        assert cancelled.status == TaskStatus.CANCELLED.value
+
+    def test_cancel_by_non_owner_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        with pytest.raises(ValueError, match="owned by"):
+            store.cancel(t.id, owner="agent-2")
+
+    def test_cancel_completed_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        store.complete(t.id)
+        with pytest.raises(ValueError, match="cannot transition"):
+            store.cancel(t.id)
+
+    def test_cancel_cancelled_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.cancel(t.id)
+        with pytest.raises(ValueError, match="cannot transition"):
+            store.cancel(t.id)
+
+    def test_retry_from_failed(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        store.fail(t.id)
+        retried = store.retry(t.id)
+        assert retried.status == TaskStatus.PENDING.value
+        assert retried.attempt == 1
+        assert retried.owner is None
+        assert retried.error is None
+
+    def test_retry_from_timeout(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        store.timeout(t.id)
+        retried = store.retry(t.id)
+        assert retried.status == TaskStatus.PENDING.value
+        assert retried.attempt == 1
+
+    def test_retry_increments_attempt(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        store.fail(t.id)
+        store.retry(t.id)
+        store.claim(t.id)
+        store.fail(t.id)
+        retried = store.retry(t.id)
+        assert retried.attempt == 2
+
+    def test_retry_non_failed_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        with pytest.raises(ValueError, match="can only retry"):
+            store.retry(t.id)
+
+    def test_retry_in_progress_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        with pytest.raises(ValueError, match="can only retry"):
+            store.retry(t.id)
+
+    def test_version_increments_on_transition(self, store: TaskStore) -> None:
+        t = store.create("work")
+        assert t.version == 0
+        claimed = store.claim(t.id)
+        assert claimed.version == 1
+        done = store.complete(t.id)
+        assert done.version == 2
+
+    def test_version_increments_on_fail(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        failed = store.fail(t.id)
+        assert failed.version == 2
+
+    def test_retry_version_increments_twice(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        store.fail(t.id)
+        retried = store.retry(t.id)
+        assert retried.version == 4
+
+    @pytest.mark.parametrize(
+        "terminal",
+        [TaskStatus.COMPLETED.value, TaskStatus.CANCELLED.value],
+    )
+    def test_terminal_no_outgoing(
+        self, store: TaskStore, terminal: str
+    ) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        if terminal == TaskStatus.COMPLETED.value:
+            store.complete(t.id)
+        else:
+            store.cancel(t.id)
+        with pytest.raises(ValueError, match="cannot transition"):
+            store.cancel(t.id)
+
+    def test_complete_after_fail_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        store.fail(t.id)
+        with pytest.raises(ValueError, match="cannot complete"):
+            store.complete(t.id)
+
+    def test_claim_after_fail_rejected(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id)
+        store.fail(t.id)
+        with pytest.raises(ValueError, match="cannot claim"):
+            store.claim(t.id)
+
+    def test_claim_after_retry_succeeds(self, store: TaskStore) -> None:
+        t = store.create("work")
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1")
+        store.retry(t.id)
+        claimed = store.claim(t.id, owner="agent-2")
+        assert claimed.status == TaskStatus.IN_PROGRESS.value
+        assert claimed.owner == "agent-2"
+
+
+class TestLegacyCompat:
+    """P1-04: 旧数据兼容 — 缺少新字段的 JSON 能正确加载。"""
+
+    def test_load_legacy_missing_new_fields(
+        self, store: TaskStore, tmp_path: Path
+    ) -> None:
+        legacy = {
+            "id": "task_11223344",
+            "subject": "legacy",
+            "description": "",
+            "status": "pending",
+            "owner": None,
+            "blockedBy": [],
+        }
+        path = tmp_path / ".tasks" / "task_11223344.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(legacy))
+        task = store.load("task_11223344")
+        assert task.attempt == 0
+        assert task.max_attempts is None
+        assert task.owner_agent_id is None
+        assert task.deadline_at is None
+        assert task.error is None
+        assert task.result_ref is None
+        assert task.version == 0
+
+    def test_load_legacy_in_progress(
+        self, store: TaskStore, tmp_path: Path
+    ) -> None:
+        legacy = {
+            "id": "task_11223344",
+            "subject": "legacy",
+            "description": "",
+            "status": "in_progress",
+            "owner": "agent-1",
+            "blockedBy": [],
+        }
+        path = tmp_path / ".tasks" / "task_11223344.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(legacy))
+        task = store.load("task_11223344")
+        assert task.status == TaskStatus.IN_PROGRESS.value
+        assert task.owner == "agent-1"
+
+    def test_save_roundtrip_preserves_new_fields(
+        self, store: TaskStore
+    ) -> None:
+        t = store.create("roundtrip")
+        store.claim(t.id, owner="agent-1")
+        store.fail(t.id, owner="agent-1", error="test error")
+        loaded = store.load(t.id)
+        assert loaded.status == TaskStatus.FAILED.value
+        assert loaded.error == "test error"
+        assert loaded.version == 2
+        assert loaded.attempt == 0
