@@ -1166,3 +1166,417 @@ class TestTaskOutcomeDispatch:
         final = ts.load(task.id)
         assert final.status != TaskStatus.COMPLETED.value
         assert final.status == TaskStatus.FAILED.value
+
+
+# -- P1-05: 运行中指令注入与取消控制 --
+
+
+def _p1_05_tool_use_turn(tool_id: str, tool_name: str, tool_input: dict) -> list:
+    """构造工具调用轮次（stop_reason=tool_use 使循环继续）。"""
+    from mcc_core import Usage
+    from mcc_llm import MessageStop, ToolUseInputDelta, ToolUseStart
+
+    return [
+        ToolUseStart(id=tool_id, name=tool_name),
+        ToolUseInputDelta(partial_json=json.dumps(tool_input)),
+        MessageStop(stop_reason="tool_use", usage=Usage()),
+    ]
+
+
+class _RecordingLlm:
+    """包装 MockLlm，记录每次 stream 调用收到的 messages。"""
+
+    def __init__(self, mock: MockLlm) -> None:
+        self._mock = mock
+        self.calls: list[list] = []
+
+    @property
+    def call_count(self) -> int:
+        return self._mock.call_count
+
+    async def complete(self, req):
+        return await self._mock.complete(req)
+
+    async def stream(self, req):
+        self.calls.append(req.messages)
+        async for ev in self._mock.stream(req):
+            yield ev
+
+
+def _user_texts(messages: list) -> list[str]:
+    """从 messages 中提取所有 user 角色的文本块。"""
+    from mcc_core import Role
+
+    return [
+        b.text
+        for m in messages
+        if m.role == Role.user
+        for b in m.content
+        if hasattr(b, "text")
+    ]
+
+
+class TestP105InstructionInjectAndCancel:
+    """P1-05: 运行中指令注入与取消控制。"""
+
+    # === Agent 级别：run_streaming 控制参数 ===
+
+    async def test_instruction_queue_injects_user_message(self, tmp_path):
+        """instruction_queue 中的内容在迭代边界注入为 user 消息。"""
+        from mcc_core import ToolContext
+        from mcc_harness.agent import AgentLoopBuilder
+        from mcc_tools import default_registry
+
+        llm = _RecordingLlm(MockLlm([single_text_turn("done")]))
+        ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
+        registry = default_registry()
+        agent = (
+            AgentLoopBuilder(llm, registry, ctx)
+            .model("claude-haiku-4-5-20251001")
+            .build()
+        )
+
+        iq: asyncio.Queue[str] = asyncio.Queue()
+        iq.put_nowait("pivot to new approach")
+
+        queue: asyncio.Queue = asyncio.Queue()
+        await agent.run_streaming("do work", queue, instruction_queue=iq)
+
+        assert llm.call_count == 1
+        texts = _user_texts(llm.calls[0])
+        assert any("do work" in t for t in texts)
+        assert any("[instruction] pivot to new approach" in t for t in texts)
+
+    async def test_multiple_instructions_combined(self, tmp_path):
+        """多条指令合并为一条 user 消息注入。"""
+        from mcc_core import ToolContext
+        from mcc_harness.agent import AgentLoopBuilder
+        from mcc_tools import default_registry
+
+        llm = _RecordingLlm(MockLlm([single_text_turn("done")]))
+        ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
+        registry = default_registry()
+        agent = (
+            AgentLoopBuilder(llm, registry, ctx)
+            .model("claude-haiku-4-5-20251001")
+            .build()
+        )
+
+        iq: asyncio.Queue[str] = asyncio.Queue()
+        iq.put_nowait("step 1")
+        iq.put_nowait("step 2")
+
+        queue: asyncio.Queue = asyncio.Queue()
+        await agent.run_streaming("do work", queue, instruction_queue=iq)
+
+        texts = _user_texts(llm.calls[0])
+        assert any("[instruction] step 1" in t and "[instruction] step 2" in t for t in texts)
+
+    async def test_instruction_queue_injects_between_turns(self, tmp_path):
+        """指令在工具调用轮次之间注入：第二轮 LLM 调用应包含指令。"""
+        from mcc_core import ToolContext, ToolOutput
+        from mcc_harness.agent import AgentLoopBuilder
+        from mcc_tools import default_registry
+
+        class _InjectTool:
+            name = "inject_instruction"
+            description = "inject instruction into queue"
+
+            def __init__(self, queue, text):
+                self._queue = queue
+                self._text = text
+
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+
+            async def execute(self, input, ctx):
+                self._queue.put_nowait(self._text)
+                return ToolOutput.ok("injected")
+
+        iq: asyncio.Queue[str] = asyncio.Queue()
+        turn1 = _p1_05_tool_use_turn("t1", "inject_instruction", {})
+        turn2 = single_text_turn("done")
+        llm = _RecordingLlm(MockLlm([turn1, turn2]))
+        ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
+        registry = default_registry()
+        registry.register(_InjectTool(iq, "switch strategy"))
+        agent = (
+            AgentLoopBuilder(llm, registry, ctx)
+            .model("claude-haiku-4-5-20251001")
+            .build()
+        )
+
+        queue: asyncio.Queue = asyncio.Queue()
+        await agent.run_streaming("do work", queue, instruction_queue=iq)
+
+        assert llm.call_count == 2
+        texts = _user_texts(llm.calls[1])
+        assert any("[instruction] switch strategy" in t for t in texts)
+
+    async def test_cancel_event_returns_cancelled(self, tmp_path):
+        """cancel_event 置位后 run_streaming 返回 "(cancelled)"。"""
+        from mcc_core import ToolContext, ToolOutput
+        from mcc_harness.agent import AgentLoopBuilder
+        from mcc_tools import default_registry
+
+        class _CancelTrigger:
+            name = "trigger_cancel"
+            description = "trigger cancel event"
+
+            def __init__(self, event):
+                self._event = event
+
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+
+            async def execute(self, input, ctx):
+                self._event.set()
+                return ToolOutput.ok("cancelled")
+
+        cancel_event = asyncio.Event()
+        turn1 = _p1_05_tool_use_turn("t1", "trigger_cancel", {})
+        turn2 = single_text_turn("done")
+        llm = MockLlm([turn1, turn2])
+        ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
+        registry = default_registry()
+        registry.register(_CancelTrigger(cancel_event))
+        agent = (
+            AgentLoopBuilder(llm, registry, ctx)
+            .model("claude-haiku-4-5-20251001")
+            .build()
+        )
+
+        queue: asyncio.Queue = asyncio.Queue()
+        run = await agent.run_streaming(
+            "do work", queue, cancel_event=cancel_event
+        )
+
+        assert run.final_text == "(cancelled)"
+
+    async def test_pause_event_blocks_until_resumed(self, tmp_path):
+        """pause_event 清零后阻塞，置位后继续执行。"""
+        from mcc_core import ToolContext, ToolOutput
+        from mcc_core.event import Notice
+        from mcc_harness.agent import AgentLoopBuilder
+        from mcc_tools import default_registry
+
+        class _PauseTrigger:
+            name = "trigger_pause"
+            description = "trigger pause event"
+
+            def __init__(self, event):
+                self._event = event
+
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+
+            async def execute(self, input, ctx):
+                self._event.clear()
+                asyncio.get_event_loop().call_later(0.1, self._event.set)
+                return ToolOutput.ok("paused")
+
+        pause_event = asyncio.Event()
+        pause_event.set()
+        turn1 = _p1_05_tool_use_turn("t1", "trigger_pause", {})
+        turn2 = single_text_turn("done")
+        llm = MockLlm([turn1, turn2])
+        ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
+        registry = default_registry()
+        registry.register(_PauseTrigger(pause_event))
+        agent = (
+            AgentLoopBuilder(llm, registry, ctx)
+            .model("claude-haiku-4-5-20251001")
+            .build()
+        )
+
+        queue: asyncio.Queue = asyncio.Queue()
+        run = await agent.run_streaming(
+            "do work", queue, pause_event=pause_event
+        )
+
+        assert run.final_text == "done"
+        events: list = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+        notices = [e for e in events if isinstance(e, Notice)]
+        assert any("[paused]" in n.text for n in notices)
+        assert any("[resumed]" in n.text for n in notices)
+
+    # === Teammate 级别：消息路由与队列 ===
+
+    def _make_rt_p1_05(self, tmp_path, llm, timeout_secs=300.0):
+        from mcc_tools import TaskStore as _TS
+        from mcc_tools import default_registry
+
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        registry = default_registry()
+        ts = _TS(tmp_path / ".tasks")
+        spec = TeammateSpec(
+            name="p105worker",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
+            timeout_secs=timeout_secs,
+            tools=["run_bash"],
+        )
+        rt = TeammateRuntime(
+            spec=spec,
+            llm=llm,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=ts,
+            base_dir=tmp_path,
+        )
+        return rt, bus, ts
+
+    async def test_assignment_does_not_overwrite_current(self, tmp_path):
+        """运行中收到新 assignment 时排队，不覆盖当前任务。"""
+        from mcc_tools import TaskStatus
+
+        turn1 = _p1_05_tool_use_turn("t1", "run_bash", {"command": "echo A"})
+        turn2 = single_text_turn("task A done")
+        turn3 = single_text_turn("task B done")
+        llm = MockLlm([turn1, turn2, turn3])
+        rt, bus, ts = self._make_rt_p1_05(tmp_path, llm)
+
+        task_a = ts.create("task A")
+        ts.claim(task_a.id, owner="p105worker")
+
+        await rt.start("task A", task_id=task_a.id)
+        await asyncio.sleep(0.1)
+
+        await bus.send(LEAD_NAME, "p105worker", "task B", kind="assignment")
+        rt.notify()
+
+        await asyncio.sleep(1.0)
+        msgs = await bus.consume(LEAD_NAME)
+        await rt.shutdown()
+
+        work_done_msgs = [m for m in msgs if m.kind == "work_done"]
+        assert len(work_done_msgs) >= 1
+        assert any("task A done" in m.content for m in work_done_msgs)
+        final_a = ts.load(task_a.id)
+        assert final_a.status == TaskStatus.COMPLETED.value
+
+    async def test_cancel_sets_cancelled_status(self, tmp_path):
+        """取消信号导致任务进入 CANCELLED 状态。"""
+        from mcc_core import ToolOutput
+        from mcc_tools import TaskStatus, default_registry
+        from mcc_tools import TaskStore as _TS
+
+        started = asyncio.Event()
+
+        class _SignalAndWait:
+            name = "signal_and_wait"
+            description = "signal start then wait"
+
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+
+            async def execute(self, input, ctx):
+                started.set()
+                await asyncio.sleep(0.2)
+                return ToolOutput.ok("done")
+
+        turn1 = _p1_05_tool_use_turn("t1", "signal_and_wait", {})
+        turn2 = single_text_turn("done")
+        llm = MockLlm([turn1, turn2])
+
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        registry = default_registry()
+        registry.register(_SignalAndWait())
+        ts = _TS(tmp_path / ".tasks")
+        spec = TeammateSpec(
+            name="p105worker",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
+            tools=["signal_and_wait"],
+        )
+        rt = TeammateRuntime(
+            spec=spec, llm=llm, registry=registry, bus=bus,
+            plan_store=plan_store, task_store=ts, base_dir=tmp_path,
+        )
+
+        task = ts.create("cancellable task")
+        ts.claim(task.id, owner="p105worker")
+
+        await rt.start("do work", task_id=task.id)
+        await started.wait()
+        assert rt._current.cancel_token is not None
+        rt._current.cancel_token.set()
+
+        await asyncio.sleep(0.5)
+        msgs = await bus.consume(LEAD_NAME)
+        await rt.shutdown()
+
+        assert any(m.kind == "work_cancelled" for m in msgs)
+        final = ts.load(task.id)
+        assert final.status == TaskStatus.CANCELLED.value
+
+    # === TeammateManager 新方法 ===
+
+    async def test_send_instruction_returns_confirmation(self, tmp_path):
+        """send_instruction 返回确认消息。"""
+        mgr = _make_manager(tmp_path)
+        await mgr.spawn("worker", "coder", "initial task")
+        result = await mgr.send_instruction("worker", "new approach")
+        assert "Instruction sent" in result
+        await mgr.shutdown_all()
+
+    async def test_assign_task_returns_confirmation(self, tmp_path):
+        """assign_task 返回确认消息。"""
+        mgr = _make_manager(tmp_path)
+        await mgr.spawn("worker", "coder", "initial task")
+        result = await mgr.assign_task("worker", "new task")
+        assert "Task assigned" in result
+        await mgr.shutdown_all()
+
+    async def test_cancel_teammate_returns_confirmation(self, tmp_path):
+        """cancel_teammate 返回确认消息。"""
+        mgr = _make_manager(tmp_path)
+        await mgr.spawn("worker", "coder", "initial task")
+        result = await mgr.cancel_teammate("worker")
+        assert "Cancel signal sent" in result
+        await mgr.shutdown_all()
+
+    async def test_pause_and_resume_return_confirmation(self, tmp_path):
+        """pause_teammate / resume_teammate 返回确认消息。"""
+        mgr = _make_manager(tmp_path)
+        await mgr.spawn("worker", "coder", "initial task")
+        assert "Pause signal sent" in await mgr.pause_teammate("worker")
+        assert "Resume signal sent" in await mgr.resume_teammate("worker")
+        await mgr.shutdown_all()
+
+    async def test_send_instruction_nonexistent_raises(self, tmp_path):
+        """向不存在的 teammate 发指令抛 ValueError。"""
+        mgr = _make_manager(tmp_path)
+        with pytest.raises(ValueError, match="no active"):
+            await mgr.send_instruction("ghost", "content")
+
+    async def test_assign_task_nonexistent_raises(self, tmp_path):
+        """向不存在的 teammate 分配任务抛 ValueError。"""
+        mgr = _make_manager(tmp_path)
+        with pytest.raises(ValueError, match="no active"):
+            await mgr.assign_task("ghost", "content")
+
+    async def test_cancel_teammate_nonexistent_raises(self, tmp_path):
+        """取消不存在的 teammate 抛 ValueError。"""
+        mgr = _make_manager(tmp_path)
+        with pytest.raises(ValueError, match="no active"):
+            await mgr.cancel_teammate("ghost")
+
+    async def test_pause_teammate_nonexistent_raises(self, tmp_path):
+        """暂停不存在的 teammate 抛 ValueError。"""
+        mgr = _make_manager(tmp_path)
+        with pytest.raises(ValueError, match="no active"):
+            await mgr.pause_teammate("ghost")
+
+    async def test_resume_teammate_nonexistent_raises(self, tmp_path):
+        """恢复不存在的 teammate 抛 ValueError。"""
+        mgr = _make_manager(tmp_path)
+        with pytest.raises(ValueError, match="no active"):
+            await mgr.resume_teammate("ghost")

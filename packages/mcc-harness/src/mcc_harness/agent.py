@@ -364,12 +364,22 @@ class AgentLoop:
         return text.strip() or "(empty summary)"
 
     async def run_streaming(
-        self, user_input: str, tx: asyncio.Queue[AgentEvent]
+        self,
+        user_input: str,
+        tx: asyncio.Queue[AgentEvent],
+        instruction_queue: asyncio.Queue[str] | None = None,
+        cancel_event: asyncio.Event | None = None,
+        pause_event: asyncio.Event | None = None,
     ) -> AgentRun:
         """流式运行，实时发送 AgentEvent 到队列，返回最终统计。
 
         以 self.history 为前缀继续对话；正常结束后把本轮完整
         消息序列累积回 history，使下一次调用具备上下文延续。
+
+        运行时控制（P1-05）：
+        - instruction_queue：每轮迭代前排空，内容作为 user 消息注入；
+        - cancel_event：置位后在下一个安全边界（迭代间）协作取消；
+        - pause_event：清零后阻塞等待恢复，置位后继续。
         """
         await tx.put(UserEcho(text=user_input))
         messages: list[Message] = [*self.history, Message.user(user_input)]
@@ -381,6 +391,43 @@ class AgentLoop:
 
         try:
             for iteration in range(1, self.max_iterations + 1):
+                if cancel_event is not None and cancel_event.is_set():
+                    self.history = list(messages)
+                    if self.recorder:
+                        with contextlib.suppress(Exception):
+                            await self.recorder.finalize("cancelled")
+                    return AgentRun(
+                        "(cancelled)",
+                        iteration - 1,
+                        total_usage,
+                        total_cost,
+                        cache_hit_rate=cache_hit_rate(total_usage),
+                        cost_breakdown=cost_breakdown,
+                    )
+
+                if instruction_queue is not None:
+                    pending: list[str] = []
+                    while not instruction_queue.empty():
+                        pending.append(instruction_queue.get_nowait())
+                    if pending:
+                        combined = "\n".join(
+                            f"[instruction] {i}" for i in pending
+                        )
+                        messages.append(Message.user(combined))
+                        await tx.put(
+                            Notice(
+                                text=f"[injected {len(pending)} "
+                                f"instruction(s)]"
+                            )
+                        )
+
+                if pause_event is not None and not pause_event.is_set():
+                    await tx.put(
+                        Notice(text="[paused] waiting for resume")
+                    )
+                    await pause_event.wait()
+                    await tx.put(Notice(text="[resumed]"))
+
                 ictx = IterationContext(
                     loop=self,
                     messages=messages,
@@ -702,10 +749,22 @@ class AgentLoop:
         except Exception as e:
             await tx.put(Notice(text=f"session record failed: {e}"))
 
-    async def run(self, user_input: str) -> AgentRun:
+    async def run(
+        self,
+        user_input: str,
+        instruction_queue: asyncio.Queue[str] | None = None,
+        cancel_event: asyncio.Event | None = None,
+        pause_event: asyncio.Event | None = None,
+    ) -> AgentRun:
         """非流式批量运行，丢弃事件。"""
         queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
-        return await self.run_streaming(user_input, queue)
+        return await self.run_streaming(
+            user_input,
+            queue,
+            instruction_queue=instruction_queue,
+            cancel_event=cancel_event,
+            pause_event=pause_event,
+        )
 
     async def _call_with_retry(
         self, req: CompleteRequest, tx: asyncio.Queue[AgentEvent]

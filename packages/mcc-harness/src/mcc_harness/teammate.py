@@ -214,6 +214,10 @@ class TeammateRuntime:
         self._status = TeammateStatus.CREATED
         self._last_transition: TransitionRecord | None = None
         self._force_stop = False
+        self._assignment_queue: list[dict[str, Any]] = []
+        self._instruction_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._pause_event: asyncio.Event = asyncio.Event()
+        self._pause_event.set()
 
     @property
     def name(self) -> str:
@@ -294,7 +298,13 @@ class TeammateRuntime:
                             TeammateStatus.ASSIGNED, reason="assignment ready"
                         )
                     await self._do_work()
-                    self._current.assignment = None
+                    self._current.clear()
+                    if self._dequeue_assignment():
+                        continue
+                    if self._status != TeammateStatus.IDLE:
+                        self._transition(
+                            TeammateStatus.IDLE, reason="work done"
+                        )
                     continue
 
                 if self._try_claim_task():
@@ -312,21 +322,42 @@ class TeammateRuntime:
         finally:
             self._safe_shutdown(reason="loop exit")
 
+    def _dequeue_assignment(self) -> bool:
+        """从任务队列取出下一个 assignment 到 _current。"""
+        if not self._assignment_queue:
+            return False
+        item = self._assignment_queue.pop(0)
+        self._current.assignment = item["content"]
+        self._current.task_id = item.get("task_id")
+        self._current.work_version += 1
+        self._current.started_at = time.monotonic()
+        return True
+
     def _handle_messages(self, inbox: list) -> None:
         for msg in inbox:
             if msg.kind == "shutdown":
                 self._shutdown_evt.set()
-            elif msg.kind == "assignment":
-                self._current.assignment = msg.content
-                tid = msg.meta.get("task_id")
-                if tid:
-                    self._current.task_id = tid
-                self._current.work_version += 1
+            elif msg.kind in ("assignment", "message"):
+                self._assignment_queue.append({
+                    "content": msg.content,
+                    "task_id": msg.meta.get("task_id") if msg.meta else None,
+                })
+                if not self._current.assignment:
+                    self._dequeue_assignment()
+            elif msg.kind == "instruction":
+                self._instruction_queue.put_nowait(msg.content)
+            elif msg.kind == "cancel":
+                if self._current.cancel_token is not None:
+                    self._current.cancel_token.set()
+            elif msg.kind == "pause":
+                self._pause_event.clear()
+            elif msg.kind == "resume":
+                self._pause_event.set()
+                self._wake.set()
             elif msg.kind == "plan_approval_response":
                 pass
             else:
-                self._current.assignment = msg.content
-                self._current.work_version += 1
+                self._instruction_queue.put_nowait(msg.content)
 
     async def _do_work(self) -> None:
         if self.spec.require_plan:
@@ -366,13 +397,30 @@ class TeammateRuntime:
             return
 
         agent = self._build_agent(cwd)
+        self._current.cancel_token = asyncio.Event()
         outcome: TeammateStatus
         try:
+            from .agent import AgentEvent as _Ev
+            queue: asyncio.Queue[_Ev] = asyncio.Queue()
             run = await asyncio.wait_for(
-                agent.run(self._current.assignment), timeout=self.spec.timeout_secs
+                agent.run_streaming(
+                    self._current.assignment,
+                    queue,
+                    instruction_queue=self._instruction_queue,
+                    cancel_event=self._current.cancel_token,
+                    pause_event=self._pause_event,
+                ),
+                timeout=self.spec.timeout_secs,
             )
-            summary = run.final_text or "(no output)"
-            outcome = TeammateStatus.REPORTING
+            if (
+                self._current.cancel_token is not None
+                and self._current.cancel_token.is_set()
+            ):
+                summary = run.final_text or "(cancelled)"
+                outcome = TeammateStatus.CANCELLED
+            else:
+                summary = run.final_text or "(no output)"
+                outcome = TeammateStatus.REPORTING
         except TimeoutError:
             summary = f"teammate timed out after {self.spec.timeout_secs:.0f}s"
             outcome = TeammateStatus.TIMEOUT
@@ -386,6 +434,7 @@ class TeammateRuntime:
             TeammateStatus.REPORTING: "work_done",
             TeammateStatus.TIMEOUT: "work_timeout",
             TeammateStatus.FAILED: "work_failed",
+            TeammateStatus.CANCELLED: "work_cancelled",
         }[outcome]
 
         await self._bus.send(
@@ -403,6 +452,12 @@ class TeammateRuntime:
                 elif outcome == TeammateStatus.TIMEOUT:
                     self._task_store.timeout(
                         self._current.task_id, owner=self.name,
+                    )
+                elif outcome == TeammateStatus.CANCELLED:
+                    self._task_store.cancel(
+                        self._current.task_id,
+                        owner=self.name,
+                        reason=summary,
                     )
                 else:
                     self._task_store.fail(
@@ -646,6 +701,49 @@ class TeammateManager:
         await self._bus.send(LEAD_NAME, to, content, kind="message")
         self._teammates[to].notify()
         return f"Message sent to {to}"
+
+    async def send_instruction(self, to: str, content: str) -> str:
+        """lead 向运行中 teammate 发送运行时指令。"""
+        if to not in self._teammates or not self._teammates[to].alive:
+            raise ValueError(f"no active teammate: {to}")
+        await self._bus.send(LEAD_NAME, to, content, kind="instruction")
+        self._teammates[to].notify()
+        return f"Instruction sent to {to}"
+
+    async def assign_task(self, to: str, content: str) -> str:
+        """lead 向 teammate 分配新任务（排队，不覆盖当前任务）。"""
+        if to not in self._teammates or not self._teammates[to].alive:
+            raise ValueError(f"no active teammate: {to}")
+        await self._bus.send(LEAD_NAME, to, content, kind="assignment")
+        self._teammates[to].notify()
+        return f"Task assigned to {to}"
+
+    async def cancel_teammate(self, name: str) -> str:
+        """取消 teammate 当前任务。"""
+        rt = self._teammates.get(name)
+        if rt is None or not rt.alive:
+            raise ValueError(f"no active teammate: {name}")
+        await self._bus.send(LEAD_NAME, name, "cancel", kind="cancel")
+        rt.notify()
+        return f"Cancel signal sent to {name}"
+
+    async def pause_teammate(self, name: str) -> str:
+        """暂停 teammate 执行。"""
+        rt = self._teammates.get(name)
+        if rt is None or not rt.alive:
+            raise ValueError(f"no active teammate: {name}")
+        await self._bus.send(LEAD_NAME, name, "pause", kind="pause")
+        rt.notify()
+        return f"Pause signal sent to {name}"
+
+    async def resume_teammate(self, name: str) -> str:
+        """恢复 teammate 执行。"""
+        rt = self._teammates.get(name)
+        if rt is None or not rt.alive:
+            raise ValueError(f"no active teammate: {name}")
+        await self._bus.send(LEAD_NAME, name, "resume", kind="resume")
+        rt.notify()
+        return f"Resume signal sent to {name}"
 
     async def request_shutdown(self, name: str) -> str:
         """请求 teammate 关闭。"""
@@ -915,6 +1013,187 @@ class SendTeammateMessageTool:
         return ToolOutput.ok(result)
 
 
+class SendInstructionTool:
+    """send_instruction：lead 向运行中 teammate 发送运行时指令。"""
+
+    def __init__(self, manager: TeammateManager) -> None:
+        self._manager = manager
+
+    @property
+    def name(self) -> str:
+        return "send_instruction"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Send a runtime instruction to an active teammate. "
+            "The instruction is injected between iterations without "
+            "interrupting the current task."
+        )
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["to", "content"],
+            "properties": {
+                "to": {"type": "string"},
+                "content": {"type": "string"},
+            },
+        }
+
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        to = str(input.get("to", ""))
+        content = str(input.get("content", ""))
+        if not to or not content:
+            return ToolOutput.err("'to' and 'content' are both required")
+        try:
+            result = await self._manager.send_instruction(to, content)
+        except ValueError as e:
+            return ToolOutput.err(str(e))
+        return ToolOutput.ok(result)
+
+
+class AssignTaskTool:
+    """assign_task：lead 向 teammate 分配新任务（排队）。"""
+
+    def __init__(self, manager: TeammateManager) -> None:
+        self._manager = manager
+
+    @property
+    def name(self) -> str:
+        return "assign_task"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Assign a new task to an active teammate. "
+            "The task is queued and executed after the current task finishes."
+        )
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["to", "content"],
+            "properties": {
+                "to": {"type": "string"},
+                "content": {"type": "string"},
+            },
+        }
+
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        to = str(input.get("to", ""))
+        content = str(input.get("content", ""))
+        if not to or not content:
+            return ToolOutput.err("'to' and 'content' are both required")
+        try:
+            result = await self._manager.assign_task(to, content)
+        except ValueError as e:
+            return ToolOutput.err(str(e))
+        return ToolOutput.ok(result)
+
+
+class CancelTeammateTool:
+    """cancel_teammate：取消 teammate 当前任务。"""
+
+    def __init__(self, manager: TeammateManager) -> None:
+        self._manager = manager
+
+    @property
+    def name(self) -> str:
+        return "cancel_teammate"
+
+    @property
+    def description(self) -> str:
+        return "Cancel the current task of an active teammate."
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["teammate"],
+            "properties": {
+                "teammate": {"type": "string"},
+            },
+        }
+
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        teammate = str(input.get("teammate", ""))
+        if not teammate:
+            return ToolOutput.err("'teammate' is required")
+        try:
+            result = await self._manager.cancel_teammate(teammate)
+        except ValueError as e:
+            return ToolOutput.err(str(e))
+        return ToolOutput.ok(result)
+
+
+class PauseTeammateTool:
+    """pause_teammate：暂停 teammate 执行。"""
+
+    def __init__(self, manager: TeammateManager) -> None:
+        self._manager = manager
+
+    @property
+    def name(self) -> str:
+        return "pause_teammate"
+
+    @property
+    def description(self) -> str:
+        return "Pause an active teammate's execution."
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["teammate"],
+            "properties": {
+                "teammate": {"type": "string"},
+            },
+        }
+
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        teammate = str(input.get("teammate", ""))
+        if not teammate:
+            return ToolOutput.err("'teammate' is required")
+        try:
+            result = await self._manager.pause_teammate(teammate)
+        except ValueError as e:
+            return ToolOutput.err(str(e))
+        return ToolOutput.ok(result)
+
+
+class ResumeTeammateTool:
+    """resume_teammate：恢复 teammate 执行。"""
+
+    def __init__(self, manager: TeammateManager) -> None:
+        self._manager = manager
+
+    @property
+    def name(self) -> str:
+        return "resume_teammate"
+
+    @property
+    def description(self) -> str:
+        return "Resume a paused teammate's execution."
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["teammate"],
+            "properties": {
+                "teammate": {"type": "string"},
+            },
+        }
+
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        teammate = str(input.get("teammate", ""))
+        if not teammate:
+            return ToolOutput.err("'teammate' is required")
+        try:
+            result = await self._manager.resume_teammate(teammate)
+        except ValueError as e:
+            return ToolOutput.err(str(e))
+        return ToolOutput.ok(result)
+
+
 class RequestShutdownTool:
     """request_shutdown：lead 请求 teammate 关闭。"""
 
@@ -1037,19 +1316,29 @@ def register_team_tools(registry: ToolRegistry, manager: TeammateManager) -> Non
     registry.register(SpawnTeammateTool(manager))
     registry.register(ListTeammatesTool(manager))
     registry.register(SendTeammateMessageTool(manager))
+    registry.register(SendInstructionTool(manager))
+    registry.register(AssignTaskTool(manager))
+    registry.register(CancelTeammateTool(manager))
+    registry.register(PauseTeammateTool(manager))
+    registry.register(ResumeTeammateTool(manager))
     registry.register(RequestShutdownTool(manager))
     registry.register(ReviewPlanTool(manager.plan_store, manager.bus))
 
 
 __all__ = [
+    "AssignTaskTool",
+    "CancelTeammateTool",
     "CreateWorktreeTool",
     "CurrentExecution",
     "LEAD_NAME",
     "ListTeammatesTool",
     "MessageBus",
+    "PauseTeammateTool",
     "PlanStore",
     "RequestShutdownTool",
+    "ResumeTeammateTool",
     "ReviewPlanTool",
+    "SendInstructionTool",
     "SendToLeadTool",
     "SendTeammateMessageTool",
     "SpawnTeammateTool",
