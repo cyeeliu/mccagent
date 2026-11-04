@@ -18,6 +18,8 @@ from mcc_tui.app import App
 from mcc_tui.keys import Key, KeyReader
 from mcc_tui.render import _COMP_MAX_ROWS, build_renderable
 
+_BATCH_MAX = 64
+
 
 @dataclass
 class TuiHandles:
@@ -89,6 +91,12 @@ async def _step(app: App, handles: TuiHandles, key_queue: asyncio.Queue) -> bool
         try:
             ev = ev_task.result()
             app.apply_event(ev)
+            for _ in range(_BATCH_MAX):
+                try:
+                    ev = handles.events.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                app.apply_event(ev)
         except asyncio.CancelledError:
             pass
     return should_quit

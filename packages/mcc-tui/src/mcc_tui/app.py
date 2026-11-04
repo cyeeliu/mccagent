@@ -33,6 +33,7 @@ from mcc_tui.completions import CompletionItem, CompletionProvider
 from mcc_tui.viewport import InputViewport
 
 _MAX_ITEMS = 500
+_STREAM_MAX_CHARS = 100_000
 
 _AGENT_TOOLS = {
     "spawn_subagent": "preset",
@@ -73,6 +74,7 @@ class App:
     items: deque[RenderItem] = field(default_factory=lambda: deque(maxlen=_MAX_ITEMS))
     streaming_text: str = ""
     streaming_thinking: str = ""
+    streaming_truncated: bool = False
     input: str = ""
     cursor: int = 0
     agent_busy: bool = False
@@ -155,6 +157,19 @@ class App:
         self.comp_dismissed = False
         self.input_viewport.reset()
 
+    def _append_streaming(self, which: str, text: str) -> None:
+        if self.streaming_truncated:
+            return
+        attr = "streaming_text" if which == "text" else "streaming_thinking"
+        current = getattr(self, attr)
+        if len(current) + len(text) > _STREAM_MAX_CHARS:
+            remaining = _STREAM_MAX_CHARS - len(current)
+            if remaining > 0:
+                setattr(self, attr, current + text[:remaining])
+            self.streaming_truncated = True
+        else:
+            setattr(self, attr, current + text)
+
     def flush_streaming(self) -> None:
         if self.streaming_thinking:
             text = self.streaming_thinking
@@ -164,6 +179,14 @@ class App:
             text = self.streaming_text
             self.streaming_text = ""
             self.push(RenderItem(kind="assistant", text=text))
+        if self.streaming_truncated:
+            self.push(
+                RenderItem(
+                    kind="notice",
+                    text="⚠ streaming output truncated (limit reached)",
+                )
+            )
+            self.streaming_truncated = False
 
     def resolve_permission(self) -> PermissionRequest | None:
         """结束当前确认（无论用户选了什么），弹出下一个排队的请求。"""
@@ -183,9 +206,9 @@ class App:
             self._run_start_out = self.session_out
             self._run_start_cache = self.cache_read_total
         elif isinstance(ev, ThinkingDelta):
-            self.streaming_thinking += ev.text
+            self._append_streaming("thinking", ev.text)
         elif isinstance(ev, TextDelta):
-            self.streaming_text += ev.text
+            self._append_streaming("text", ev.text)
         elif isinstance(ev, ToolCallStart):
             self.flush_streaming()
             agent_name = ""

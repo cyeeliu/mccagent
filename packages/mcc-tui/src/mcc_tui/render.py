@@ -360,6 +360,9 @@ def build_renderable(app: App, console: Console) -> Layout:
     if app.streaming_text:
         _t = _render_item(RenderItem(kind="assistant", text=app.streaming_text))
         all_lines.extend(_split_lines(_t, text_width))
+    if app.streaming_truncated:
+        _t = Text("⚠ streaming output truncated (limit reached)", style="bold yellow")
+        all_lines.extend(_split_lines(_t, text_width))
 
     total = len(all_lines)
     max_scroll = max(0, total - available)
