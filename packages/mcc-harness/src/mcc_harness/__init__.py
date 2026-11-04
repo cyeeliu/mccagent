@@ -26,6 +26,7 @@ from mcc_harness.background import (
     format_background_results,
 )
 from mcc_harness.compactor import CompactionReport, ContextCompactor
+from mcc_harness.context import AgentContext, ContextValidationError
 from mcc_harness.cron import (
     CancelCronTool,
     CronJob,
@@ -206,6 +207,7 @@ __all__ = [
     "AgentLoop",
     "AgentLoopBuilder",
     "AgentAlreadyRegisteredError",
+    "AgentContext",
     "AgentDescriptor",
     "AgentNotFoundError",
     "AgentRegistration",
@@ -225,6 +227,7 @@ __all__ = [
     "CircuitOpenError",
     "CompactionReport",
     "ContextCompactor",
+    "ContextValidationError",
     "DEFAULT_CONTEXT_WINDOW",
     "CronJob",
     "CronScheduler",
