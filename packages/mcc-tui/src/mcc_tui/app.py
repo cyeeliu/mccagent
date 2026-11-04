@@ -29,6 +29,7 @@ from mcc_core import (
 )
 
 from mcc_tui.completions import CompletionItem, CompletionProvider
+from mcc_tui.viewport import InputViewport
 
 _MAX_ITEMS = 500
 
@@ -98,6 +99,7 @@ class App:
     pending_selection: SelectionRequest | None = None
     sel_index: int = 0
     sel_scroll: int = 0
+    input_viewport: InputViewport = field(default_factory=InputViewport)
 
     @property
     def comp_active(self) -> bool:
@@ -145,6 +147,7 @@ class App:
         self.cursor = 0
         self.comp_items = []
         self.comp_dismissed = False
+        self.input_viewport.reset()
 
     def flush_streaming(self) -> None:
         if self.streaming_thinking:

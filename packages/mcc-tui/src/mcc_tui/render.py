@@ -243,6 +243,42 @@ def _status_hint(app: App) -> Text:
     return Text(" Enter: send · /: commands · ↑/↓: scroll · Ctrl-C: quit ")
 
 
+def _width_to_char_offset(line: str, target_width: int) -> int:
+    """找到显示宽度达到 target_width 的字符偏移。"""
+    current_w = 0
+    for i, ch in enumerate(line):
+        if current_w >= target_width:
+            return i
+        current_w += _metrics.char_width(ch)
+    return len(line)
+
+
+def _render_input_panel(app: App, console_width: int, input_rows: int) -> Panel:
+    """渲染输入面板：使用 InputViewport 确保光标始终可见。"""
+    content_width = max(1, console_width - _PANEL_BORDERS)
+    content_height = max(1, input_rows - _PANEL_BORDERS)
+
+    app.input_viewport.update(app.input, app.cursor, content_width, content_height)
+    vis_lines = app.input_viewport.visible_lines(
+        app.input, content_width, content_height
+    )
+    vis_row, vis_col = app.input_viewport.cursor_visible_pos(app.input, app.cursor)
+
+    input_text = Text()
+    for i, line in enumerate(vis_lines):
+        if i == vis_row:
+            char_pos = _width_to_char_offset(line, max(0, vis_col))
+            input_text.append(line[:char_pos])
+            input_text.append("▎", style="bold cyan")
+            input_text.append(line[char_pos:])
+        else:
+            input_text.append(line)
+        if i < len(vis_lines) - 1:
+            input_text.append("\n")
+
+    return Panel(input_text, title=" input ", border_style="cyan")
+
+
 def build_renderable(app: App, console: Console) -> Layout:
     all_items: list[Text] = [_render_item(it) for it in app.items]
     if app.streaming_thinking:
@@ -261,9 +297,15 @@ def build_renderable(app: App, console: Console) -> Layout:
     else:
         sel_rows = 0
 
+    input_content_lines = len(app.input.split("\n")) if app.input else 1
+    input_rows = min(
+        max(_INPUT_ROWS, input_content_lines + _PANEL_BORDERS),
+        max(_INPUT_ROWS, console.height // 4),
+    )
+
     available = max(
         5,
-        console.height - _INPUT_ROWS - _STATUS_ROWS - _PANEL_BORDERS - comp_rows - sel_rows,
+        console.height - input_rows - _STATUS_ROWS - _PANEL_BORDERS - comp_rows - sel_rows,
     )
     text_width = max(20, console.width - _PANEL_BORDERS - _TEXT_INDENT)
     app.scroll = min(app.scroll, _max_scroll(all_items, available, text_width))
@@ -305,8 +347,7 @@ def build_renderable(app: App, console: Console) -> Layout:
             prompt, title=" permission required ", border_style="yellow"
         )
     else:
-        cursor_display = app.input[: app.cursor] + "▎" + app.input[app.cursor :]
-        input_panel = Panel(Text(cursor_display), title=" input ", border_style="cyan")
+        input_panel = _render_input_panel(app, console.width, input_rows)
 
     status = Group(_status_info(app), _status_hint(app))
 
@@ -315,7 +356,7 @@ def build_renderable(app: App, console: Console) -> Layout:
         rows.append(Layout(comp_panel, name="completions", size=comp_rows))
     if sel_panel is not None:
         rows.append(Layout(sel_panel, name="selection", size=sel_rows))
-    rows.append(Layout(input_panel, name="input", size=_INPUT_ROWS))
+    rows.append(Layout(input_panel, name="input", size=input_rows))
     rows.append(Layout(status, name="status", size=_STATUS_ROWS))
 
     layout = Layout()
