@@ -266,6 +266,43 @@ def _selection_panel(app: App, console_width: int) -> Panel | None:
     return Panel(text, title=f" {req.title} ", border_style="magenta")
 
 
+def _permission_panel(app: App, console_width: int) -> Panel | None:
+    """权限确认浮层：消息区域自动换行，操作提示固定保留不被挤掉。"""
+    if app.pending_permission is None:
+        return None
+    p = app.pending_permission
+    content_width = max(1, console_width - _PANEL_BORDERS)
+
+    msg = Text()
+    msg.append("⚠ ", style="bold yellow")
+    msg.append(p.message, style="bold")
+    msg_lines = _split_lines(msg, content_width)
+
+    ops = Text()
+    ops.append("[y]", style="bold green")
+    ops.append(" allow  ")
+    ops.append("[a]", style="bold green")
+    ops.append(" always  ")
+    ops.append("[n]", style="bold red")
+    ops.append(" deny  ")
+    ops.append("[e]", style="bold cyan")
+    ops.append(" deny+comment")
+
+    parts = list(msg_lines) + [Text(""), ops]
+    return Panel(Group(*parts), title=" permission required ", border_style="yellow")
+
+
+def _permission_content_lines(app: App, console_width: int) -> int:
+    """权限面板内容行数：消息换行后行数 + 空行 + 操作提示行。"""
+    if app.pending_permission is None:
+        return 0
+    content_width = max(1, console_width - _PANEL_BORDERS)
+    msg = Text()
+    msg.append("⚠ ", style="bold yellow")
+    msg.append(app.pending_permission.message, style="bold")
+    return len(_split_lines(msg, content_width)) + 2
+
+
 def _status_info(app: App) -> Text:
     """常驻信息行：模型 · 上下文占比（颜色分级）· 缓存命中率 · 成本。"""
     text = Text()
@@ -366,7 +403,12 @@ def build_renderable(app: App, console: Console) -> Layout:
     else:
         sel_rows = 0
 
-    input_content_lines = len(app.input.split("\n")) if app.input else 1
+    if app.permission_feedback_mode:
+        input_content_lines = 1
+    elif app.pending_permission is not None:
+        input_content_lines = _permission_content_lines(app, console.width)
+    else:
+        input_content_lines = len(app.input.split("\n")) if app.input else 1
     layout = _layout.compute(
         TerminalMetrics(console.width, console.height),
         input_content_lines,
@@ -421,22 +463,7 @@ def build_renderable(app: App, console: Console) -> Layout:
             border_style="yellow",
         )
     elif app.pending_permission is not None:
-        p = app.pending_permission
-        prompt = Text()
-        prompt.append("⚠ ", style="bold yellow")
-        prompt.append(p.message, style="bold")
-        prompt.append("   ")
-        prompt.append("[y]", style="bold green")
-        prompt.append(" allow  ")
-        prompt.append("[a]", style="bold green")
-        prompt.append(" always  ")
-        prompt.append("[n]", style="bold red")
-        prompt.append(" deny  ")
-        prompt.append("[e]", style="bold cyan")
-        prompt.append(" deny+comment")
-        input_panel = Panel(
-            prompt, title=" permission required ", border_style="yellow"
-        )
+        input_panel = _permission_panel(app, console.width)
     else:
         input_panel = _render_input_panel(app, console.width, input_rows)
 
