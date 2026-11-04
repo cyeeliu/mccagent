@@ -6,6 +6,7 @@ App 消费 AgentEvent 事件流，维护渲染项列表与流式文本缓冲，
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections import deque
 from dataclasses import dataclass, field
@@ -46,6 +47,9 @@ class CallStatus(Enum):
     failed = "failed"
 
 
+_seq_counter = itertools.count(1)
+
+
 @dataclass
 class RenderItem:
     kind: str
@@ -58,6 +62,7 @@ class RenderItem:
     is_error: bool = False
     stats: str = ""
     agent_name: str = ""
+    seq: int = field(default_factory=lambda: next(_seq_counter))
 
 
 @dataclass
@@ -100,6 +105,7 @@ class App:
     sel_index: int = 0
     sel_scroll: int = 0
     input_viewport: InputViewport = field(default_factory=InputViewport)
+    render_cache: dict = field(default_factory=dict)
 
     @property
     def comp_active(self) -> bool:
@@ -205,6 +211,7 @@ class App:
                 if item.kind == "tool_call" and item.call_id == ev.id:
                     item.status = CallStatus.failed if ev.is_error else CallStatus.done
                     agent_name = item.agent_name
+                    self.render_cache.pop(item.seq, None)
                     break
             self.push(
                 RenderItem(

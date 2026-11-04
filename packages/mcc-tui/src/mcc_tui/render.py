@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+from collections import deque
+from dataclasses import dataclass
+
 from rich.console import Console, Group
 from rich.layout import Layout
 from rich.panel import Panel
@@ -23,6 +26,45 @@ _STATUS_ROWS = 3
 _PANEL_BORDERS = 2
 _TEXT_INDENT = 2
 _COMP_MAX_ROWS = 7
+
+
+@dataclass
+class _CachedItem:
+    text: Text
+    lines: list[Text]
+    width: int
+
+
+class RenderCache:
+    """缓存 RenderItem 的渲染和换行结果，避免每次刷新重复处理。"""
+
+    def __init__(self, store: dict | None = None) -> None:
+        self._cache = store if store is not None else {}
+
+    def get_lines(self, item: RenderItem, width: int) -> list[Text]:
+        key = item.seq
+        cached = self._cache.get(key)
+        if cached is not None and cached.width == width:
+            return cached.lines
+        text = _render_item(item)
+        lines = _split_lines(text, width)
+        self._cache[key] = _CachedItem(text=text, lines=lines, width=width)
+        return lines
+
+    def invalidate(self, item: RenderItem) -> None:
+        self._cache.pop(item.seq, None)
+
+    def prune(self, items: deque[RenderItem]) -> None:
+        if len(self._cache) <= len(items):
+            return
+        valid = {item.seq for item in items}
+        self._cache = {k: v for k, v in self._cache.items() if k in valid}
+
+    def clear(self) -> None:
+        self._cache.clear()
+
+    def __len__(self) -> int:
+        return len(self._cache)
 
 
 def _truncate(s: str, n: int) -> str:
@@ -283,12 +325,6 @@ def _render_input_panel(app: App, console_width: int, input_rows: int) -> Panel:
 
 
 def build_renderable(app: App, console: Console) -> Layout:
-    all_items: list[Text] = [_render_item(it) for it in app.items]
-    if app.streaming_thinking:
-        all_items.append(_render_item(RenderItem(kind="thinking", text=app.streaming_thinking)))
-    if app.streaming_text:
-        all_items.append(_render_item(RenderItem(kind="assistant", text=app.streaming_text)))
-
     comp_panel = _completion_panel(app)
     comp_rows = (len(app.comp_items[:_COMP_MAX_ROWS]) + _PANEL_BORDERS) if comp_panel else 0
     sel_panel = _selection_panel(app)
@@ -310,8 +346,28 @@ def build_renderable(app: App, console: Console) -> Layout:
     input_rows = layout.input_height
     available = layout.message_height
     text_width = layout.text_width
-    app.scroll = min(app.scroll, _max_scroll(all_items, available, text_width))
-    visible = _select_visible(all_items, available, app.scroll, text_width)
+
+    cache = RenderCache(app.render_cache)
+    cache.prune(app.items)
+
+    all_lines: list[Text] = []
+    for item in app.items:
+        all_lines.extend(cache.get_lines(item, text_width))
+
+    if app.streaming_thinking:
+        _t = _render_item(RenderItem(kind="thinking", text=app.streaming_thinking))
+        all_lines.extend(_split_lines(_t, text_width))
+    if app.streaming_text:
+        _t = _render_item(RenderItem(kind="assistant", text=app.streaming_text))
+        all_lines.extend(_split_lines(_t, text_width))
+
+    total = len(all_lines)
+    max_scroll = max(0, total - available)
+    app.scroll = min(app.scroll, max_scroll)
+    scroll = min(max(0, app.scroll), max_scroll)
+    bottom = total - scroll
+    top = max(0, bottom - available)
+    visible = all_lines[top:bottom] or [Text("")]
 
     thinking = (
         f" · thinking… ~{_fmt_tokens(app.est_stream_tokens)} tok"
