@@ -7,6 +7,7 @@ from mcc_core import TextDelta, ThinkingDelta, TurnEnd, UserEcho
 from mcc_tui.__init__ import _BATCH_MAX, TuiHandles, _step
 from mcc_tui.app import _STREAM_MAX_CHARS, App, RenderItem
 from mcc_tui.render import build_renderable
+from mcc_tui.resize import ResizeWatcher
 from rich.console import Console
 
 
@@ -156,7 +157,7 @@ async def test_batch_processes_all_events():
     for i in range(10):
         await handles.events.put(TextDelta(text=f"chunk{i} "))
 
-    await _step(app, handles, key_queue)
+    await _step(app, handles, key_queue, ResizeWatcher())
 
     expected = "".join(f"chunk{i} " for i in range(10))
     assert app.streaming_text == expected
@@ -172,7 +173,7 @@ async def test_batch_limit_caps_processing():
     for _ in range(total):
         await handles.events.put(TextDelta(text="x"))
 
-    await _step(app, handles, key_queue)
+    await _step(app, handles, key_queue, ResizeWatcher())
 
     processed = _BATCH_MAX + 1
     assert len(app.streaming_text) == processed
@@ -188,7 +189,7 @@ async def test_batch_mixed_event_types():
     await handles.events.put(ThinkingDelta(text="reasoning"))
     await handles.events.put(TextDelta(text=" more"))
 
-    await _step(app, handles, key_queue)
+    await _step(app, handles, key_queue, ResizeWatcher())
 
     assert app.streaming_text == "answer more"
     assert app.streaming_thinking == "reasoning"
@@ -203,7 +204,7 @@ async def test_batch_with_turn_end_flushes():
     await handles.events.put(TextDelta(text="hello"))
     await handles.events.put(TurnEnd(cost_usd=0.01))
 
-    await _step(app, handles, key_queue)
+    await _step(app, handles, key_queue, ResizeWatcher())
 
     assert app.streaming_text == ""
     assistant_items = [item for item in app.items if item.kind == "assistant"]
@@ -218,7 +219,7 @@ async def test_batch_empty_queue_no_error():
 
     await handles.events.put(TextDelta(text="single"))
 
-    await _step(app, handles, key_queue)
+    await _step(app, handles, key_queue, ResizeWatcher())
 
     assert app.streaming_text == "single"
 
@@ -232,7 +233,7 @@ async def test_batch_truncation_during_batch():
     for _ in range(20):
         await handles.events.put(TextDelta(text="x" * chunk_size))
 
-    await _step(app, handles, key_queue)
+    await _step(app, handles, key_queue, ResizeWatcher())
 
     assert app.streaming_truncated is True
     assert len(app.streaming_text) == _STREAM_MAX_CHARS
@@ -247,7 +248,7 @@ async def test_batch_various_sizes(n_events):
     for _ in range(n_events):
         await handles.events.put(TextDelta(text="x"))
 
-    await _step(app, handles, key_queue)
+    await _step(app, handles, key_queue, ResizeWatcher())
 
     processed = min(n_events, _BATCH_MAX + 1)
     assert len(app.streaming_text) == processed

@@ -17,6 +17,7 @@ from rich.live import Live
 from mcc_tui.app import App
 from mcc_tui.keys import Key, KeyReader
 from mcc_tui.render import _COMP_MAX_ROWS, build_renderable
+from mcc_tui.resize import ResizeWatcher
 
 _BATCH_MAX = 64
 
@@ -47,16 +48,17 @@ async def run_tui(handles: TuiHandles, console: Console | None = None) -> None:
 
     with KeyReader() as reader:
         reader_task = asyncio.create_task(_key_reader_loop(reader, key_queue))
-        renderable = build_renderable(app, console)
-        with Live(renderable, auto_refresh=False, console=console, screen=False) as live:
-            try:
-                while True:
-                    live.update(build_renderable(app, console), refresh=True)
-                    if await _step(app, handles, key_queue):
-                        break
-            finally:
-                reader.close()
-                await _cancel_and_wait(reader_task)
+        async with ResizeWatcher() as resize_watcher:
+            renderable = build_renderable(app, console)
+            with Live(renderable, auto_refresh=False, console=console, screen=False) as live:
+                try:
+                    while True:
+                        live.update(build_renderable(app, console), refresh=True)
+                        if await _step(app, handles, key_queue, resize_watcher):
+                            break
+                finally:
+                    reader.close()
+                    await _cancel_and_wait(reader_task)
 
 
 async def _cancel_and_wait(*tasks: asyncio.Task) -> None:
@@ -75,19 +77,25 @@ async def _key_reader_loop(reader: KeyReader, queue: asyncio.Queue) -> None:
         await queue.put(key)
 
 
-async def _step(app: App, handles: TuiHandles, key_queue: asyncio.Queue) -> bool:
+async def _step(
+    app: App,
+    handles: TuiHandles,
+    key_queue: asyncio.Queue,
+    resize_watcher: ResizeWatcher,
+) -> bool:
     key_task = asyncio.create_task(key_queue.get())
     ev_task = asyncio.create_task(handles.events.get())
+    resize_task = asyncio.create_task(resize_watcher.wait())
     done, _pending = await asyncio.wait(
-        {key_task, ev_task}, return_when=asyncio.FIRST_COMPLETED
+        {key_task, ev_task, resize_task}, return_when=asyncio.FIRST_COMPLETED
     )
     should_quit = False
     if key_task in done:
-        await _cancel_and_wait(ev_task)
+        await _cancel_and_wait(ev_task, resize_task)
         key = key_task.result()
         should_quit = _handle_key(app, handles, key)
     if ev_task in done:
-        await _cancel_and_wait(key_task)
+        await _cancel_and_wait(key_task, resize_task)
         try:
             ev = ev_task.result()
             app.apply_event(ev)
@@ -99,6 +107,9 @@ async def _step(app: App, handles: TuiHandles, key_queue: asyncio.Queue) -> bool
                 app.apply_event(ev)
         except asyncio.CancelledError:
             pass
+    if resize_task in done:
+        await _cancel_and_wait(key_task, ev_task)
+        app.render_cache.clear()
     return should_quit
 
 
