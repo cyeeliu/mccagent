@@ -69,6 +69,20 @@ from mcc_harness.hooks import (
     PythonHook,
     ShellHook,
 )
+from mcc_harness.integration import (
+    ConflictError,
+    ConflictReport,
+    DiffArtifact,
+    IntegrationError,
+    IntegrationManagerImpl,
+    IntegrationNotFoundError,
+    IntegrationRequest,
+    IntegrationStatus,
+    MergeResult,
+    MergeStrategy,
+    VerificationError,
+    VerificationResult,
+)
 from mcc_harness.interceptors import (
     BackgroundInterceptor,
     BudgetInterceptor,
@@ -477,5 +491,17 @@ __all__ = [
     "ResultCollectorImpl",
     "ResultStatus",
     "ResultSummary",
+    "ConflictError",
+    "ConflictReport",
+    "DiffArtifact",
+    "IntegrationError",
+    "IntegrationManagerImpl",
+    "IntegrationNotFoundError",
+    "IntegrationRequest",
+    "IntegrationStatus",
+    "MergeResult",
+    "MergeStrategy",
+    "VerificationError",
+    "VerificationResult",
 ]
 __version__ = "0.1.0"
