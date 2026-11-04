@@ -112,27 +112,48 @@ def _handle_key(app: App, handles: TuiHandles, key: Key | str) -> bool:
     if app.pending_selection is not None:
         return _handle_selection_key(app, handles, key)
 
-    # 补全浮层激活时的键位优先：↑↓ 选择、Tab 补全、Enter 补全选中
-    # 项（已是精确匹配则照常发送）、Esc 关闭浮层
+    # 补全浮层激活时的键位优先：↑↓ 选择、PgUp/PgDn 翻页、Home/End 首尾、
+    # Tab 补全、Enter 补全选中项（已是精确匹配则照常发送）、Esc 关闭浮层
     if app.comp_active:
+        n = len(app.comp_items)
+        visible = min(_COMP_MAX_ROWS, n)
+        moved = False
         if key == Key.up:
-            app.comp_index = (app.comp_index - 1) % len(app.comp_items)
-            return False
-        if key == Key.down:
-            app.comp_index = (app.comp_index + 1) % len(app.comp_items)
-            return False
-        if key == Key.tab:
+            app.comp_index = (app.comp_index - 1) % n
+            moved = True
+        elif key == Key.down:
+            app.comp_index = (app.comp_index + 1) % n
+            moved = True
+        elif key == Key.page_up:
+            app.comp_index = max(0, app.comp_index - visible)
+            moved = True
+        elif key == Key.page_down:
+            app.comp_index = min(n - 1, app.comp_index + visible)
+            moved = True
+        elif key == Key.home:
+            app.comp_index = 0
+            moved = True
+        elif key == Key.end:
+            app.comp_index = n - 1
+            moved = True
+        elif key == Key.tab:
             app.apply_completion(app.comp_items[app.comp_index])
             return False
-        if key == Key.escape:
+        elif key == Key.escape:
             app.dismiss_completions()
             return False
-        if key == Key.enter and not app.agent_busy:
+        elif key == Key.enter and not app.agent_busy:
             current = app.comp_items[app.comp_index]
             if app.input.strip() == current.insert:
                 app.dismiss_completions()
                 return _send_input(app, handles)
             app.apply_completion(current)
+            return False
+        if moved:
+            if app.comp_index < app.comp_scroll:
+                app.comp_scroll = app.comp_index
+            elif app.comp_index >= app.comp_scroll + visible:
+                app.comp_scroll = app.comp_index - visible + 1
             return False
 
     if key == Key.escape and app.agent_busy:

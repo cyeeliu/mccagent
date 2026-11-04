@@ -101,6 +101,7 @@ class App:
     # 补全浮层：输入以 / 开头且无空格时激活
     comp_items: list[CompletionItem] = field(default_factory=list)
     comp_index: int = 0
+    comp_scroll: int = 0
     comp_dismissed: bool = False
     # 选择浮层：/resume 等命令返回 select 候选时由 SelectionRequest 激活
     pending_selection: SelectionRequest | None = None
@@ -135,6 +136,7 @@ class App:
             return
         self.comp_items = provider(self.input)
         self.comp_index = min(self.comp_index, max(0, len(self.comp_items) - 1))
+        self.comp_scroll = 0
         if not self.comp_items:
             self.comp_index = 0
 
@@ -142,12 +144,14 @@ class App:
         """Esc 关闭浮层（直到输入清空或发送后重置）。"""
         self.comp_dismissed = True
         self.comp_items = []
+        self.comp_scroll = 0
 
     def apply_completion(self, item: CompletionItem) -> None:
         """补全高亮项到输入框。"""
         self.input = item.insert
         self.cursor = len(self.input)
         self.comp_items = []
+        self.comp_scroll = 0
 
     def reset_input(self) -> None:
         """发送/清空输入后的复位。"""
@@ -155,6 +159,7 @@ class App:
         self.cursor = 0
         self.comp_items = []
         self.comp_dismissed = False
+        self.comp_scroll = 0
         self.input_viewport.reset()
 
     def _append_streaming(self, which: str, text: str) -> None:

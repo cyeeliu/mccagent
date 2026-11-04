@@ -197,25 +197,48 @@ def _max_scroll(items: list[Text], available: int, width: int = 80) -> int:
     return max(0, total - available)
 
 
-def _completion_panel(app: App) -> Panel | None:
-    """slash 补全浮层：候选项列表，高亮行反色。"""
+def _completion_panel(app: App, console_width: int) -> Panel | None:
+    """slash 补全浮层：候选项滑动窗口，高亮行反色。
+
+    当候选超出可见区域时，始终预留上下指示行（不需要时用空行占位），
+    使面板高度恒定，避免滚动时布局抖动。
+    每行截断到面板内容宽度，防止 Rich 自动换行导致高度溢出。
+    """
     if not app.comp_active:
         return None
+    n = len(app.comp_items)
+    visible = min(_COMP_MAX_ROWS, n)
+    scroll = min(max(0, app.comp_scroll), max(0, n - visible))
+    window = app.comp_items[scroll : scroll + visible]
+    content_width = max(1, console_width - _PANEL_BORDERS)
     text = Text()
-    for idx, item in enumerate(app.comp_items[:_COMP_MAX_ROWS]):
-        style = "reverse" if idx == app.comp_index else ""
+    needs_indicators = n > visible
+    if needs_indicators:
+        if scroll > 0:
+            text.append("  ↑ 更多\n", style="dim")
+        else:
+            text.append("\n")
+    for idx, item in enumerate(window):
+        style = "reverse" if idx == app.comp_index - scroll else ""
         line = item.label
         if item.hint:
             line += f"  {_truncate(item.hint, 40)}"
+        line = _truncate(line, content_width)
         text.append(line + "\n", style=style)
+    if needs_indicators:
+        if scroll + visible < n:
+            text.append("  ↓ 更多\n", style="dim")
+        else:
+            text.append("\n")
     return Panel(text, title=" commands ", border_style="magenta")
 
 
-def _selection_panel(app: App) -> Panel | None:
+def _selection_panel(app: App, console_width: int) -> Panel | None:
     """/resume 等选择浮层：候选列表滑动窗口，高亮行反色。
 
     当选项超出可见区域时，始终预留上下指示行（不需要时用空行占位），
     使面板高度恒定，避免滚动时布局抖动。
+    每行截断到面板内容宽度，防止 Rich 自动换行导致高度溢出。
     """
     if app.pending_selection is None:
         return None
@@ -224,6 +247,7 @@ def _selection_panel(app: App) -> Panel | None:
     visible = min(_COMP_MAX_ROWS, n)
     scroll = min(max(0, app.sel_scroll), max(0, n - visible))
     window = req.options[scroll : scroll + visible]
+    content_width = max(1, console_width - _PANEL_BORDERS)
     text = Text()
     needs_indicators = n > visible
     if needs_indicators:
@@ -233,7 +257,7 @@ def _selection_panel(app: App) -> Panel | None:
             text.append("\n")
     for idx, opt in enumerate(window):
         style = "reverse" if idx == app.sel_index - scroll else ""
-        text.append(opt.label + "\n", style=style)
+        text.append(_truncate(opt.label, content_width) + "\n", style=style)
     if needs_indicators:
         if scroll + visible < n:
             text.append("  ↓ 更多\n", style="dim")
@@ -325,9 +349,15 @@ def _render_input_panel(app: App, console_width: int, input_rows: int) -> Panel:
 
 
 def build_renderable(app: App, console: Console) -> Layout:
-    comp_panel = _completion_panel(app)
-    comp_rows = (len(app.comp_items[:_COMP_MAX_ROWS]) + _PANEL_BORDERS) if comp_panel else 0
-    sel_panel = _selection_panel(app)
+    comp_panel = _completion_panel(app, console.width)
+    if comp_panel:
+        _cn = len(app.comp_items)
+        _cvisible = min(_COMP_MAX_ROWS, _cn)
+        _cindicators = 2 if _cn > _cvisible else 0
+        comp_rows = _cvisible + _cindicators + _PANEL_BORDERS
+    else:
+        comp_rows = 0
+    sel_panel = _selection_panel(app, console.width)
     if sel_panel:
         _n = len(app.pending_selection.options)
         _visible = min(_COMP_MAX_ROWS, _n)

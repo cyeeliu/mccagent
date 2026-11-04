@@ -447,7 +447,7 @@ def test_selection_panel_height_stable():
     line_counts: list[int] = []
     for scroll in range(n - _COMP_MAX_ROWS + 1):
         app.sel_scroll = scroll
-        panel = _selection_panel(app)
+        panel = _selection_panel(app, 80)
         line_counts.append(panel.renderable.plain.count("\n"))
 
     assert len(set(line_counts)) == 1, (
@@ -462,7 +462,7 @@ def test_selection_panel_no_indicators_when_fits():
 
     n = _COMP_MAX_ROWS - 2
     app, _ = _make_selection_app(n)
-    panel = _selection_panel(app)
+    panel = _selection_panel(app, 80)
     plain = panel.renderable.plain
     assert "更多" not in plain
     assert plain.count("\n") == n
