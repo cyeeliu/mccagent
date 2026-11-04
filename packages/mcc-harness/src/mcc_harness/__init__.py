@@ -109,6 +109,17 @@ from mcc_harness.permission import (
     bash_word_match,
 )
 from mcc_harness.plan import PlanError, PlanRequest, PlanStatus, PlanStore
+from mcc_harness.quality import (
+    Check,
+    CheckKind,
+    CheckNotFoundError,
+    CheckResult,
+    CheckTimeoutError,
+    GateResult,
+    QualityError,
+    QualityGateImpl,
+    QualityPolicy,
+)
 from mcc_harness.registry import (
     AgentAlreadyRegisteredError,
     AgentDescriptor,
@@ -503,5 +514,14 @@ __all__ = [
     "MergeStrategy",
     "VerificationError",
     "VerificationResult",
+    "Check",
+    "CheckKind",
+    "CheckNotFoundError",
+    "CheckResult",
+    "CheckTimeoutError",
+    "GateResult",
+    "QualityError",
+    "QualityGateImpl",
+    "QualityPolicy",
 ]
 __version__ = "0.1.0"
