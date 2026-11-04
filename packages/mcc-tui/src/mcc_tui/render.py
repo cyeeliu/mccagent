@@ -13,7 +13,10 @@ from rich.panel import Panel
 from rich.text import Text
 
 from mcc_tui.app import App, CallStatus, RenderItem
+from mcc_tui.layout import LayoutEngine, TerminalMetrics
 from mcc_tui.metrics import TerminalTextMetrics as _metrics
+
+_layout = LayoutEngine()
 
 _INPUT_ROWS = 3
 _STATUS_ROWS = 3
@@ -298,16 +301,15 @@ def build_renderable(app: App, console: Console) -> Layout:
         sel_rows = 0
 
     input_content_lines = len(app.input.split("\n")) if app.input else 1
-    input_rows = min(
-        max(_INPUT_ROWS, input_content_lines + _PANEL_BORDERS),
-        max(_INPUT_ROWS, console.height // 4),
+    layout = _layout.compute(
+        TerminalMetrics(console.width, console.height),
+        input_content_lines,
+        comp_rows,
+        sel_rows,
     )
-
-    available = max(
-        5,
-        console.height - input_rows - _STATUS_ROWS - _PANEL_BORDERS - comp_rows - sel_rows,
-    )
-    text_width = max(20, console.width - _PANEL_BORDERS - _TEXT_INDENT)
+    input_rows = layout.input_height
+    available = layout.message_height
+    text_width = layout.text_width
     app.scroll = min(app.scroll, _max_scroll(all_items, available, text_width))
     visible = _select_visible(all_items, available, app.scroll, text_width)
 
