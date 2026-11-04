@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from mcc_tui.app import App, CallStatus, RenderItem
+from mcc_tui.metrics import TerminalTextMetrics as _metrics
 
 _INPUT_ROWS = 3
 _STATUS_ROWS = 3
@@ -22,9 +23,7 @@ _COMP_MAX_ROWS = 7
 
 
 def _truncate(s: str, n: int) -> str:
-    if len(s) <= n:
-        return s
-    return s[:n] + "…"
+    return _metrics.truncate(s, n)
 
 
 def _fmt_tokens(n: int) -> str:
@@ -99,16 +98,13 @@ def _extract_line(text: Text, start: int, end: int) -> Text:
 
 
 def _wrap_line(text: Text, start: int, end: int, width: int) -> list[Text]:
-    """把 [start, end) 范围按 width 拆成多行 Text。"""
-    line_len = end - start
-    if line_len <= width:
+    """把 [start, end) 范围按显示宽度 width 拆成多行 Text。"""
+    plain = text.plain[start:end]
+    if _metrics.width(plain) <= width:
         return [_extract_line(text, start, end)]
     result: list[Text] = []
-    pos = start
-    while pos < end:
-        chunk_end = min(pos + width, end)
-        result.append(_extract_line(text, pos, chunk_end))
-        pos = chunk_end
+    for chunk_start, chunk_end in _metrics.wrap_offsets(plain, width):
+        result.append(_extract_line(text, start + chunk_start, start + chunk_end))
     return result
 
 
