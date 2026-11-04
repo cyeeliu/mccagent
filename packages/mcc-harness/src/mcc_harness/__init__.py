@@ -25,6 +25,19 @@ from mcc_harness.background import (
     CancelBackgroundTaskTool,
     format_background_results,
 )
+from mcc_harness.budget import (
+    AgentBudget,
+    BudgetDimension,
+    BudgetExceededError,
+    BudgetPolicy,
+    BudgetPolicyError,
+    BudgetRepository,
+    BudgetSnapshot,
+    InMemoryBudgetRepository,
+    Reservation,
+    Settlement,
+    UsageEvent,
+)
 from mcc_harness.compactor import CompactionReport, ContextCompactor
 from mcc_harness.context import AgentContext, ContextValidationError
 from mcc_harness.cron import (
@@ -204,6 +217,7 @@ from mcc_harness.worktree import (
 
 __all__ = [
     "Action",
+    "AgentBudget",
     "AgentLoop",
     "AgentLoopBuilder",
     "AgentAlreadyRegisteredError",
@@ -216,6 +230,12 @@ __all__ = [
     "AgentState",
     "AgentStateMachine",
     "AgentUnavailableError",
+    "BudgetDimension",
+    "BudgetExceededError",
+    "BudgetPolicy",
+    "BudgetPolicyError",
+    "BudgetRepository",
+    "BudgetSnapshot",
     "BackgroundResult",
     "BackgroundStatusTool",
     "BackgroundTaskInfo",
@@ -265,6 +285,7 @@ __all__ = [
     "HookType",
     "HooksInterceptor",
     "IllegalTransitionError",
+    "InMemoryBudgetRepository",
     "InMemoryRepository",
     "IterationContext",
     "IterationInterceptor",
@@ -296,6 +317,7 @@ __all__ = [
     "RegistryRepository",
     "ReliabilityGuard",
     "RequestShutdownTool",
+    "Reservation",
     "RetryDecision",
     "RetryPolicy",
     "RuntimeConfig",
@@ -308,6 +330,7 @@ __all__ = [
     "SecurityPolicy",
     "SendToLeadTool",
     "SendTeammateMessageTool",
+    "Settlement",
     "ShellHook",
     "SpawnSubagentTool",
     "SpawnTeammateTool",
@@ -342,6 +365,7 @@ __all__ = [
     "SimpleJsonSchema",
     "SubagentWorkflowRunner",
     "UsageRecord",
+    "UsageEvent",
     "WorkflowInputError",
     "WorkflowJournal",
     "WorkflowRunner",
