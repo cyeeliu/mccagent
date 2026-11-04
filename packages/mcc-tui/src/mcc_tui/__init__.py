@@ -206,6 +206,15 @@ def _handle_selection_key(app: App, handles: TuiHandles, key: Key | str) -> bool
     req = app.pending_selection
     if req is None:
         return False
+    if key == Key.escape:
+        if handles.selection_tx is not None:
+            handles.selection_tx.put_nowait(
+                SelectionDecision(request_id=req.id, value=None)
+            )
+        app.pending_selection = None
+        app.sel_index = 0
+        app.sel_scroll = 0
+        return False
     n = len(req.options)
     if n == 0:
         return False
@@ -227,15 +236,6 @@ def _handle_selection_key(app: App, handles: TuiHandles, key: Key | str) -> bool
         if handles.selection_tx is not None:
             handles.selection_tx.put_nowait(
                 SelectionDecision(request_id=req.id, value=value)
-            )
-        app.pending_selection = None
-        app.sel_index = 0
-        app.sel_scroll = 0
-        return False
-    elif key == Key.escape:
-        if handles.selection_tx is not None:
-            handles.selection_tx.put_nowait(
-                SelectionDecision(request_id=req.id, value=None)
             )
         app.pending_selection = None
         app.sel_index = 0

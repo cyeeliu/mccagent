@@ -223,6 +223,97 @@ def test_selection_escape_cancels():
     assert app.pending_selection is None
 
 
+def test_empty_selection_escape_exits():
+    """空选项时 Esc 能正常退出选择浮层。"""
+    import asyncio
+
+    from mcc_core import SelectionDecision
+    from mcc_tui import TuiHandles, _handle_key
+    from mcc_tui.keys import Key
+
+    app = App(session_short_id="test")
+    req = SelectionRequest(id="sel-1", title="空选择", options=[])
+    app.apply_event(req)
+    sel_tx: asyncio.Queue = asyncio.Queue()
+    handles = TuiHandles(
+        events=asyncio.Queue(),
+        input_tx=asyncio.Queue(),
+        session_short_id="test",
+        selection_tx=sel_tx,
+    )
+    _handle_key(app, handles, Key.escape)
+    decision = sel_tx.get_nowait()
+    assert isinstance(decision, SelectionDecision)
+    assert decision.value is None
+    assert app.pending_selection is None
+    assert app.sel_index == 0
+
+
+def test_empty_selection_enter_no_crash():
+    """空选项时 Enter 不产生异常。"""
+    import asyncio
+
+    from mcc_tui import TuiHandles, _handle_key
+    from mcc_tui.keys import Key
+
+    app = App(session_short_id="test")
+    req = SelectionRequest(id="sel-1", title="空选择", options=[])
+    app.apply_event(req)
+    handles = TuiHandles(
+        events=asyncio.Queue(),
+        input_tx=asyncio.Queue(),
+        session_short_id="test",
+    )
+    _handle_key(app, handles, Key.enter)
+    assert app.pending_selection is not None
+
+
+def test_empty_selection_arrow_no_crash():
+    """空选项时方向键不产生越界访问。"""
+    import asyncio
+
+    from mcc_tui import TuiHandles, _handle_key
+    from mcc_tui.keys import Key
+
+    app = App(session_short_id="test")
+    req = SelectionRequest(id="sel-1", title="空选择", options=[])
+    app.apply_event(req)
+    handles = TuiHandles(
+        events=asyncio.Queue(),
+        input_tx=asyncio.Queue(),
+        session_short_id="test",
+    )
+    for key in (Key.up, Key.down, Key.page_up, Key.page_down, Key.home, Key.end):
+        _handle_key(app, handles, key)
+        assert app.sel_index == 0
+
+
+def test_empty_selection_escape_before_enter():
+    """空选项时 Esc 优先于 n==0 检查，能立即退出。"""
+    import asyncio
+
+    from mcc_core import SelectionDecision
+    from mcc_tui import TuiHandles, _handle_key
+    from mcc_tui.keys import Key
+
+    app = App(session_short_id="test")
+    req = SelectionRequest(id="sel-empty", title="空", options=[])
+    app.apply_event(req)
+    sel_tx: asyncio.Queue = asyncio.Queue()
+    handles = TuiHandles(
+        events=asyncio.Queue(),
+        input_tx=asyncio.Queue(),
+        session_short_id="test",
+        selection_tx=sel_tx,
+    )
+    _handle_key(app, handles, Key.escape)
+    assert app.pending_selection is None
+    assert sel_tx.qsize() == 1
+    decision = sel_tx.get_nowait()
+    assert isinstance(decision, SelectionDecision)
+    assert decision.request_id == "sel-empty"
+
+
 def test_selection_scroll_follows_cursor():
     """选项超过可视行数时，↓ 移动高亮行自动滚动窗口。"""
     import asyncio
