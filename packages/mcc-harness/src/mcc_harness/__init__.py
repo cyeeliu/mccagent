@@ -131,6 +131,17 @@ from mcc_harness.runtime import (
     StateTransition,
     TransitionGuard,
 )
+from mcc_harness.scheduler import (
+    AgentCandidate,
+    LeaseManager,
+    PriorityOrder,
+    RetryHandler,
+    SchedulingError,
+    SchedulingPolicy,
+    SchedulingResult,
+    TaskCandidate,
+    TaskSchedulerImpl,
+)
 from mcc_harness.security import (
     HARDENED_CMD_PATTERNS,
     HARDENED_PATH_GLOBS,
@@ -443,5 +454,14 @@ __all__ = [
     "TeamRunResult",
     "TeamRunSnapshot",
     "TeamRunStatus",
+    "AgentCandidate",
+    "LeaseManager",
+    "PriorityOrder",
+    "RetryHandler",
+    "SchedulingError",
+    "SchedulingPolicy",
+    "SchedulingResult",
+    "TaskCandidate",
+    "TaskSchedulerImpl",
 ]
 __version__ = "0.1.0"
