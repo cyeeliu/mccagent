@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -455,3 +456,60 @@ def test_normal_tool_render_unchanged():
     assert "▶" in output
     assert "read_file" in output
     assert "◇" not in output
+
+
+# ---------------------------------------------------------------------------
+# UI-14: asyncio 子任务取消和统一清理
+# ---------------------------------------------------------------------------
+
+
+async def test_cancel_and_wait_cleans_running_tasks():
+    """_cancel_and_wait 取消运行中的任务并等待完成。"""
+    from mcc_tui import _cancel_and_wait
+
+    async def _long_running():
+        await asyncio.sleep(10)
+
+    task1 = asyncio.create_task(_long_running())
+    task2 = asyncio.create_task(_long_running())
+    await _cancel_and_wait(task1, task2)
+    assert task1.done()
+    assert task2.done()
+    assert task1.cancelled()
+    assert task2.cancelled()
+
+
+async def test_cancel_and_wait_skips_done_tasks():
+    """已完成的任务不被重复取消。"""
+    from mcc_tui import _cancel_and_wait
+
+    async def _quick():
+        return 42
+
+    task = asyncio.create_task(_quick())
+    await asyncio.sleep(0.01)
+    assert task.done()
+    await _cancel_and_wait(task)
+    assert task.result() == 42
+
+
+async def test_cancel_and_wait_handles_none():
+    """None 和空参数不异常。"""
+    from mcc_tui import _cancel_and_wait
+
+    await _cancel_and_wait()
+    await _cancel_and_wait(None)
+    await _cancel_and_wait(None, None)
+
+
+async def test_cancel_and_wait_swallows_exceptions():
+    """任务中的异常被 return_exceptions=True 吞掉，不外抛。"""
+    from mcc_tui import _cancel_and_wait
+
+    async def _raise():
+        raise ValueError("boom")
+
+    task = asyncio.create_task(_raise())
+    await asyncio.sleep(0.01)
+    await _cancel_and_wait(task)
+    assert task.done()

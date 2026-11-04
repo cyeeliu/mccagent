@@ -53,7 +53,17 @@ async def run_tui(handles: TuiHandles, console: Console | None = None) -> None:
                     if await _step(app, handles, key_queue):
                         break
             finally:
-                reader_task.cancel()
+                reader.close()
+                await _cancel_and_wait(reader_task)
+
+
+async def _cancel_and_wait(*tasks: asyncio.Task) -> None:
+    """取消并等待异步任务完成清理，避免任务异常泄漏。"""
+    pending = [t for t in tasks if t and not t.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def _key_reader_loop(reader: KeyReader, queue: asyncio.Queue) -> None:
@@ -71,11 +81,11 @@ async def _step(app: App, handles: TuiHandles, key_queue: asyncio.Queue) -> bool
     )
     should_quit = False
     if key_task in done:
-        ev_task.cancel()
+        await _cancel_and_wait(ev_task)
         key = key_task.result()
         should_quit = _handle_key(app, handles, key)
     if ev_task in done:
-        key_task.cancel()
+        await _cancel_and_wait(key_task)
         try:
             ev = ev_task.result()
             app.apply_event(ev)

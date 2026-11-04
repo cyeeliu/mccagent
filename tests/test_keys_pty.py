@@ -107,3 +107,99 @@ def test_utf8_mixed_with_ascii(pty_pair):
         return k1, k2, k3
 
     assert asyncio.run(_run()) == ("a", "你", "b")
+
+
+# ---------------------------------------------------------------------------
+# UI-01: 阻塞读取时 close() 唤醒
+# ---------------------------------------------------------------------------
+
+
+def test_close_wakes_blocking_read(pty_pair):
+    """read_key 阻塞时 close() 使其立即返回 ctrl_d，不无限等待。"""
+
+    async def _run():
+        master_fd, slave_stream = pty_pair
+        with KeyReader(stream=slave_stream) as reader:
+            # 不向 master 写入数据，read_key 会阻塞在 select
+
+            async def _close_after_delay():
+                await asyncio.sleep(0.1)
+                reader.close()
+
+            close_task = asyncio.create_task(_close_after_delay())
+            key, _ = await reader.read_key()
+            await close_task
+            return key
+
+    assert asyncio.run(_run()) == Key.ctrl_d
+
+
+def test_read_key_after_close_returns_ctrl_d(pty_pair):
+    """close 后继续调用 read_key 立即返回 ctrl_d，不阻塞。"""
+
+    async def _run():
+        _, slave_stream = pty_pair
+        with KeyReader(stream=slave_stream) as reader:
+            reader.close()
+            key, _ = await reader.read_key()
+            return key
+
+    assert asyncio.run(_run()) == Key.ctrl_d
+
+
+def test_repeated_close_is_safe(pty_pair):
+    """多次调用 close 不会异常。"""
+    _, slave_stream = pty_pair
+    with KeyReader(stream=slave_stream) as reader:
+        reader.close()
+        reader.close()
+        reader.close()
+
+
+# ---------------------------------------------------------------------------
+# UI-11: 分片到达 ANSI 序列不阻塞
+# ---------------------------------------------------------------------------
+
+
+def test_split_escape_within_timeout(pty_pair):
+    """超时内分片到达的 ANSI 序列能被正确解析为方向键。"""
+
+    async def _run():
+        master_fd, slave_stream = pty_pair
+        with KeyReader(stream=slave_stream) as reader:
+            os.write(master_fd, b"\x1b[")
+            await asyncio.sleep(0.01)
+            os.write(master_fd, b"A")
+            await asyncio.sleep(0.06)
+            key, _ = await reader.read_key()
+            return key
+
+    assert asyncio.run(_run()) == Key.up
+
+
+def test_escape_timeout_returns_escape(pty_pair):
+    """ESC 后超时内无后续字节则判定为单独 ESC。"""
+
+    async def _run():
+        master_fd, slave_stream = pty_pair
+        with KeyReader(stream=slave_stream) as reader:
+            os.write(master_fd, b"\x1b")
+            await asyncio.sleep(0.1)
+            key, _ = await reader.read_key()
+            return key
+
+    assert asyncio.run(_run()) == Key.escape
+
+
+def test_partial_escape_timeout_returns_escape(pty_pair):
+    """ESC + 部分序列后超时，返回 escape 而非无限阻塞。"""
+
+    async def _run():
+        master_fd, slave_stream = pty_pair
+        with KeyReader(stream=slave_stream) as reader:
+            os.write(master_fd, b"\x1b[")
+            await asyncio.sleep(0.2)
+            key, _ = await reader.read_key()
+            return key
+
+    assert asyncio.run(_run()) == Key.escape
