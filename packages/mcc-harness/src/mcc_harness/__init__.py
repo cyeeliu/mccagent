@@ -115,6 +115,14 @@ from mcc_harness.reliability import (
     ThrottledLlm,
     classify_llm_error,
 )
+from mcc_harness.results import (
+    ArtifactKind,
+    ArtifactRef,
+    ExecutionMetrics,
+    ResultCollectorImpl,
+    ResultStatus,
+    ResultSummary,
+)
 from mcc_harness.runtime import (
     AgentRuntime,
     AgentState,
@@ -463,5 +471,11 @@ __all__ = [
     "SchedulingResult",
     "TaskCandidate",
     "TaskSchedulerImpl",
+    "ArtifactKind",
+    "ArtifactRef",
+    "ExecutionMetrics",
+    "ResultCollectorImpl",
+    "ResultStatus",
+    "ResultSummary",
 ]
 __version__ = "0.1.0"
