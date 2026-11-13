@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from mcc_core import ToolContext, ToolOutput
 from mcc_llm import LlmProvider
@@ -24,6 +24,7 @@ from .hooks import HookRegistry
 from .mailbox import MessageBus
 from .permission import PermissionChecker
 from .plan import PlanStore
+from .runtime.base import RuntimeResult, RuntimeStatus, WaitTimeoutError, _terminal_result
 
 LEAD_NAME = "lead"
 
@@ -108,6 +109,24 @@ _TEAMMATE_TRANSITIONS: dict[TeammateStatus, frozenset[TeammateStatus]] = {
 }
 
 
+_TEAMMATE_STATUS_MAP: dict[TeammateStatus, RuntimeStatus] = {
+    TeammateStatus.CREATED: RuntimeStatus.CREATED,
+    TeammateStatus.STARTING: RuntimeStatus.STARTING,
+    TeammateStatus.IDLE: RuntimeStatus.IDLE,
+    TeammateStatus.ASSIGNED: RuntimeStatus.RUNNING,
+    TeammateStatus.PLANNING: RuntimeStatus.RUNNING,
+    TeammateStatus.WAITING_APPROVAL: RuntimeStatus.RUNNING,
+    TeammateStatus.RUNNING: RuntimeStatus.RUNNING,
+    TeammateStatus.REPORTING: RuntimeStatus.RUNNING,
+    TeammateStatus.FAILED: RuntimeStatus.FAILED,
+    TeammateStatus.TIMEOUT: RuntimeStatus.TIMEOUT,
+    TeammateStatus.CANCELLED: RuntimeStatus.CANCELLED,
+    TeammateStatus.RESTARTING: RuntimeStatus.STARTING,
+    TeammateStatus.SHUTTING_DOWN: RuntimeStatus.STOPPING,
+    TeammateStatus.SHUTDOWN: RuntimeStatus.SHUTDOWN,
+}
+
+
 class TeammateStateError(RuntimeError):
     """teammate 状态迁移非法。"""
 
@@ -172,6 +191,15 @@ class TeammateInfo:
     last_transition: str | None = None
 
 
+@runtime_checkable
+class TeammateExecutor(Protocol):
+    """可注入的执行器协议：替代 TeammateRuntime._do_work 的默认执行逻辑。"""
+
+    async def execute(self, runtime: TeammateRuntime) -> None:
+        """执行当前任务，负责状态迁移和结果回流。"""
+        ...
+
+
 class TeammateRuntime:
     """长驻 teammate 运行时：asyncio.Task 驱动的 WORK/IDLE 循环。
 
@@ -193,6 +221,7 @@ class TeammateRuntime:
         hooks: HookRegistry | None = None,
         permission: PermissionChecker | None = None,
         lead_name: str = LEAD_NAME,
+        executor: TeammateExecutor | None = None,
     ) -> None:
         self.spec = spec
         self._llm = llm
@@ -205,6 +234,7 @@ class TeammateRuntime:
         self._hooks = hooks
         self._permission = permission
         self._lead_name = lead_name
+        self._executor = executor
 
         self._task: asyncio.Task[None] | None = None
         self._shutdown_evt = asyncio.Event()
@@ -229,8 +259,32 @@ class TeammateRuntime:
         return self._status.value
 
     @property
+    def runtime_id(self) -> str:
+        return f"teammate::{self.spec.name}"
+
+    @property
+    def runtime_status(self) -> RuntimeStatus:
+        return _TEAMMATE_STATUS_MAP.get(self._status, RuntimeStatus.RUNNING)
+
+    @property
     def alive(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    @property
+    def task(self) -> asyncio.Task[None] | None:
+        return self._task
+
+    def get_task_future(
+        self, task_id: str,
+    ) -> asyncio.Future[tuple[TeammateStatus, str]] | None:
+        return self._task_futures.get(task_id)
+
+    def set_task_future(
+        self,
+        task_id: str,
+        future: asyncio.Future[tuple[TeammateStatus, str]],
+    ) -> None:
+        self._task_futures[task_id] = future
 
     def _transition(self, target: TeammateStatus, reason: str = "") -> None:
         current = self._status
@@ -271,10 +325,10 @@ class TeammateRuntime:
             if not future.done():
                 future.set_result((outcome, summary))
 
-    async def start(self, initial_prompt: str, task_id: str | None = None) -> None:
+    async def start(self, task: str = "", *, task_id: str | None = None) -> None:
         """启动 teammate 后台任务。"""
         self._transition(TeammateStatus.STARTING, reason="start")
-        self._current.assignment = initial_prompt
+        self._current.assignment = task
         self._current.task_id = task_id
         self._current.work_version = 0
         self._current.started_at = time.monotonic()
@@ -375,6 +429,9 @@ class TeammateRuntime:
                 self._instruction_queue.put_nowait(msg.content)
 
     async def _do_work(self) -> None:
+        if self._executor is not None:
+            await self._executor.execute(self)
+            return
         if self.spec.require_plan:
             self._transition(TeammateStatus.PLANNING, reason="require_plan")
             approved = await self._submit_and_wait_plan()
@@ -607,6 +664,55 @@ class TeammateRuntime:
                 self._force_stop = True
                 self._task.cancel()
                 await asyncio.gather(self._task, return_exceptions=True)
+
+    async def stop(self, *, timeout: float = 5.0) -> None:
+        """AgentRuntime Protocol：委托 shutdown。"""
+        await self.shutdown(timeout=timeout)
+
+    def cancel(self) -> None:
+        """AgentRuntime Protocol：发送取消信号。"""
+        if not self.alive:
+            return
+        if self._current.cancel_token is not None:
+            self._current.cancel_token.set()
+        self.notify()
+
+    async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
+        """AgentRuntime Protocol：等待到达终态，返回 RuntimeResult。"""
+        if self._task is None:
+            return _terminal_result(
+                self.runtime_id,
+                RuntimeStatus.SHUTDOWN,
+                summary="not started",
+            )
+        try:
+            if timeout is not None:
+                await asyncio.wait_for(asyncio.shield(self._task), timeout=timeout)
+            else:
+                await asyncio.shield(self._task)
+        except WaitTimeoutError:
+            raise
+        except TimeoutError:
+            raise WaitTimeoutError(
+                f"wait_done timed out after {timeout}s for {self.runtime_id}"
+            ) from None
+        except asyncio.CancelledError:
+            pass
+
+        status = self.runtime_status
+        if status == RuntimeStatus.SHUTDOWN:
+            summary = "shutdown"
+        elif status == RuntimeStatus.FAILED:
+            summary = "teammate failed"
+        elif status == RuntimeStatus.CANCELLED:
+            summary = "cancelled"
+        else:
+            summary = f"stopped (status={status.value})"
+        return _terminal_result(
+            self.runtime_id,
+            status,
+            summary=summary,
+        )
 
     def info(self) -> TeammateInfo:
         last = None

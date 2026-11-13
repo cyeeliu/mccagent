@@ -22,23 +22,6 @@ from .base import (
     _terminal_result,
 )
 
-_TEAMMATE_STATUS_MAP: dict[TeammateStatus, RuntimeStatus] = {
-    TeammateStatus.CREATED: RuntimeStatus.CREATED,
-    TeammateStatus.STARTING: RuntimeStatus.STARTING,
-    TeammateStatus.IDLE: RuntimeStatus.IDLE,
-    TeammateStatus.ASSIGNED: RuntimeStatus.RUNNING,
-    TeammateStatus.PLANNING: RuntimeStatus.RUNNING,
-    TeammateStatus.WAITING_APPROVAL: RuntimeStatus.RUNNING,
-    TeammateStatus.RUNNING: RuntimeStatus.RUNNING,
-    TeammateStatus.REPORTING: RuntimeStatus.RUNNING,
-    TeammateStatus.FAILED: RuntimeStatus.FAILED,
-    TeammateStatus.TIMEOUT: RuntimeStatus.TIMEOUT,
-    TeammateStatus.CANCELLED: RuntimeStatus.CANCELLED,
-    TeammateStatus.RESTARTING: RuntimeStatus.STARTING,
-    TeammateStatus.SHUTTING_DOWN: RuntimeStatus.STOPPING,
-    TeammateStatus.SHUTDOWN: RuntimeStatus.SHUTDOWN,
-}
-
 _TASK_OUTCOME_TO_RUNTIME: dict[TeammateStatus, RuntimeStatus] = {
     TeammateStatus.REPORTING: RuntimeStatus.COMPLETED,
     TeammateStatus.TIMEOUT: RuntimeStatus.TIMEOUT,
@@ -75,12 +58,7 @@ class PersistentRuntime:
 
     @property
     def status(self) -> RuntimeStatus:
-        raw = self._teammate.status
-        try:
-            ts = TeammateStatus(raw)
-        except ValueError:
-            return RuntimeStatus.RUNNING
-        return _TEAMMATE_STATUS_MAP.get(ts, RuntimeStatus.RUNNING)
+        return self._teammate.runtime_status
 
     @property
     def alive(self) -> bool:
@@ -142,7 +120,7 @@ class PersistentRuntime:
         if self._final_result is not None:
             return self._final_result
 
-        task = self._teammate._task
+        task = self._teammate.task
         if task is None:
             return _terminal_result(
                 self.runtime_id,
@@ -203,7 +181,7 @@ class PersistentRuntime:
         future: asyncio.Future[tuple[TeammateStatus, str]] = (
             asyncio.get_running_loop().create_future()
         )
-        self._teammate._task_futures[tid] = future
+        self._teammate.set_task_future(tid, future)
         await self._bus.send(
             self._lead_name, self._teammate.name, task,
             kind="assignment", task_id=tid,
@@ -215,7 +193,7 @@ class PersistentRuntime:
         self, task_id: str, *, timeout: float | None = None,
     ) -> RuntimeResult:
         """等待单个任务完成，返回 RuntimeResult。"""
-        future = self._teammate._task_futures.get(task_id)
+        future = self._teammate.get_task_future(task_id)
         if future is None:
             return _terminal_result(
                 self.runtime_id,
