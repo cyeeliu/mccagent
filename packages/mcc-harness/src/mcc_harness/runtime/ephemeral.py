@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import time
 from typing import Any
+from uuid import uuid4
 
 from mcc_core import ToolContext
 
@@ -58,6 +59,7 @@ class EphemeralRuntime:
         self._spec = spec
         self._ctx = ctx
         self._channel = channel
+        self._runtime_id = f"{ctx.session_id}::{spec.name}::{uuid4().hex[:8]}"
         self._task: asyncio.Task[SubagentResult] | None = None
         self._status = RuntimeStatus.CREATED
         self._result: RuntimeResult | None = None
@@ -65,7 +67,7 @@ class EphemeralRuntime:
 
     @property
     def runtime_id(self) -> str:
-        return f"{self._ctx.session_id}::{self._spec.name}"
+        return self._runtime_id
 
     @property
     def status(self) -> RuntimeStatus:

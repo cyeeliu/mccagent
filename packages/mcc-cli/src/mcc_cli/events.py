@@ -146,7 +146,16 @@ class AgentEventSource(EventSource):
         self.skill_items = skill_items or []
         self.session_short_id = session_short_id
         self.selection_responses = selection_responses
+        if runtime is None:
+            from mcc_harness import InteractiveRuntime
+
+            runtime = InteractiveRuntime(agent)
         self._runtime = runtime
+        if coordinator is None:
+            from mcc_harness import RuntimeCoordinator
+
+            coordinator = RuntimeCoordinator()
+            coordinator.register(runtime)
         self._coordinator = coordinator
         self.orchestrator = orchestrator
 
@@ -210,32 +219,7 @@ class AgentEventSource(EventSource):
             resolved = self._slash_resolver(prompt)
             if resolved is not None:
                 prompt = resolved
-        if self._runtime is not None:
-            if not self._runtime.alive:
-                await self._runtime.start()
-            async for ev in self._runtime.run_turn(prompt):
-                yield ev
-            return
-        queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
-
-        async def worker() -> None:
-            try:
-                await self.agent.run_streaming(prompt, queue)
-            except Exception as exc:
-                from mcc_core import Error as ErrorEvent
-
-                await queue.put(ErrorEvent(text=str(exc)))
-            finally:
-                await queue.put(None)
-
-        task = asyncio.create_task(worker())
-        try:
-            while True:
-                ev = await queue.get()
-                if ev is None:
-                    break
-                yield ev
-        finally:
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+        if not self._runtime.alive:
+            await self._runtime.start()
+        async for ev in self._runtime.run_turn(prompt):
+            yield ev

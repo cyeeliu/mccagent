@@ -642,6 +642,10 @@ class TeammateManager:
         self._default_model = default_model
         self._hooks = hooks
         self._permission = permission
+        if coordinator is None:
+            from .runtime.coordinator import RuntimeCoordinator
+
+            coordinator = RuntimeCoordinator()
         self._coordinator = coordinator
         self._teammates: dict[str, TeammateRuntime] = {}
         self._persistent_runtimes: dict[str, Any] = {}
@@ -696,12 +700,11 @@ class TeammateManager:
         self._teammates[name] = rt
         await rt.start(prompt, task_id=task_id)
 
-        if self._coordinator is not None:
-            from .runtime.persistent import PersistentRuntime
+        from .runtime.persistent import PersistentRuntime
 
-            pr = PersistentRuntime(rt, self._bus, lead_name=LEAD_NAME)
-            self._coordinator.register(pr)
-            self._persistent_runtimes[name] = pr
+        pr = PersistentRuntime(rt, self._bus, lead_name=LEAD_NAME)
+        self._coordinator.register(pr)
+        self._persistent_runtimes[name] = pr
 
         return name
 
@@ -720,9 +723,6 @@ class TeammateManager:
         pr = self._persistent_runtimes.get(to)
         if pr is not None:
             pr.inject_instruction(content)
-        else:
-            await self._bus.send(LEAD_NAME, to, content, kind="instruction")
-            self._teammates[to].notify()
         return f"Instruction sent to {to}"
 
     async def assign_task(self, to: str, content: str) -> str:
@@ -741,9 +741,6 @@ class TeammateManager:
         pr = self._persistent_runtimes.get(name)
         if pr is not None:
             pr.cancel()
-        else:
-            await self._bus.send(LEAD_NAME, name, "cancel", kind="cancel")
-            rt.notify()
         return f"Cancel signal sent to {name}"
 
     async def pause_teammate(self, name: str) -> str:
@@ -754,9 +751,6 @@ class TeammateManager:
         pr = self._persistent_runtimes.get(name)
         if pr is not None:
             pr.pause()
-        else:
-            await self._bus.send(LEAD_NAME, name, "pause", kind="pause")
-            rt.notify()
         return f"Pause signal sent to {name}"
 
     async def resume_teammate(self, name: str) -> str:
@@ -767,9 +761,6 @@ class TeammateManager:
         pr = self._persistent_runtimes.get(name)
         if pr is not None:
             pr.resume()
-        else:
-            await self._bus.send(LEAD_NAME, name, "resume", kind="resume")
-            rt.notify()
         return f"Resume signal sent to {name}"
 
     async def request_shutdown(self, name: str) -> str:
@@ -783,8 +774,6 @@ class TeammateManager:
             self._coordinator.unregister(name)
             self._persistent_runtimes.pop(name, None)
         else:
-            await self._bus.send(LEAD_NAME, name, "shutdown", kind="shutdown")
-            rt.notify()
             await rt.shutdown()
         return f"Teammate {name} shut down"
 

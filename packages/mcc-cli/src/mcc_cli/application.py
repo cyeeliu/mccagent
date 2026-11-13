@@ -20,6 +20,10 @@ class AgentApplication:
     """
 
     def __init__(self, coordinator: Any | None = None) -> None:
+        if coordinator is None:
+            from mcc_harness import RuntimeCoordinator
+
+            coordinator = RuntimeCoordinator()
         self._coordinator = coordinator
         self._shutdown = False
 
@@ -35,7 +39,7 @@ class AgentApplication:
 
     async def shutdown(self, *, timeout: float = 10.0) -> None:
         """关闭所有 Runtime，幂等，聚合异常不抛出。"""
-        if self._shutdown or self._coordinator is None:
+        if self._shutdown:
             return
         self._shutdown = True
         report = await self._coordinator.stop_all(timeout=timeout)

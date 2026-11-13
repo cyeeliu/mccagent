@@ -655,6 +655,10 @@ class SpawnSubagentTool:
         self.runner = runner
         self.presets = presets
         self.max_depth = max_depth
+        if coordinator is None:
+            from .runtime.coordinator import RuntimeCoordinator
+
+            coordinator = RuntimeCoordinator()
         self._coordinator = coordinator
 
     @property
@@ -700,21 +704,7 @@ class SpawnSubagentTool:
         if spec is None:
             return ToolOutput.err(f"unknown preset: {preset}")
 
-        if self._coordinator is not None:
-            return await self._run_via_runtime(spec, task, ctx)
-
-        return await self._run_direct(spec, task, ctx)
-
-    async def _run_direct(
-        self, spec: SubagentSpec, task: str, ctx: ToolContext
-    ) -> ToolOutput:
-        """直接调用 runner.run（向后兼容路径）。"""
-        try:
-            r = await self.runner.run(spec, task, ctx)
-        except Exception as e:
-            return ToolOutput.err(f"subagent failed: {e}")
-
-        return self._format_subagent_result(r)
+        return await self._run_via_runtime(spec, task, ctx)
 
     async def _run_via_runtime(
         self, spec: SubagentSpec, task: str, ctx: ToolContext
@@ -729,10 +719,7 @@ class SpawnSubagentTool:
         from .runtime.ephemeral import EphemeralRuntime
 
         rt = EphemeralRuntime(self.runner, spec, ctx)
-        try:
-            self._coordinator.register(rt)
-        except RuntimeError:
-            return await self._run_direct(spec, task, ctx)
+        self._coordinator.register(rt)
 
         try:
             await rt.start(task)
@@ -761,22 +748,6 @@ class SpawnSubagentTool:
             f"tokens={tokens} reason={reason}]\n{result.summary}"
         )
         if result.status is RuntimeStatus.COMPLETED:
-            return ToolOutput.ok(content)
-        return ToolOutput.err(content)
-
-    @staticmethod
-    def _format_subagent_result(r: SubagentResult) -> ToolOutput:
-        """将 SubagentResult 映射为 ToolOutput（直接调用路径）。"""
-        if r.usage is not None:
-            tokens = f"{r.usage.input_tokens}in/{r.usage.output_tokens}out"
-        else:
-            tokens = "unknown"
-
-        content = (
-            f"[subagent={r.name} status={r.status.value} "
-            f"tokens={tokens} reason={r.stopped_reason}]\n{r.summary}"
-        )
-        if r.status == SubagentStatus.COMPLETED:
             return ToolOutput.ok(content)
         return ToolOutput.err(content)
 
