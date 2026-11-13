@@ -14,6 +14,7 @@ ResultCollector 解耦，通过 AgentRuntime 控制底层 Agent 生命周期。
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from dataclasses import dataclass, field
@@ -25,7 +26,13 @@ from mcc_harness.context import AgentContext
 from mcc_harness.mailbox import MessageBus
 from mcc_harness.plan import PlanStore
 from mcc_harness.registry import AgentDescriptor, AgentRegistry, RegistrationStatus
-from mcc_harness.runtime import RuntimeMode
+from mcc_harness.runtime import (
+    RuntimeCoordinator,
+    RuntimeMode,
+    RuntimeResult,
+    RuntimeStatus,
+    WaitTimeoutError,
+)
 
 
 class TeamRunStatus(StrEnum):
@@ -423,6 +430,7 @@ class TeamOrchestrator:
         budget: AgentBudget | None = None,
         planner: Planner | None = None,
         scheduler: TaskScheduler | None = None,
+        coordinator: RuntimeCoordinator | None = None,
     ) -> None:
         self._registry = registry
         self._bus = bus
@@ -431,6 +439,8 @@ class TeamOrchestrator:
         self._budget = budget
         self._planner = planner or SimplePlanner()
         self._scheduler = scheduler or CapabilityScheduler()
+        self._coordinator = coordinator
+        self._agent_runtime_map: dict[str, str] = {}
         self._teams: dict[str, Team] = {}
         self._runs: dict[str, TeamRun] = {}
         self._run_counter = 0
@@ -454,6 +464,18 @@ class TeamOrchestrator:
     @property
     def budget(self) -> AgentBudget | None:
         return self._budget
+
+    @property
+    def coordinator(self) -> RuntimeCoordinator | None:
+        return self._coordinator
+
+    def bind_runtime(self, agent_id: str, runtime_id: str) -> None:
+        """绑定 agent_id 到 runtime_id，用于执行闭环查找 Runtime。"""
+        self._agent_runtime_map[agent_id] = runtime_id
+
+    def unbind_runtime(self, agent_id: str) -> None:
+        """解除 agent_id 的 runtime 绑定。"""
+        self._agent_runtime_map.pop(agent_id, None)
 
     def create_team(
         self,
@@ -570,6 +592,12 @@ class TeamOrchestrator:
         if run.status != TeamRunStatus.RUNNING:
             raise RunStateError(f"cannot pause run in {run.status.value} state")
         run.status = TeamRunStatus.PAUSED
+        if self._coordinator is not None:
+            for agent_id in run.agent_ids:
+                runtime = self._find_runtime(agent_id)
+                if runtime is not None and runtime.alive:
+                    with contextlib.suppress(Exception):
+                        runtime.pause()
         for agent_id in run.agent_ids:
             await self._bus.send(
                 run.team.lead_agent_id,
@@ -585,6 +613,12 @@ class TeamOrchestrator:
         if run.status != TeamRunStatus.PAUSED:
             raise RunStateError(f"cannot resume run in {run.status.value} state")
         run.status = TeamRunStatus.RUNNING
+        if self._coordinator is not None:
+            for agent_id in run.agent_ids:
+                runtime = self._find_runtime(agent_id)
+                if runtime is not None and runtime.alive:
+                    with contextlib.suppress(Exception):
+                        runtime.resume()
         for agent_id in run.agent_ids:
             await self._bus.send(
                 run.team.lead_agent_id,
@@ -600,6 +634,12 @@ class TeamOrchestrator:
         if run.is_terminal:
             raise RunStateError(f"cannot cancel run in terminal {run.status.value} state")
         run.status = TeamRunStatus.CANCELLING
+        if self._coordinator is not None:
+            for agent_id in run.agent_ids:
+                runtime = self._find_runtime(agent_id)
+                if runtime is not None and runtime.alive:
+                    with contextlib.suppress(Exception):
+                        runtime.cancel()
         for agent_id in run.agent_ids:
             await self._bus.send(
                 run.team.lead_agent_id,
@@ -622,6 +662,12 @@ class TeamOrchestrator:
         run = self._get_run(run_id)
         if run.status == TeamRunStatus.SHUTDOWN:
             return run
+        if self._coordinator is not None:
+            for agent_id in run.agent_ids:
+                runtime = self._find_runtime(agent_id)
+                if runtime is not None and runtime.alive:
+                    with contextlib.suppress(Exception):
+                        await runtime.stop()
         for agent_id in run.agent_ids:
             await self._bus.send(
                 run.team.lead_agent_id,
@@ -673,6 +719,143 @@ class TeamOrchestrator:
 
         self._check_run_completion(run)
         return run
+
+    async def execute_run(self, run_id: str) -> TeamRun:
+        """执行 TeamRun 的所有 Assignment：触发 Runtime 执行，收集结果。
+
+        对每个 Assignment，通过 agent-runtime 映射找到对应 Runtime，
+        调用 start + wait_done 执行任务，将 RuntimeResult 映射为 AgentResult，
+        通过 complete_task 更新 TeamRun 和 TaskStore 状态。
+
+        并发度受 TeamPolicy.max_concurrent_tasks 约束。
+        无 coordinator 或无绑定 Runtime 的 Assignment 记录为失败。
+        """
+        run = self._get_run(run_id)
+        if run.status not in (TeamRunStatus.RUNNING, TeamRunStatus.PAUSED):
+            raise RunStateError(
+                f"cannot execute run in {run.status.value} state"
+            )
+        if not run.assignments:
+            return run
+
+        run.status = TeamRunStatus.RUNNING
+        semaphore = asyncio.Semaphore(run.team.policy.max_concurrent_tasks)
+        max_attempts = 1
+        if hasattr(run.team.policy, "meta"):
+            max_attempts = run.team.policy.meta.get("max_attempts", 1)
+
+        tasks = [
+            self._execute_assignment(run_id, assignment, semaphore, max_attempts)
+            for assignment in run.assignments
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return run
+
+    async def _execute_assignment(
+        self,
+        run_id: str,
+        assignment: Assignment,
+        semaphore: asyncio.Semaphore,
+        max_attempts: int = 1,
+    ) -> None:
+        """执行单个 Assignment：Runtime 执行 → 结果回流。
+
+        支持失败重试：当 Runtime 执行失败且 attempt < max_attempts 时，
+        通过 TaskStore.retry 重置任务状态后重试。
+        """
+        async with semaphore:
+            for attempt in range(1, max_attempts + 1):
+                run = self._get_run(run_id)
+                if run.is_terminal:
+                    return
+
+                runtime = self._find_runtime(assignment.agent_id)
+                if runtime is None:
+                    with contextlib.suppress(RunStateError):
+                        await self.complete_task(
+                            run_id,
+                            assignment.agent_id,
+                            assignment.task_id,
+                            error=f"no runtime bound for agent {assignment.agent_id}",
+                        )
+                    return
+
+                try:
+                    await runtime.start(
+                        task=assignment.task_spec.subject,
+                        task_id=assignment.task_id,
+                    )
+                    result = await runtime.wait_done(
+                        timeout=run.team.policy.task_lease_secs,
+                    )
+                    error = self._extract_error(result)
+                    if error is None:
+                        with contextlib.suppress(RunStateError):
+                            await self.complete_task(
+                                run_id,
+                                assignment.agent_id,
+                                assignment.task_id,
+                                summary=result.summary,
+                                cost_usd=result.cost_usd,
+                            )
+                        return
+                    if attempt < max_attempts:
+                        if self._task_store and assignment.task_id:
+                            with contextlib.suppress(Exception):
+                                self._task_store.retry(assignment.task_id)
+                        continue
+                    with contextlib.suppress(RunStateError):
+                        await self.complete_task(
+                            run_id,
+                            assignment.agent_id,
+                            assignment.task_id,
+                            summary=result.summary,
+                            error=error,
+                            cost_usd=result.cost_usd,
+                        )
+                except WaitTimeoutError:
+                    if attempt < max_attempts:
+                        if self._task_store and assignment.task_id:
+                            with contextlib.suppress(Exception):
+                                self._task_store.retry(assignment.task_id)
+                        continue
+                    with contextlib.suppress(RunStateError):
+                        await self.complete_task(
+                            run_id,
+                            assignment.agent_id,
+                            assignment.task_id,
+                            error=f"task timed out after {run.team.policy.task_lease_secs}s",
+                        )
+                except Exception as e:
+                    if attempt < max_attempts:
+                        continue
+                    with contextlib.suppress(RunStateError):
+                        await self.complete_task(
+                            run_id,
+                            assignment.agent_id,
+                            assignment.task_id,
+                            error=f"execution error: {e}",
+                        )
+
+    def _find_runtime(self, agent_id: str) -> Any | None:
+        """通过 agent-runtime 映射查找 Runtime。"""
+        if self._coordinator is None:
+            return None
+        runtime_id = self._agent_runtime_map.get(agent_id)
+        if runtime_id is None:
+            return None
+        return self._coordinator.get(runtime_id)
+
+    @staticmethod
+    def _extract_error(result: RuntimeResult) -> str | None:
+        """从 RuntimeResult 提取错误信息。
+
+        COMPLETED 和 SHUTDOWN 视为成功，无错误。
+        其他终态返回 error 字段或状态值。
+        """
+        if result.status in (RuntimeStatus.COMPLETED, RuntimeStatus.SHUTDOWN):
+            return None
+        return result.error or result.status.value
 
     def _check_run_completion(self, run: TeamRun) -> None:
         """检查是否所有任务已完成，更新 TeamRun 终态。"""

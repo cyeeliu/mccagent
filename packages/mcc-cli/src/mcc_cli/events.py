@@ -130,6 +130,7 @@ class AgentEventSource(EventSource):
         selection_responses: asyncio.Queue[SelectionDecision] | None = None,
         runtime: Any | None = None,
         coordinator: Any | None = None,
+        orchestrator: Any | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
@@ -147,6 +148,7 @@ class AgentEventSource(EventSource):
         self.selection_responses = selection_responses
         self._runtime = runtime
         self._coordinator = coordinator
+        self.orchestrator = orchestrator
 
     @property
     def goal_controller(self) -> GoalController | None:

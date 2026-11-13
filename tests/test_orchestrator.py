@@ -7,6 +7,9 @@ P2-06 验收标准：
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import unittest.mock
 from pathlib import Path
 
 import pytest
@@ -23,7 +26,10 @@ from mcc_harness import (
     ResultCollector,
     RunNotFoundError,
     RunStateError,
+    RuntimeCoordinator,
     RuntimeMode,
+    RuntimeResult,
+    RuntimeStatus,
     SimplePlanner,
     TaskScheduler,
     TaskSpec,
@@ -34,6 +40,7 @@ from mcc_harness import (
     TeamRunResult,
     TeamRunSnapshot,
     TeamRunStatus,
+    WaitTimeoutError,
 )
 from mcc_tools import TaskStore
 
@@ -759,3 +766,455 @@ class TestRegisterAgent:
         )
         found = orchestrator.registry.find_by_capability("code_generation")
         assert len(found) == 1
+
+
+# -- 执行闭环（Phase 5）--
+
+
+class StubRuntime:
+    """测试用 Runtime 桩：实现 AgentRuntime + PausableRuntime 协议。
+
+    通过预设 result 控制执行结果，通过 call_log 记录调用顺序。
+    """
+
+    def __init__(
+        self,
+        runtime_id: str,
+        result: RuntimeResult | None = None,
+        raise_timeout: bool = False,
+        raise_error: Exception | None = None,
+        delay: float = 0.0,
+    ) -> None:
+        self._runtime_id = runtime_id
+        self._status = RuntimeStatus.CREATED
+        self._result = result or RuntimeResult(
+            runtime_id=runtime_id,
+            status=RuntimeStatus.COMPLETED,
+            summary="done",
+        )
+        self._raise_timeout = raise_timeout
+        self._raise_error = raise_error
+        self._delay = delay
+        self.call_log: list[str] = []
+        self.start_count = 0
+        self.cancelled = False
+        self.paused = False
+        self.resumed = False
+        self.stopped = False
+
+    @property
+    def runtime_id(self) -> str:
+        return self._runtime_id
+
+    @property
+    def status(self) -> RuntimeStatus:
+        return self._status
+
+    @property
+    def alive(self) -> bool:
+        return self._status not in (
+            RuntimeStatus.COMPLETED,
+            RuntimeStatus.FAILED,
+            RuntimeStatus.CANCELLED,
+            RuntimeStatus.TIMEOUT,
+            RuntimeStatus.SHUTDOWN,
+        )
+
+    async def start(self, task: str = "", *, task_id: str | None = None) -> None:
+        self.call_log.append(f"start:{task}")
+        self.start_count += 1
+        self._status = RuntimeStatus.RUNNING
+
+    async def stop(self, *, timeout: float = 5.0) -> None:
+        self.call_log.append("stop")
+        self._status = RuntimeStatus.SHUTDOWN
+        self.stopped = True
+
+    def cancel(self) -> None:
+        self.call_log.append("cancel")
+        self.cancelled = True
+        self._status = RuntimeStatus.CANCELLED
+
+    def pause(self) -> None:
+        self.call_log.append("pause")
+        self.paused = True
+        self._status = RuntimeStatus.PAUSED
+
+    def resume(self) -> None:
+        self.call_log.append("resume")
+        self.resumed = True
+        self._status = RuntimeStatus.RUNNING
+
+    async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
+        self.call_log.append("wait_done")
+        if self._delay > 0:
+            await asyncio.sleep(self._delay)
+        if self._raise_error is not None:
+            raise self._raise_error
+        if self._raise_timeout:
+            raise WaitTimeoutError("timed out")
+        self._status = self._result.status
+        return self._result
+
+
+@pytest.fixture
+def coordinator() -> RuntimeCoordinator:
+    return RuntimeCoordinator()
+
+
+@pytest.fixture
+def orchestrator_with_coordinator(
+    registry: AgentRegistry,
+    bus: MessageBus,
+    plan_store: PlanStore,
+    task_store: TaskStore,
+    coordinator: RuntimeCoordinator,
+) -> TeamOrchestrator:
+    return TeamOrchestrator(
+        registry=registry,
+        bus=bus,
+        plan_store=plan_store,
+        task_store=task_store,
+        coordinator=coordinator,
+    )
+
+
+class TestOrchestratorExecutionLoop:
+    """execute_run 执行闭环：Runtime 执行 → 结果回流 → 状态更新。"""
+
+    async def test_execute_run_completes_all_assignments(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+        coordinator: RuntimeCoordinator,
+    ):
+        orch = orchestrator_with_coordinator
+        agent_ids = register_agents(orch, 2)
+        team = make_team(orch)
+
+        rt1 = StubRuntime("rt-1", RuntimeResult(
+            runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok-1",
+        ))
+        rt2 = StubRuntime("rt-2", RuntimeResult(
+            runtime_id="rt-2", status=RuntimeStatus.COMPLETED, summary="ok-2",
+        ))
+        coordinator.register(rt1)
+        coordinator.register(rt2)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+        orch.bind_runtime(agent_ids[1], "rt-2")
+
+        run = await orch.start(team, "build feature A\nbuild feature B")
+        run = await orch.execute_run(run.run_id)
+
+        assert run.status == TeamRunStatus.COMPLETED
+        assert len(run.results) == 2
+        summaries = {r.summary for r in run.results}
+        assert summaries == {"ok-1", "ok-2"}
+
+    async def test_execute_run_no_runtime_fails(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+    ):
+        orch = orchestrator_with_coordinator
+        register_agents(orch, 1)
+        team = make_team(orch)
+
+        run = await orch.start(team, "build feature A")
+        run = await orch.execute_run(run.run_id)
+
+        assert run.status == TeamRunStatus.FAILED
+        assert len(run.results) == 1
+        assert run.results[0].status == "failed"
+        assert "no runtime bound" in (run.results[0].error or "")
+
+    async def test_execute_run_partial_failure(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+        coordinator: RuntimeCoordinator,
+    ):
+        orch = orchestrator_with_coordinator
+        agent_ids = register_agents(orch, 2)
+        team = make_team(orch)
+
+        rt1 = StubRuntime("rt-1", RuntimeResult(
+            runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok",
+        ))
+        rt2 = StubRuntime("rt-2", RuntimeResult(
+            runtime_id="rt-2", status=RuntimeStatus.FAILED, summary="",
+            error="boom",
+        ))
+        coordinator.register(rt1)
+        coordinator.register(rt2)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+        orch.bind_runtime(agent_ids[1], "rt-2")
+
+        run = await orch.start(team, "build feature A\nbuild feature B")
+        run = await orch.execute_run(run.run_id)
+
+        assert run.status == TeamRunStatus.FAILED
+        statuses = {r.status for r in run.results}
+        assert "completed" in statuses
+        assert "failed" in statuses
+
+    async def test_execute_run_concurrency_limit(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        policy = TeamPolicy(max_concurrent_tasks=1)
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+        )
+        agent_ids = register_agents(orch, 2)
+        team = orch.create_team("team-1", "alpha", "lead-1", policy=policy)
+
+        execution_log: list[tuple[str, float]] = []
+
+        class TimedStubRuntime(StubRuntime):
+            async def start(self, task: str = "", *, task_id: str | None = None) -> None:
+                await super().start(task, task_id=task_id)
+                execution_log.append((self._runtime_id, asyncio.get_event_loop().time()))
+
+            async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
+                await asyncio.sleep(0.05)
+                self._status = self._result.status
+                return self._result
+
+        rt1 = TimedStubRuntime("rt-1")
+        rt2 = TimedStubRuntime("rt-2")
+        coordinator.register(rt1)
+        coordinator.register(rt2)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+        orch.bind_runtime(agent_ids[1], "rt-2")
+
+        run = await orch.start(team, "build feature A\nbuild feature B")
+        run = await orch.execute_run(run.run_id)
+
+        assert run.status == TeamRunStatus.COMPLETED
+        assert len(execution_log) == 2
+        times = sorted(t for _, t in execution_log)
+        assert times[1] - times[0] >= 0.04
+
+    async def test_execute_run_retry_on_failure(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        policy = TeamPolicy(task_lease_secs=10.0)
+        policy_with_meta = dataclasses.replace(policy)
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+        )
+        agent_ids = register_agents(orch, 1)
+        team = orch.create_team("team-1", "alpha", "lead-1", policy=policy_with_meta)
+
+        call_count = 0
+
+        class RetryStubRuntime(StubRuntime):
+            async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
+                nonlocal call_count
+                call_count += 1
+                if call_count < 3:
+                    return RuntimeResult(
+                        runtime_id=self._runtime_id,
+                        status=RuntimeStatus.FAILED,
+                        summary="",
+                        error=f"fail-{call_count}",
+                    )
+                return RuntimeResult(
+                    runtime_id=self._runtime_id,
+                    status=RuntimeStatus.COMPLETED,
+                    summary="ok",
+                )
+
+        rt = RetryStubRuntime("rt-1")
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+
+        run = await orch.start(team, "build feature A")
+        original_execute = orch._execute_assignment
+
+        async def patched_execute(run_id, assignment, semaphore, max_attempts=1):
+            return await original_execute(run_id, assignment, semaphore, max_attempts=3)
+
+        with unittest.mock.patch.object(orch, "_execute_assignment", patched_execute):
+            run = await orch.execute_run(run.run_id)
+
+        assert call_count == 3
+        assert run.status == TeamRunStatus.COMPLETED
+
+    async def test_execute_run_timeout(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+        coordinator: RuntimeCoordinator,
+    ):
+        orch = orchestrator_with_coordinator
+        agent_ids = register_agents(orch, 1)
+        team = make_team(orch)
+
+        rt = StubRuntime("rt-1", raise_timeout=True)
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+
+        run = await orch.start(team, "build feature A")
+        run = await orch.execute_run(run.run_id)
+
+        assert run.status == TeamRunStatus.FAILED
+        assert run.results[0].status == "failed"
+        assert "timed out" in (run.results[0].error or "")
+
+    async def test_cancel_propagates_to_runtime(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+        coordinator: RuntimeCoordinator,
+    ):
+        orch = orchestrator_with_coordinator
+        agent_ids = register_agents(orch, 1)
+        team = make_team(orch)
+
+        rt = StubRuntime("rt-1")
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+
+        run = await orch.start(team, "build feature A")
+        rt._status = RuntimeStatus.RUNNING
+        await orch.cancel(run.run_id, reason="user abort")
+
+        assert rt.cancelled
+        assert run.status == TeamRunStatus.CANCELLED
+
+    async def test_pause_resume_propagates_to_runtime(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+        coordinator: RuntimeCoordinator,
+    ):
+        orch = orchestrator_with_coordinator
+        agent_ids = register_agents(orch, 1)
+        team = make_team(orch)
+
+        rt = StubRuntime("rt-1")
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+
+        run = await orch.start(team, "build feature A")
+        rt._status = RuntimeStatus.RUNNING
+        await orch.pause(run.run_id)
+        assert rt.paused
+
+        await orch.resume(run.run_id)
+        assert rt.resumed
+
+    async def test_shutdown_propagates_to_runtime(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+        coordinator: RuntimeCoordinator,
+    ):
+        orch = orchestrator_with_coordinator
+        agent_ids = register_agents(orch, 1)
+        team = make_team(orch)
+
+        rt = StubRuntime("rt-1")
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+
+        run = await orch.start(team, "build feature A")
+        rt._status = RuntimeStatus.RUNNING
+        await orch.shutdown(run.run_id)
+
+        assert rt.stopped
+        assert run.status == TeamRunStatus.SHUTDOWN
+
+    def test_bind_unbind_runtime(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+        coordinator: RuntimeCoordinator,
+    ):
+        orch = orchestrator_with_coordinator
+        assert orch.coordinator is not None
+
+        rt = StubRuntime("rt-x")
+        coordinator.register(rt)
+        orch.bind_runtime("agent-x", "rt-x")
+        runtime = orch._find_runtime("agent-x")
+        assert runtime is not None
+        assert runtime.runtime_id == "rt-x"
+
+        orch.unbind_runtime("agent-x")
+        assert orch._find_runtime("agent-x") is None
+
+    def test_find_runtime_no_coordinator(self, orchestrator_with_tasks: TeamOrchestrator):
+        assert orchestrator_with_tasks.coordinator is None
+        assert orchestrator_with_tasks._find_runtime("any") is None
+
+    @pytest.mark.parametrize("status,has_error", [
+        (RuntimeStatus.COMPLETED, False),
+        (RuntimeStatus.SHUTDOWN, False),
+        (RuntimeStatus.FAILED, True),
+        (RuntimeStatus.CANCELLED, True),
+        (RuntimeStatus.TIMEOUT, True),
+        (RuntimeStatus.BUDGET_EXCEEDED, True),
+    ])
+    def test_extract_error(self, status: RuntimeStatus, has_error: bool):
+        result = RuntimeResult(
+            runtime_id="rt", status=status, summary="",
+            error="err" if has_error else None,
+        )
+        error = TeamOrchestrator._extract_error(result)
+        if has_error:
+            assert error is not None
+        else:
+            assert error is None
+
+    def test_extract_error_falls_back_to_status(self):
+        result = RuntimeResult(
+            runtime_id="rt", status=RuntimeStatus.CANCELLED, summary="",
+            error=None,
+        )
+        error = TeamOrchestrator._extract_error(result)
+        assert error == RuntimeStatus.CANCELLED.value
+
+    async def test_execute_run_empty_assignments(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        class EmptyPlanner:
+            async def plan(self, objective, *, context=None):
+                return []
+
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+            planner=EmptyPlanner(),
+        )
+        team = orch.create_team("team-1", "alpha", "lead-1")
+
+        run = await orch.start(team, "do nothing")
+        assert run.status == TeamRunStatus.COMPLETED
+        assert len(run.assignments) == 0
+        with pytest.raises(RunStateError):
+            await orch.execute_run(run.run_id)
+
+    async def test_execute_run_wrong_state_raises(
+        self,
+        orchestrator_with_coordinator: TeamOrchestrator,
+    ):
+        orch = orchestrator_with_coordinator
+        register_agents(orch, 1)
+        team = make_team(orch)
+
+        run = await orch.start(team, "build feature A")
+        await orch.cancel(run.run_id)
+
+        with pytest.raises(RunStateError):
+            await orch.execute_run(run.run_id)

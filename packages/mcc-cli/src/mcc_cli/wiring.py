@@ -330,12 +330,13 @@ def _wire_team(
 ):
     """多 Agent 团队：长驻 teammate 协作。"""
     if not config.team.enabled:
-        return None
+        return None, None
 
     from mcc_harness import (
         MessageBus,
         PlanStore,
         TeammateManager,
+        TeamOrchestrator,
         register_team_tools,
     )
 
@@ -356,7 +357,14 @@ def _wire_team(
         coordinator=coordinator,
     )
     register_team_tools(registry, team_manager)
-    return team_manager
+    orchestrator = TeamOrchestrator(
+        registry=registry,
+        bus=bus,
+        plan_store=plan_store,
+        task_store=task_store,
+        coordinator=coordinator,
+    )
+    return team_manager, orchestrator
 
 
 _REVIEW_FINDINGS_SCHEMA = {
@@ -661,7 +669,7 @@ def build_source(
         subagent_model=subagent_model, summarize_model=summarize_model,
     )
 
-    team_manager = _wire_team(
+    team_manager, orchestrator = _wire_team(
         config, work_dir, llm, registry, task_store, hook_registry,
         checker, subagent_model,
         coordinator=coordinator,
@@ -692,4 +700,5 @@ def build_source(
         session_short_id=sid,
         runtime=runtime,
         coordinator=coordinator,
+        orchestrator=orchestrator,
     )
