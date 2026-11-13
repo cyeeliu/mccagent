@@ -640,6 +640,9 @@ class SpawnSubagentTool:
 
     子代理的注册表来自 subset 筛选，不含本工具自身，
     深度上限作为第二道递归护栏。
+
+    当 coordinator 提供时，通过 EphemeralRuntime 执行并由
+    Coordinator 管理生命周期；否则回退到直接调用 runner.run。
     """
 
     def __init__(
@@ -647,10 +650,12 @@ class SpawnSubagentTool:
         runner: SubagentRunner,
         presets: dict[str, SubagentSpec],
         max_depth: int = 3,
+        coordinator: Any | None = None,
     ) -> None:
         self.runner = runner
         self.presets = presets
         self.max_depth = max_depth
+        self._coordinator = coordinator
 
     @property
     def name(self) -> str:
@@ -695,11 +700,73 @@ class SpawnSubagentTool:
         if spec is None:
             return ToolOutput.err(f"unknown preset: {preset}")
 
+        if self._coordinator is not None:
+            return await self._run_via_runtime(spec, task, ctx)
+
+        return await self._run_direct(spec, task, ctx)
+
+    async def _run_direct(
+        self, spec: SubagentSpec, task: str, ctx: ToolContext
+    ) -> ToolOutput:
+        """直接调用 runner.run（向后兼容路径）。"""
         try:
             r = await self.runner.run(spec, task, ctx)
         except Exception as e:
             return ToolOutput.err(f"subagent failed: {e}")
 
+        return self._format_subagent_result(r)
+
+    async def _run_via_runtime(
+        self, spec: SubagentSpec, task: str, ctx: ToolContext
+    ) -> ToolOutput:
+        """通过 EphemeralRuntime 执行，由 Coordinator 管理生命周期。
+
+        创建 EphemeralRuntime 并注册到 Coordinator，启动后等待终态，
+        将 RuntimeResult 映射为 ToolOutput 返回。注册失败（重复 ID）
+        时回退到直接调用路径。
+        """
+        from .runtime.base import RuntimeStatus
+        from .runtime.ephemeral import EphemeralRuntime
+
+        rt = EphemeralRuntime(self.runner, spec, ctx)
+        try:
+            self._coordinator.register(rt)
+        except RuntimeError:
+            return await self._run_direct(spec, task, ctx)
+
+        try:
+            await rt.start(task)
+            result = await rt.wait_done()
+        except Exception as e:
+            return ToolOutput.err(f"subagent failed: {e}")
+        finally:
+            with contextlib.suppress(Exception):
+                self._coordinator.unregister(rt.runtime_id)
+
+        if result.usage is not None:
+            tokens = f"{result.usage.input_tokens}in/{result.usage.output_tokens}out"
+        else:
+            tokens = "unknown"
+
+        _reason_map = {
+            RuntimeStatus.COMPLETED: "end_turn",
+            RuntimeStatus.TIMEOUT: "timeout",
+            RuntimeStatus.CANCELLED: "cancelled",
+            RuntimeStatus.BUDGET_EXCEEDED: "budget_exceeded",
+            RuntimeStatus.FAILED: "error",
+        }
+        reason = _reason_map.get(result.status, str(result.status))
+        content = (
+            f"[subagent={spec.name} status={result.status.value} "
+            f"tokens={tokens} reason={reason}]\n{result.summary}"
+        )
+        if result.status is RuntimeStatus.COMPLETED:
+            return ToolOutput.ok(content)
+        return ToolOutput.err(content)
+
+    @staticmethod
+    def _format_subagent_result(r: SubagentResult) -> ToolOutput:
+        """将 SubagentResult 映射为 ToolOutput（直接调用路径）。"""
         if r.usage is not None:
             tokens = f"{r.usage.input_tokens}in/{r.usage.output_tokens}out"
         else:

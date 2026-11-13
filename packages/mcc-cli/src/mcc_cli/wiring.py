@@ -288,7 +288,8 @@ def _wire_prompt_system(config, work_dir: Path, registry, no_skills: bool):
 
 
 def _wire_subagent_workflow(
-    config, work_dir: Path, llm, registry, hooks, subagent_model: str, summarize_model: str
+    config, work_dir: Path, llm, registry, hooks, subagent_model: str, summarize_model: str,
+    coordinator=None,
 ) -> tuple[Any, Any]:
     """SubagentRunner + Workflow 运行时（可信代码编排多步调用）。"""
     from mcc_harness import SpawnSubagentTool, SubagentRunner, default_presets
@@ -300,7 +301,10 @@ def _wire_subagent_workflow(
         hooks=hooks,
     )
     registry.register(
-        SpawnSubagentTool(runner, default_presets(subagent_model, summarize_model))
+        SpawnSubagentTool(
+            runner, default_presets(subagent_model, summarize_model),
+            coordinator=coordinator,
+        )
     )
 
     workflow_tool = None
@@ -636,9 +640,14 @@ def build_source(
 
     subagent_model = resolve_model("subagent", config=config)
     summarize_model = resolve_model("summarize", config=config)
+
+    from mcc_harness import InteractiveRuntime, RuntimeCoordinator
+
+    coordinator = RuntimeCoordinator()
     _runner, workflow_tool = _wire_subagent_workflow(
         config, work_dir, llm, registry, hook_registry,
         subagent_model, summarize_model,
+        coordinator=coordinator,
     )
 
     recorder = SessionRecorder.open_sync(sid, work_dir)
@@ -658,12 +667,10 @@ def build_source(
     obs_sink = _wire_observability(config, work_dir, sid, builder)
 
     agent = builder.build()
-    from mcc_harness import InteractiveRuntime, RuntimeCoordinator
 
     from mcc_cli.slash import build_default_registry
 
     runtime = InteractiveRuntime(agent, session_id=sid, agent_id="main")
-    coordinator = RuntimeCoordinator()
     coordinator.register(runtime)
 
     return AgentEventSource(
