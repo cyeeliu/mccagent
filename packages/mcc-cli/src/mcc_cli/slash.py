@@ -381,13 +381,16 @@ async def _team(source: Any, args: str) -> SlashResult:
     try:
         team = orchestrator.create_team("default", "default", "lead")
 
+        specs = await orchestrator.planner.plan(objective)
         active_names = {info.name for info in team_manager.list_active()}
-        if "worker-1" not in active_names:
-            await team_manager.spawn(
-                name="worker-1",
-                role="worker",
-                prompt=objective,
-            )
+        for i in range(len(specs)):
+            worker_name = f"worker-{i + 1}"
+            if worker_name not in active_names:
+                await team_manager.spawn(
+                    name=worker_name,
+                    role="worker",
+                    prompt="",
+                )
 
         run = await orchestrator.start(team, objective)
 

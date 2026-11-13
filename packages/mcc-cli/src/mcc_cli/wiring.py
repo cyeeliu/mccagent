@@ -655,7 +655,7 @@ def build_source(
     subagent_model = resolve_model("subagent", config=config)
     summarize_model = resolve_model("summarize", config=config)
 
-    from mcc_harness import InteractiveRuntime, RuntimeCoordinator
+    from mcc_harness import RuntimeCoordinator, RuntimeFactory
 
     coordinator = RuntimeCoordinator()
     _runner, workflow_tool = _wire_subagent_workflow(
@@ -685,7 +685,8 @@ def build_source(
 
     from mcc_cli.slash import build_default_registry
 
-    runtime = InteractiveRuntime(agent, session_id=sid, agent_id="main")
+    factory = RuntimeFactory()
+    runtime = factory.create_interactive(agent, session_id=sid, agent_id="main")
     coordinator.register(runtime)
 
     return AgentEventSource(

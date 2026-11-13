@@ -716,9 +716,10 @@ class SpawnSubagentTool:
         时回退到直接调用路径。
         """
         from .runtime.base import RuntimeStatus
-        from .runtime.ephemeral import EphemeralRuntime
+        from .runtime.factory import RuntimeFactory
 
-        rt = EphemeralRuntime(self.runner, spec, ctx)
+        factory = RuntimeFactory()
+        rt = factory.create_ephemeral(self.runner, spec, ctx)
         self._coordinator.register(rt)
 
         try:

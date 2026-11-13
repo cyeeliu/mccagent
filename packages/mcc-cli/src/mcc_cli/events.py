@@ -147,9 +147,10 @@ class AgentEventSource(EventSource):
         self.session_short_id = session_short_id
         self.selection_responses = selection_responses
         if runtime is None:
-            from mcc_harness import InteractiveRuntime
+            from mcc_harness import RuntimeFactory
 
-            runtime = InteractiveRuntime(agent)
+            factory = RuntimeFactory()
+            runtime = factory.create_interactive(agent)
         self._runtime = runtime
         if coordinator is None:
             from mcc_harness import RuntimeCoordinator

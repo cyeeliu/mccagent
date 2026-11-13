@@ -469,6 +469,10 @@ class TeamOrchestrator:
     def coordinator(self) -> RuntimeCoordinator | None:
         return self._coordinator
 
+    @property
+    def planner(self) -> Planner:
+        return self._planner
+
     def bind_runtime(self, agent_id: str, runtime_id: str) -> None:
         """绑定 agent_id 到 runtime_id，用于执行闭环查找 Runtime。"""
         self._agent_runtime_map[agent_id] = runtime_id
@@ -560,13 +564,6 @@ class TeamOrchestrator:
             if task_id and self._task_store is not None:
                 with contextlib.suppress(Exception):
                     self._task_store.claim(task_id, assignment.agent_id)
-            await self._bus.send(
-                team.lead_agent_id,
-                assignment.agent_id,
-                assignment.task_spec.subject,
-                kind="assignment",
-                task_id=task_id,
-            )
 
         return run
 
