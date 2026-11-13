@@ -13,6 +13,7 @@ import pytest
 from mcc_cli.slash import (
     SlashRegistry,
     SlashResult,
+    _team,
     build_default_registry,
 )
 from mcc_config import read_home_settings, update_home_setting
@@ -866,3 +867,104 @@ class TestResumeSelectionFlow:
         assert any(isinstance(e, UserEcho) for e in events)
         assert any(isinstance(e, TextDelta) for e in events)
         assert source.session_short_id == "abc12345"
+
+
+# -- /team 命令 (P1-03) --
+
+
+class TestTeamSlashCommand:
+    """/team slash 命令：触发 orchestrator.start → execute_run → collect_results 闭环。"""
+
+    def test_team_command_registered(self) -> None:
+        registry = build_default_registry()
+        commands = dict(registry.list_commands())
+        assert "team" in commands
+
+    async def test_team_no_orchestrator_returns_disabled(self) -> None:
+        registry = build_default_registry()
+        source = _source(slash_registry=registry)
+        result = await registry.dispatch("/team do something", source)
+        assert result is not None
+        assert "未启用" in (result.text or "")
+
+    async def test_team_no_args_shows_status(self, tmp_path) -> None:
+        from mcc_harness import (
+            AgentRegistry,
+            MessageBus,
+            PlanStore,
+            RuntimeCoordinator,
+            TeammateManager,
+            TeamOrchestrator,
+        )
+        from mcc_tools import ToolRegistry
+
+        registry = SlashRegistry()
+        registry.register("team", "team", _team)
+        tool_reg = ToolRegistry()
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        coord = RuntimeCoordinator()
+        agent_reg = AgentRegistry()
+        orch = TeamOrchestrator(
+            registry=agent_reg, bus=bus, plan_store=plan_store,
+            coordinator=coord,
+        )
+        mgr = TeammateManager(
+            llm=MockLlm([single_text_turn("done")]),
+            registry=tool_reg, bus=bus, plan_store=plan_store,
+            base_dir=tmp_path, coordinator=coord,
+            agent_registry=agent_reg, orchestrator=orch,
+        )
+        source = _source(
+            slash_registry=registry,
+            orchestrator=orch,
+            team_manager=mgr,
+        )
+        result = await registry.dispatch("/team", source)
+        assert result is not None
+        assert "活跃 teammate" in (result.text or "")
+        await mgr.shutdown_all()
+
+    async def test_team_with_objective_triggers_full_flow(self, tmp_path) -> None:
+        from mcc_harness import (
+            AgentRegistry,
+            MessageBus,
+            PlanStore,
+            RuntimeCoordinator,
+            TeammateManager,
+            TeamOrchestrator,
+        )
+        from mcc_tools import ToolRegistry
+
+        registry = SlashRegistry()
+        registry.register("team", "team", _team)
+        tool_reg = ToolRegistry()
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        coord = RuntimeCoordinator()
+        agent_reg = AgentRegistry()
+        orch = TeamOrchestrator(
+            registry=agent_reg, bus=bus, plan_store=plan_store,
+            coordinator=coord,
+        )
+        llm = MockLlm([
+            single_text_turn("initial done"),
+            single_text_turn("task completed"),
+        ])
+        mgr = TeammateManager(
+            llm=llm, registry=tool_reg, bus=bus, plan_store=plan_store,
+            base_dir=tmp_path, coordinator=coord,
+            agent_registry=agent_reg, orchestrator=orch,
+        )
+        source = _source(
+            slash_registry=registry,
+            orchestrator=orch,
+            team_manager=mgr,
+        )
+        try:
+            result = await registry.dispatch("/team do feature work", source)
+            assert result is not None
+            assert "TeamRun" in (result.text or "")
+            assert "完成" in (result.text or "")
+        finally:
+            await mgr.shutdown_all()

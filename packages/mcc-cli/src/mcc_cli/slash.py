@@ -356,6 +356,66 @@ def _resume(source: Any, args: str) -> SlashResult:
     )
 
 
+async def _team(source: Any, args: str) -> SlashResult:
+    """/team：多 Agent 团队编排。
+
+    无参数 → 显示当前团队状态；
+    有参数 → 将参数作为 objective，触发
+    orchestrator.start → execute_run → collect_results 完整闭环。
+    """
+    orchestrator = getattr(source, "orchestrator", None)
+    team_manager = getattr(source, "team_manager", None)
+
+    if orchestrator is None or team_manager is None:
+        return SlashResult(text="团队功能未启用（config.team.enabled=false）")
+
+    objective = args.strip()
+
+    if not objective:
+        active = team_manager.list_active()
+        lines = [f"活跃 teammate: {len(active)}"]
+        for info in active:
+            lines.append(f"  {info.name} ({info.role}) — {info.status}")
+        return SlashResult(text="\n".join(lines))
+
+    try:
+        team = orchestrator.create_team("default", "default", "lead")
+
+        active_names = {info.name for info in team_manager.list_active()}
+        if "worker-1" not in active_names:
+            await team_manager.spawn(
+                name="worker-1",
+                role="worker",
+                prompt=objective,
+            )
+
+        run = await orchestrator.start(team, objective)
+
+        if not run.assignments:
+            return SlashResult(
+                text=f"TeamRun {run.run_id} 已启动但无任务分配（planner 返回空）"
+            )
+
+        await orchestrator.execute_run(run.run_id)
+        result = await orchestrator.collect_results(run.run_id)
+
+        lines = [
+            f"TeamRun {result.run_id} — {result.status.value}",
+            f"完成: {result.completed_count}/{result.total_count}, "
+            f"失败: {result.failed_count}",
+        ]
+        for r in result.results:
+            marker = "✓" if r.status == "completed" else "✗"
+            lines.append(
+                f"  {marker} {r.agent_id}: {r.summary or r.error or ''}"
+            )
+        return SlashResult(text="\n".join(lines))
+    except Exception as e:
+        return SlashResult(
+            text=f"团队执行失败: {type(e).__name__}: {e}"
+        )
+
+
 def build_default_registry() -> SlashRegistry:
     """注册内置命令的默认注册表。"""
     registry = SlashRegistry()
@@ -365,4 +425,5 @@ def build_default_registry() -> SlashRegistry:
     registry.register("config", "查看或修改配置", _config)
     registry.register("goal", "设置/查看/清除 goal loop", _goal_handler)
     registry.register("resume", "列出或恢复历史会话", _resume)
+    registry.register("team", "团队编排（/team <objective> 触发 TeamRun）", _team)
     return registry
