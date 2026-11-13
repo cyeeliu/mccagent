@@ -56,6 +56,7 @@ class InteractiveRuntime:
         self._status = RuntimeStatus.CREATED
         self._turn_lock = asyncio.Lock()
         self._closed = False
+        self._done_event: asyncio.Event = asyncio.Event()
         self._cancel_event: asyncio.Event | None = None
         self._current_task: asyncio.Task[None] | None = None
         self._started_at: float = 0.0
@@ -167,6 +168,7 @@ class InteractiveRuntime:
         if self._closed:
             return
         self._closed = True
+        self._done_event.set()
         if self._cancel_event is not None:
             self._cancel_event.set()
         if self._current_task is not None and not self._current_task.done():
@@ -184,7 +186,7 @@ class InteractiveRuntime:
         """等待运行时到达终态。
 
         InteractiveRuntime 需要外部调用 stop() 后才会到达终态。
-        timeout 到期时抛出 WaitTimeoutError。
+        未关闭时阻塞等待直到 stop() 被调用；timeout 到期时抛出 WaitTimeoutError。
         """
         from .base import WaitTimeoutError
 
@@ -192,16 +194,15 @@ class InteractiveRuntime:
             return self._result
 
         if not self._closed:
-            if timeout is not None:
+            try:
+                if timeout is not None:
+                    await asyncio.wait_for(self._done_event.wait(), timeout=timeout)
+                else:
+                    await self._done_event.wait()
+            except TimeoutError:
                 raise WaitTimeoutError(
                     f"wait_done timed out after {timeout}s for {self._runtime_id}"
-                )
-            return _terminal_result(
-                self.runtime_id,
-                self._status,
-                summary="not closed",
-                agent_id=self._agent_id,
-            )
+                ) from None
 
         self._result = _terminal_result(
             self.runtime_id,

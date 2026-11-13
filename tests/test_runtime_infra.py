@@ -275,8 +275,14 @@ class TestInteractiveRuntime:
     async def test_wait_done_not_closed_no_timeout(self):
         rt = InteractiveRuntime(FakeAgent())
         await rt.start()
+
+        async def stop_later() -> None:
+            await asyncio.sleep(0.05)
+            await rt.stop()
+
+        asyncio.create_task(stop_later())
         result = await rt.wait_done()
-        assert result.status is RuntimeStatus.IDLE
+        assert result.status is RuntimeStatus.SHUTDOWN
 
     async def test_config_mode_interactive(self):
         rt = InteractiveRuntime(FakeAgent(), agent_id="a1", session_id="s1")
@@ -520,6 +526,86 @@ class TestRuntimeCoordinator:
         assert "ct-2" not in removed
         assert coord.get("ct-1") is None
         assert coord.get("ct-2") is not None
+
+    async def test_register_after_stop_all_rejected(self):
+        from mcc_harness import CoordinatorClosedError
+
+        coord = RuntimeCoordinator()
+        await coord.stop_all()
+        with pytest.raises(CoordinatorClosedError, match="closed"):
+            coord.register(InteractiveRuntime(FakeAgent(), runtime_id="late"))
+
+    async def test_clear_terminal_includes_budget_exceeded(self):
+        coord = RuntimeCoordinator()
+
+        class BudgetRuntime:
+            def __init__(self) -> None:
+                self._rid = "be-1"
+
+            @property
+            def runtime_id(self) -> str:
+                return self._rid
+
+            @property
+            def status(self) -> RuntimeStatus:
+                return RuntimeStatus.BUDGET_EXCEEDED
+
+            @property
+            def alive(self) -> bool:
+                return False
+
+            async def start(self, task: str = "", *, task_id=None) -> None:
+                pass
+
+            async def stop(self, *, timeout: float = 5.0) -> None:
+                pass
+
+            def cancel(self) -> None:
+                pass
+
+            async def wait_done(self, *, timeout=None) -> RuntimeResult:
+                return RuntimeResult(
+                    runtime_id=self._rid,
+                    status=RuntimeStatus.BUDGET_EXCEEDED,
+                    summary="budget",
+                )
+
+        rt = BudgetRuntime()
+        coord.register(rt)
+        removed = coord.clear_terminal()
+        assert "be-1" in removed
+        assert coord.get("be-1") is None
+
+    async def test_register_during_stop_all_rejected(self):
+        """P1-04: stop_all 执行期间 register 被拒绝。"""
+        from mcc_harness import CoordinatorClosedError
+
+        coord = RuntimeCoordinator()
+        rt1 = InteractiveRuntime(FakeAgent(), runtime_id="r-1")
+        coord.register(rt1)
+        await rt1.start()
+
+        task = asyncio.create_task(coord.stop_all())
+        await asyncio.sleep(0.01)
+
+        with pytest.raises(CoordinatorClosedError, match="closed"):
+            coord.register(InteractiveRuntime(FakeAgent(), runtime_id="r-2"))
+
+        await task
+        assert coord.get("r-2") is None
+
+    async def test_stop_all_then_register_always_rejected(self):
+        """P1-04: stop_all 完成后多次 register 均被拒绝。"""
+        from mcc_harness import CoordinatorClosedError
+
+        coord = RuntimeCoordinator()
+        await coord.stop_all()
+
+        for i in range(3):
+            with pytest.raises(CoordinatorClosedError):
+                coord.register(
+                    InteractiveRuntime(FakeAgent(), runtime_id=f"late-{i}")
+                )
 
 
 # -- RuntimeFactory 测试 --

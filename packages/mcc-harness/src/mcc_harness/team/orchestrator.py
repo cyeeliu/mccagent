@@ -781,13 +781,23 @@ class TeamOrchestrator:
                     return
 
                 try:
-                    await runtime.start(
-                        task=assignment.task_spec.subject,
-                        task_id=assignment.task_id,
-                    )
-                    result = await runtime.wait_done(
-                        timeout=run.team.policy.task_lease_secs,
-                    )
+                    if hasattr(runtime, "submit_task"):
+                        submitted_id = await runtime.submit_task(
+                            assignment.task_spec.subject,
+                            task_id=assignment.task_id,
+                        )
+                        result = await runtime.wait_task(
+                            submitted_id,
+                            timeout=run.team.policy.task_lease_secs,
+                        )
+                    else:
+                        await runtime.start(
+                            task=assignment.task_spec.subject,
+                            task_id=assignment.task_id,
+                        )
+                        result = await runtime.wait_done(
+                            timeout=run.team.policy.task_lease_secs,
+                        )
                     error = self._extract_error(result)
                     if error is None:
                         with contextlib.suppress(RunStateError):

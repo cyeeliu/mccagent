@@ -1218,3 +1218,210 @@ class TestOrchestratorExecutionLoop:
 
         with pytest.raises(RunStateError):
             await orch.execute_run(run.run_id)
+
+
+# -- P1-02: PersistentRuntime submit_task/wait_task 执行路径 --
+
+
+class StubPersistentRuntime:
+    """模拟常驻运行时：有 submit_task/wait_task，不走 start/wait_done。
+
+    P1-02 核心验证：execute_run 对常驻 Runtime 用 submit_task + wait_task，
+    不调 start（避免 already running）也不调 wait_done（避免等整个循环）。
+    """
+
+    def __init__(
+        self,
+        runtime_id: str,
+        result: RuntimeResult | None = None,
+    ) -> None:
+        self._runtime_id = runtime_id
+        self._status = RuntimeStatus.IDLE
+        self._result = result or RuntimeResult(
+            runtime_id=runtime_id,
+            status=RuntimeStatus.COMPLETED,
+            summary="done",
+        )
+        self.submit_count = 0
+        self.wait_task_count = 0
+        self.start_count = 0
+        self.wait_done_count = 0
+        self.submitted_tasks: list[str] = []
+
+    @property
+    def runtime_id(self) -> str:
+        return self._runtime_id
+
+    @property
+    def status(self) -> RuntimeStatus:
+        return self._status
+
+    @property
+    def alive(self) -> bool:
+        return True
+
+    async def start(self, task: str = "", *, task_id: str | None = None) -> None:
+        self.start_count += 1
+
+    async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
+        self.wait_done_count += 1
+        return self._result
+
+    async def stop(self, *, timeout: float = 5.0) -> None:
+        self._status = RuntimeStatus.SHUTDOWN
+
+    def cancel(self) -> None:
+        self._status = RuntimeStatus.CANCELLED
+
+    def pause(self) -> None:
+        pass
+
+    def resume(self) -> None:
+        pass
+
+    async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
+        self.submit_count += 1
+        tid = task_id or f"task-{self.submit_count}"
+        self.submitted_tasks.append(tid)
+        return tid
+
+    async def wait_task(
+        self, task_id: str, *, timeout: float | None = None,
+    ) -> RuntimeResult:
+        self.wait_task_count += 1
+        return self._result
+
+
+class TestOrchestratorPersistentExecution:
+    """P1-02: execute_run 对 PersistentRuntime 走 submit_task + wait_task 路径。"""
+
+    async def test_persistent_runtime_uses_submit_wait_task(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        """execute_run 对有 submit_task 的 Runtime 调 submit_task + wait_task。"""
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+        )
+        agent_ids = register_agents(orch, 1)
+        team = make_team(orch)
+
+        rt = StubPersistentRuntime("rt-1", RuntimeResult(
+            runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok",
+        ))
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+
+        run = await orch.start(team, "build feature A")
+        run = await orch.execute_run(run.run_id)
+
+        assert rt.submit_count == 1
+        assert rt.wait_task_count == 1
+        assert rt.start_count == 0
+        assert rt.wait_done_count == 0
+        assert run.status == TeamRunStatus.COMPLETED
+        assert run.results[0].status == "completed"
+        assert run.results[0].summary == "ok"
+
+    async def test_persistent_runtime_multiple_tasks_no_already_running(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        """同一 PersistentRuntime 处理多个任务不触发 already running 错误。"""
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+        )
+        agent_ids = register_agents(orch, 2)
+        team = make_team(orch)
+
+        rt = StubPersistentRuntime("rt-1", RuntimeResult(
+            runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok",
+        ))
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+        orch.bind_runtime(agent_ids[1], "rt-1")
+
+        run = await orch.start(team, "build feature A\nbuild feature B")
+        run = await orch.execute_run(run.run_id)
+
+        assert rt.submit_count == 2
+        assert rt.wait_task_count == 2
+        assert rt.start_count == 0
+        assert run.status == TeamRunStatus.COMPLETED
+
+    async def test_persistent_runtime_failure_mapped(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        """PersistentRuntime 任务失败正确映射到 AgentResult。"""
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+        )
+        agent_ids = register_agents(orch, 1)
+        team = make_team(orch)
+
+        rt = StubPersistentRuntime("rt-1", RuntimeResult(
+            runtime_id="rt-1", status=RuntimeStatus.FAILED, summary="",
+            error="boom",
+        ))
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+
+        run = await orch.start(team, "build feature A")
+        run = await orch.execute_run(run.run_id)
+
+        assert rt.submit_count == 1
+        assert rt.wait_task_count == 1
+        assert run.status == TeamRunStatus.FAILED
+        assert run.results[0].status == "failed"
+
+    async def test_persistent_runtime_timeout_raises_wait_timeout(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        """PersistentRuntime wait_task 超时映射到任务失败。"""
+
+        class TimeoutPersistentRuntime(StubPersistentRuntime):
+            async def wait_task(
+                self, task_id: str, *, timeout: float | None = None,
+            ) -> RuntimeResult:
+                self.wait_task_count += 1
+                raise WaitTimeoutError("task timed out")
+
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+        )
+        agent_ids = register_agents(orch, 1)
+        team = make_team(orch)
+
+        rt = TimeoutPersistentRuntime("rt-1")
+        coordinator.register(rt)
+        orch.bind_runtime(agent_ids[0], "rt-1")
+
+        run = await orch.start(team, "build feature A")
+        run = await orch.execute_run(run.run_id)
+
+        assert rt.submit_count == 1
+        assert rt.wait_task_count == 1
+        assert run.status == TeamRunStatus.FAILED
+        assert "timed out" in (run.results[0].error or "")

@@ -218,6 +218,7 @@ class TeammateRuntime:
         self._instruction_queue: asyncio.Queue[str] = asyncio.Queue()
         self._pause_event: asyncio.Event = asyncio.Event()
         self._pause_event.set()
+        self._task_futures: dict[str, asyncio.Future[tuple[TeammateStatus, str]]] = {}
 
     @property
     def name(self) -> str:
@@ -259,6 +260,16 @@ class TeammateRuntime:
             TeammateStatus.SHUTDOWN,
             reason="force terminated" if self._force_stop else "graceful exit",
         )
+
+    def _set_task_future(
+        self, outcome: TeammateStatus, summary: str,
+    ) -> None:
+        """设置当前任务的 future 结果，供 PersistentRuntime.wait_task 等待。"""
+        task_id = self._current.task_id
+        if task_id and task_id in self._task_futures:
+            future = self._task_futures.pop(task_id)
+            if not future.done():
+                future.set_result((outcome, summary))
 
     async def start(self, initial_prompt: str, task_id: str | None = None) -> None:
         """启动 teammate 后台任务。"""
@@ -320,6 +331,10 @@ class TeammateRuntime:
                 kind="error",
             )
         finally:
+            for future in self._task_futures.values():
+                if not future.done():
+                    future.set_exception(RuntimeError("teammate shutdown"))
+            self._task_futures.clear()
             self._safe_shutdown(reason="loop exit")
 
     def _dequeue_assignment(self) -> bool:
@@ -340,7 +355,7 @@ class TeammateRuntime:
             elif msg.kind in ("assignment", "message"):
                 self._assignment_queue.append({
                     "content": msg.content,
-                    "task_id": msg.meta.get("task_id") if msg.meta else None,
+                    "task_id": msg.task_id,
                 })
                 if not self._current.assignment:
                     self._dequeue_assignment()
@@ -390,6 +405,7 @@ class TeammateRuntime:
                         error=summary,
                         owner=self.name,
                     )
+            self._set_task_future(TeammateStatus.FAILED, summary)
             self._transition(
                 TeammateStatus.IDLE, reason="recover from failed"
             )
@@ -468,6 +484,7 @@ class TeammateRuntime:
 
         self._cleanup_worktree()
 
+        self._set_task_future(outcome, summary)
         self._transition(
             TeammateStatus.IDLE, reason=f"recover from {outcome.value}"
         )
@@ -579,13 +596,13 @@ class TeammateRuntime:
                 return True
         return False
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, *, timeout: float = 5.0) -> None:
         """请求 teammate 关闭并等待退出。"""
         self._shutdown_evt.set()
         self.notify()
         if self._task and not self._task.done():
             try:
-                await asyncio.wait_for(self._task, timeout=5.0)
+                await asyncio.wait_for(self._task, timeout=timeout)
             except TimeoutError:
                 self._force_stop = True
                 self._task.cancel()
@@ -630,6 +647,8 @@ class TeammateManager:
         hooks: HookRegistry | None = None,
         permission: PermissionChecker | None = None,
         coordinator: Any | None = None,
+        agent_registry: Any | None = None,
+        orchestrator: Any | None = None,
     ) -> None:
         self._llm = llm
         self._registry = registry
@@ -642,6 +661,8 @@ class TeammateManager:
         self._default_model = default_model
         self._hooks = hooks
         self._permission = permission
+        self._agent_registry = agent_registry
+        self._orchestrator = orchestrator
         if coordinator is None:
             from .runtime.coordinator import RuntimeCoordinator
 
@@ -697,14 +718,34 @@ class TeammateManager:
             hooks=self._hooks,
             permission=self._permission,
         )
-        self._teammates[name] = rt
-        await rt.start(prompt, task_id=task_id)
 
         from .runtime.persistent import PersistentRuntime
 
         pr = PersistentRuntime(rt, self._bus, lead_name=LEAD_NAME)
         self._coordinator.register(pr)
+        try:
+            await rt.start(prompt, task_id=task_id)
+        except Exception:
+            self._coordinator.unregister(pr.runtime_id)
+            raise
+
+        self._teammates[name] = rt
         self._persistent_runtimes[name] = pr
+
+        if self._agent_registry is not None:
+            from .registry import AgentDescriptor
+            from .runtime.base import RuntimeMode
+
+            desc = AgentDescriptor(
+                agent_id=name,
+                agent_name=name,
+                capabilities=frozenset(spec.tools),
+                mode=RuntimeMode.PERSISTENT,
+            )
+            with contextlib.suppress(Exception):
+                self._agent_registry.register(desc)
+        if self._orchestrator is not None:
+            self._orchestrator.bind_runtime(name, pr.runtime_id)
 
         return name
 
@@ -771,8 +812,13 @@ class TeammateManager:
         pr = self._persistent_runtimes.get(name)
         if pr is not None:
             await pr.stop()
-            self._coordinator.unregister(name)
+            self._coordinator.unregister(pr.runtime_id)
             self._persistent_runtimes.pop(name, None)
+            if self._orchestrator is not None:
+                self._orchestrator.unbind_runtime(name)
+            if self._agent_registry is not None:
+                with contextlib.suppress(Exception):
+                    self._agent_registry.unregister(name)
         else:
             await rt.shutdown()
         return f"Teammate {name} shut down"

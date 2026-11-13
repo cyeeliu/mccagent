@@ -8,6 +8,7 @@ P2-01 验收标准：
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from mcc_harness import (
     RuntimeMode,
     RuntimeResult,
     RuntimeStatus,
+    SubagentResult,
     SubagentRunner,
     SubagentSpec,
     SubagentStatus,
@@ -71,6 +73,23 @@ def _make_persistent(
         base_dir=tmp_path,
     )
     return PersistentRuntime(rt, bus)
+
+
+class _SlowRunner:
+    """慢速 runner，用于测试 wait_done 超时后底层 task 是否仍存活。"""
+
+    def __init__(self, delay: float = 5.0) -> None:
+        self._delay = delay
+
+    async def run(self, spec, task, parent, *, channel=None):
+        await asyncio.sleep(self._delay)
+        return SubagentResult(
+            name=spec.name,
+            summary="slow result",
+            status=SubagentStatus.COMPLETED,
+            started_at=time.monotonic(),
+            finished_at=time.monotonic(),
+        )
 
 
 # -- 接口契约测试 --
@@ -218,6 +237,49 @@ class TestEphemeralRuntime:
         await rt.wait_done()
         assert rt.status is RuntimeStatus.COMPLETED
 
+    async def test_wait_done_timeout_keeps_task_alive(self, tmp_path):
+        """P2-01: wait_done 超时后底层 task 仍存活，不被取消。"""
+        from mcc_harness.runtime.base import WaitTimeoutError
+
+        runner = _SlowRunner(delay=5.0)
+        spec = SubagentSpec(name="slow", system="test", model="claude-haiku-4-5")
+        ctx = ToolContext(cwd=tmp_path, session_id="timeout-test", depth=0)
+        rt = EphemeralRuntime(runner, spec, ctx)
+
+        await rt.start("slow task")
+        assert rt.alive
+
+        with pytest.raises(WaitTimeoutError):
+            await rt.wait_done(timeout=0.1)
+
+        assert rt.alive
+        assert rt.status is RuntimeStatus.RUNNING
+
+        await rt.stop(timeout=10.0)
+        assert not rt.alive
+
+    async def test_wait_done_timeout_then_complete(self, tmp_path):
+        """P2-01: wait_done 超时后仍可再次等待完成。"""
+        from mcc_harness.runtime.base import WaitTimeoutError
+
+        runner = _SlowRunner(delay=0.3)
+        spec = SubagentSpec(name="slow2", system="test", model="claude-haiku-4-5")
+        ctx = ToolContext(cwd=tmp_path, session_id="timeout-test2", depth=0)
+        rt = EphemeralRuntime(runner, spec, ctx)
+
+        await rt.start("slow task")
+        assert rt.alive
+
+        with pytest.raises(WaitTimeoutError):
+            await rt.wait_done(timeout=0.05)
+
+        assert rt.alive
+
+        result = await rt.wait_done(timeout=5.0)
+        assert result.is_terminal
+        assert result.status is RuntimeStatus.COMPLETED
+        assert not rt.alive
+
 
 # -- PersistentRuntime 生命周期测试 --
 
@@ -310,9 +372,11 @@ class TestPersistentRuntime:
         assert result.status is RuntimeStatus.SHUTDOWN
         assert "not started" in result.summary
 
-    async def test_runtime_id_is_teammate_name(self, tmp_path):
+    async def test_runtime_id_is_unique_uuid(self, tmp_path):
         rt = _make_persistent(tmp_path, name="my-worker")
-        assert rt.runtime_id == "my-worker"
+        assert rt.runtime_id.startswith("persistent::")
+        rt2 = _make_persistent(tmp_path, name="my-worker")
+        assert rt.runtime_id != rt2.runtime_id
 
     async def test_config_reflects_spec(self, tmp_path):
         rt = _make_persistent(tmp_path, name="cfg-test")
@@ -349,6 +413,86 @@ class TestPersistentRuntime:
         await asyncio.sleep(0.3)
         msgs = await bus.consume(LEAD_NAME)
         assert any(m.kind == "work_done" for m in msgs)
+        await rt.stop()
+
+    async def test_stop_passes_timeout_to_shutdown(self, tmp_path):
+        """P2-03: stop(timeout=X) 将 timeout 传给 TeammateRuntime.shutdown。"""
+        rt = _make_persistent(tmp_path)
+        captured: list[float] = []
+        original = rt._teammate.shutdown
+
+        async def capture(*, timeout: float = 5.0) -> None:
+            captured.append(timeout)
+            await original(timeout=timeout)
+
+        rt._teammate.shutdown = capture
+        await rt.start("work")
+        await asyncio.sleep(0.2)
+        await rt.stop(timeout=3.0)
+        assert captured == [3.0]
+
+    async def test_stop_default_timeout_is_5(self, tmp_path):
+        """P2-03: stop() 不传 timeout 时默认 5.0。"""
+        rt = _make_persistent(tmp_path)
+        captured: list[float] = []
+        original = rt._teammate.shutdown
+
+        async def capture(*, timeout: float = 5.0) -> None:
+            captured.append(timeout)
+            await original(timeout=timeout)
+
+        rt._teammate.shutdown = capture
+        await rt.start("work")
+        await asyncio.sleep(0.2)
+        await rt.stop()
+        assert captured == [5.0]
+
+    async def test_submit_task_and_wait_task(self, tmp_path):
+        """P1-02: submit_task + wait_task 完成单任务执行闭环。"""
+        llm = MockLlm([
+            single_text_turn("initial done"),
+            single_text_turn("task result"),
+        ])
+        rt = _make_persistent(tmp_path, llm=llm, name="submit-test")
+        await rt.start("initial work")
+        await asyncio.sleep(0.3)
+
+        tid = await rt.submit_task("do something", task_id="t-001")
+        assert tid == "t-001"
+        result = await rt.wait_task(tid, timeout=5.0)
+        assert result.status is RuntimeStatus.COMPLETED
+        assert "task result" in result.summary
+        await rt.stop()
+
+    async def test_submit_multiple_tasks_sequentially(self, tmp_path):
+        """P1-02: 同一 PersistentRuntime 连续提交多个任务不触发 already running。"""
+        llm = MockLlm([
+            single_text_turn("first done"),
+            single_text_turn("second done"),
+            single_text_turn("third done"),
+        ])
+        rt = _make_persistent(tmp_path, llm=llm, name="multi-submit")
+        await rt.start("initial")
+        await asyncio.sleep(0.3)
+
+        tid1 = await rt.submit_task("task one", task_id="t1")
+        r1 = await rt.wait_task(tid1, timeout=5.0)
+        assert r1.status is RuntimeStatus.COMPLETED
+
+        tid2 = await rt.submit_task("task two", task_id="t2")
+        r2 = await rt.wait_task(tid2, timeout=5.0)
+        assert r2.status is RuntimeStatus.COMPLETED
+
+        await rt.stop()
+
+    async def test_wait_task_unknown_id_returns_failed(self, tmp_path):
+        """P1-02: wait_task 对未知 task_id 返回 FAILED 结果。"""
+        rt = _make_persistent(tmp_path, name="unknown-task")
+        await rt.start("initial")
+        await asyncio.sleep(0.2)
+        result = await rt.wait_task("nonexistent", timeout=1.0)
+        assert result.status is RuntimeStatus.FAILED
+        assert "unknown task_id" in result.summary
         await rt.stop()
 
 

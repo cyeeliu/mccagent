@@ -17,7 +17,12 @@ from .base import (
     RuntimeStatus,
     WaitTimeoutError,
 )
-from .coordinator import RuntimeCoordinator, RuntimeSnapshot, ShutdownReport
+from .coordinator import (
+    CoordinatorClosedError,
+    RuntimeCoordinator,
+    RuntimeSnapshot,
+    ShutdownReport,
+)
 from .ephemeral import EphemeralRuntime
 from .factory import RuntimeFactory
 from .interactive import InteractiveRuntime
@@ -37,6 +42,7 @@ __all__ = [
     "AgentState",
     "AgentStateMachine",
     "CallbackGuard",
+    "CoordinatorClosedError",
     "EphemeralRuntime",
     "GuardRejectedError",
     "IllegalTransitionError",

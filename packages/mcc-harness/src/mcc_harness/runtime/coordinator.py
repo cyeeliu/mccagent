@@ -12,9 +12,13 @@ import contextlib
 import logging
 from dataclasses import dataclass, field
 
-from .base import AgentRuntime, RuntimeStatus
+from .base import AgentRuntime, RuntimeStatus, _TERMINAL_STATUSES
 
 logger = logging.getLogger(__name__)
+
+
+class CoordinatorClosedError(RuntimeError):
+    """Coordinator 已关闭，不再接受注册。"""
 
 
 @dataclass
@@ -60,7 +64,11 @@ class RuntimeCoordinator:
         self._stopped = False
 
     def register(self, runtime: AgentRuntime) -> None:
-        """注册 Runtime，重复 ID 抛 RuntimeError。"""
+        """注册 Runtime，重复 ID 抛 RuntimeError，已关闭抛 CoordinatorClosedError。"""
+        if self._stopped:
+            raise CoordinatorClosedError(
+                "coordinator is closed; create a new one to register runtimes"
+            )
         rid = runtime.runtime_id
         if rid in self._runtimes:
             raise RuntimeError(f"duplicate runtime id: {rid}")
@@ -163,15 +171,7 @@ class RuntimeCoordinator:
         terminal_ids = [
             rid
             for rid, rt in self._runtimes.items()
-            if not rt.alive
-            and rt.status
-            in (
-                RuntimeStatus.COMPLETED,
-                RuntimeStatus.FAILED,
-                RuntimeStatus.CANCELLED,
-                RuntimeStatus.TIMEOUT,
-                RuntimeStatus.SHUTDOWN,
-            )
+            if not rt.alive and rt.status in _TERMINAL_STATUSES
         ]
         for rid in terminal_ids:
             self._runtimes.pop(rid, None)

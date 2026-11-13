@@ -142,7 +142,7 @@ class EphemeralRuntime:
             )
         try:
             if timeout is not None:
-                await asyncio.wait_for(self._task, timeout=timeout)
+                await asyncio.wait_for(asyncio.shield(self._task), timeout=timeout)
             else:
                 await self._task
         except asyncio.CancelledError:

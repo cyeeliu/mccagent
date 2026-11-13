@@ -333,6 +333,7 @@ def _wire_team(
         return None, None
 
     from mcc_harness import (
+        AgentRegistry,
         MessageBus,
         PlanStore,
         TeammateManager,
@@ -342,6 +343,14 @@ def _wire_team(
 
     bus = MessageBus(work_dir)
     plan_store = PlanStore()
+    agent_registry = AgentRegistry()
+    orchestrator = TeamOrchestrator(
+        registry=agent_registry,
+        bus=bus,
+        plan_store=plan_store,
+        task_store=task_store,
+        coordinator=coordinator,
+    )
     team_manager = TeammateManager(
         llm=llm,
         registry=registry,
@@ -355,15 +364,10 @@ def _wire_team(
         hooks=hooks,
         permission=checker,
         coordinator=coordinator,
+        agent_registry=agent_registry,
+        orchestrator=orchestrator,
     )
     register_team_tools(registry, team_manager)
-    orchestrator = TeamOrchestrator(
-        registry=registry,
-        bus=bus,
-        plan_store=plan_store,
-        task_store=task_store,
-        coordinator=coordinator,
-    )
     return team_manager, orchestrator
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+from uuid import uuid4
 
 from ..teammate import LEAD_NAME, TeammateRuntime, TeammateStatus
 from .base import (
@@ -38,6 +39,13 @@ _TEAMMATE_STATUS_MAP: dict[TeammateStatus, RuntimeStatus] = {
     TeammateStatus.SHUTDOWN: RuntimeStatus.SHUTDOWN,
 }
 
+_TASK_OUTCOME_TO_RUNTIME: dict[TeammateStatus, RuntimeStatus] = {
+    TeammateStatus.REPORTING: RuntimeStatus.COMPLETED,
+    TeammateStatus.TIMEOUT: RuntimeStatus.TIMEOUT,
+    TeammateStatus.FAILED: RuntimeStatus.FAILED,
+    TeammateStatus.CANCELLED: RuntimeStatus.CANCELLED,
+}
+
 
 class PersistentRuntime:
     """常驻运行时：包装 TeammateRuntime 的工作循环。
@@ -59,10 +67,11 @@ class PersistentRuntime:
         self._lead_name = lead_name
         self._started_at: float = 0.0
         self._final_result: RuntimeResult | None = None
+        self._runtime_id = f"persistent::{uuid4().hex[:12]}"
 
     @property
     def runtime_id(self) -> str:
-        return self._teammate.name
+        return self._runtime_id
 
     @property
     def status(self) -> RuntimeStatus:
@@ -103,7 +112,7 @@ class PersistentRuntime:
         await self._teammate.start(task, task_id=task_id)
 
     async def stop(self, *, timeout: float = 5.0) -> None:
-        await self._teammate.shutdown()
+        await self._teammate.shutdown(timeout=timeout)
 
     def cancel(self) -> None:
         if not self._teammate.alive:
@@ -181,5 +190,62 @@ class PersistentRuntime:
 
     def _send(self, kind: str, content: str) -> None:
         asyncio.create_task(
-            self._bus.send(self._lead_name, self.runtime_id, content, kind=kind)
+            self._bus.send(self._lead_name, self._teammate.name, content, kind=kind)
+        )
+
+    async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
+        """向常驻运行时提交单个任务，返回 task_id。
+
+        通过 MessageBus 发送 assignment 消息并唤醒 teammate，
+        创建 Future 供 wait_task 等待。
+        """
+        tid = task_id or f"task::{uuid4().hex[:12]}"
+        future: asyncio.Future[tuple[TeammateStatus, str]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._teammate._task_futures[tid] = future
+        await self._bus.send(
+            self._lead_name, self._teammate.name, task,
+            kind="assignment", task_id=tid,
+        )
+        self._teammate.notify()
+        return tid
+
+    async def wait_task(
+        self, task_id: str, *, timeout: float | None = None,
+    ) -> RuntimeResult:
+        """等待单个任务完成，返回 RuntimeResult。"""
+        future = self._teammate._task_futures.get(task_id)
+        if future is None:
+            return _terminal_result(
+                self.runtime_id,
+                RuntimeStatus.FAILED,
+                summary=f"unknown task_id: {task_id}",
+                started_at=self._started_at,
+            )
+        try:
+            if timeout is not None:
+                outcome, summary = await asyncio.wait_for(
+                    asyncio.shield(future), timeout=timeout,
+                )
+            else:
+                outcome, summary = await asyncio.shield(future)
+        except TimeoutError:
+            raise WaitTimeoutError(
+                f"wait_task timed out after {timeout}s for task {task_id}"
+            ) from None
+        except asyncio.CancelledError:
+            return _terminal_result(
+                self.runtime_id,
+                RuntimeStatus.CANCELLED,
+                summary="cancelled",
+                started_at=self._started_at,
+            )
+
+        status = _TASK_OUTCOME_TO_RUNTIME.get(outcome, RuntimeStatus.FAILED)
+        return _terminal_result(
+            self.runtime_id,
+            status,
+            summary=summary,
+            started_at=self._started_at,
         )
