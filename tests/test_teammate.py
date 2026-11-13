@@ -12,6 +12,7 @@ from mcc_harness import (
     Message,
     MessageBus,
     PlanStore,
+    RuntimeCoordinator,
     TeammateManager,
     WorktreeError,
     create_worktree,
@@ -1580,3 +1581,156 @@ class TestP105InstructionInjectAndCancel:
         mgr = _make_manager(tmp_path)
         with pytest.raises(ValueError, match="no active"):
             await mgr.resume_teammate("ghost")
+
+
+# -- TeammateManager + RuntimeCoordinator 集成 --
+
+
+def _make_manager_with_coordinator(tmp_path, llm=None, max_teammates=4):
+    registry = ToolRegistry()
+    bus = MessageBus(tmp_path)
+    plan_store = PlanStore()
+    coordinator = RuntimeCoordinator()
+    mgr = TeammateManager(
+        llm=llm or MockLlm([single_text_turn("done")]),
+        registry=registry,
+        bus=bus,
+        plan_store=plan_store,
+        base_dir=tmp_path,
+        max_teammates=max_teammates,
+        coordinator=coordinator,
+    )
+    return mgr, coordinator
+
+
+class TestTeammateManagerViaCoordinator:
+    """TeammateManager 接入 RuntimeCoordinator 的集成测试。"""
+
+    async def test_spawn_registers_persistent_runtime(self, tmp_path):
+        """spawn 后 coordinator 中注册了 PersistentRuntime。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        pr = coord.get("worker")
+        assert pr is not None
+        assert pr.runtime_id == "worker"
+        assert pr.alive
+        await mgr.shutdown_all()
+
+    async def test_spawn_multiple_registers_all(self, tmp_path):
+        """多个 teammate 都注册到 coordinator。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path, max_teammates=5)
+        await mgr.spawn("w1", "coder", "t1")
+        await mgr.spawn("w2", "coder", "t2")
+        assert coord.get("w1") is not None
+        assert coord.get("w2") is not None
+        assert coord.active_count >= 2
+        await mgr.shutdown_all()
+
+    async def test_request_shutdown_unregisters(self, tmp_path):
+        """request_shutdown 后 coordinator 注销 PersistentRuntime。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        assert coord.get("worker") is not None
+        await mgr.request_shutdown("worker")
+        assert coord.get("worker") is None
+        assert mgr.list_active() == []
+
+    async def test_shutdown_all_unregisters_all(self, tmp_path):
+        """shutdown_all 后 coordinator 注销所有 PersistentRuntime。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path, max_teammates=5)
+        await mgr.spawn("w1", "coder", "t1")
+        await mgr.spawn("w2", "coder", "t2")
+        await mgr.shutdown_all()
+        assert coord.get("w1") is None
+        assert coord.get("w2") is None
+
+    async def test_coordinator_stop_all_stops_teammates(self, tmp_path):
+        """coordinator.stop_all 停止所有 teammate。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path, max_teammates=5)
+        await mgr.spawn("w1", "coder", "t1")
+        await mgr.spawn("w2", "coder", "t2")
+        report = await coord.stop_all(timeout=10.0)
+        assert "w1" in report.stopped
+        assert "w2" in report.stopped
+        assert mgr.list_active() == []
+
+    async def test_cancel_via_coordinator(self, tmp_path):
+        """cancel_teammate 通过 coordinator 路由。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        result = await mgr.cancel_teammate("worker")
+        assert "Cancel signal sent" in result
+        await mgr.shutdown_all()
+
+    async def test_pause_resume_via_coordinator(self, tmp_path):
+        """pause/resume 通过 coordinator 路由。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        assert "Pause signal sent" in await mgr.pause_teammate("worker")
+        assert "Resume signal sent" in await mgr.resume_teammate("worker")
+        await mgr.shutdown_all()
+
+    async def test_send_instruction_via_coordinator(self, tmp_path):
+        """send_instruction 通过 coordinator 路由。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        result = await mgr.send_instruction("worker", "new approach")
+        assert "Instruction sent" in result
+        await mgr.shutdown_all()
+
+    async def test_send_message_still_works(self, tmp_path):
+        """send_message 不经过 coordinator，仍通过 MessageBus。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "initial task")
+        result = await mgr.send_message("worker", "hello")
+        assert "sent" in result.lower()
+        await mgr.shutdown_all()
+
+    async def test_assign_task_still_works(self, tmp_path):
+        """assign_task 不经过 coordinator，仍通过 MessageBus。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "initial task")
+        result = await mgr.assign_task("worker", "new task")
+        assert "assigned" in result.lower()
+        await mgr.shutdown_all()
+
+    async def test_coordinator_snapshot_includes_teammates(self, tmp_path):
+        """coordinator.snapshot 包含 teammate 运行时。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        snapshots = coord.snapshot()
+        ids = [s.runtime_id for s in snapshots]
+        assert "worker" in ids
+        await mgr.shutdown_all()
+
+    async def test_persistent_runtime_status_mapping(self, tmp_path):
+        """PersistentRuntime 的 status 正确映射 TeammateStatus。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        await asyncio.sleep(0.3)
+        pr = coord.get("worker")
+        assert pr is not None
+        assert pr.status.value in ("idle", "running", "starting")
+        await mgr.shutdown_all()
+
+    async def test_backward_compat_without_coordinator(self, tmp_path):
+        """无 coordinator 时所有方法仍正常工作。"""
+        mgr = _make_manager(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        assert "Cancel signal sent" in await mgr.cancel_teammate("worker")
+        assert "Pause signal sent" in await mgr.pause_teammate("worker")
+        assert "Resume signal sent" in await mgr.resume_teammate("worker")
+        assert "Instruction sent" in await mgr.send_instruction("worker", "test")
+        assert "sent" in (await mgr.send_message("worker", "msg")).lower()
+        assert "assigned" in (await mgr.assign_task("worker", "task2")).lower()
+        await mgr.shutdown_all()
+        assert mgr.list_active() == []
+
+    async def test_request_shutdown_idempotent_with_coordinator(self, tmp_path):
+        """coordinator.stop_all 后 request_shutdown 仍安全。"""
+        mgr, coord = _make_manager_with_coordinator(tmp_path, max_teammates=3)
+        await mgr.spawn("w1", "coder", "t1")
+        await mgr.spawn("w2", "coder", "t2")
+        await coord.stop_all(timeout=10.0)
+        await mgr.shutdown_all()
+        assert mgr.list_active() == []

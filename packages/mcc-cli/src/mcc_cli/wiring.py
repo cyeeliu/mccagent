@@ -325,7 +325,8 @@ def _wire_subagent_workflow(
 
 
 def _wire_team(
-    config, work_dir: Path, llm, registry, task_store, hooks, checker, subagent_model: str
+    config, work_dir: Path, llm, registry, task_store, hooks, checker, subagent_model: str,
+    coordinator=None,
 ):
     """多 Agent 团队：长驻 teammate 协作。"""
     if not config.team.enabled:
@@ -352,6 +353,7 @@ def _wire_team(
         default_model=subagent_model,
         hooks=hooks,
         permission=checker,
+        coordinator=coordinator,
     )
     register_team_tools(registry, team_manager)
     return team_manager
@@ -662,6 +664,7 @@ def build_source(
     team_manager = _wire_team(
         config, work_dir, llm, registry, task_store, hook_registry,
         checker, subagent_model,
+        coordinator=coordinator,
     )
 
     obs_sink = _wire_observability(config, work_dir, sid, builder)
