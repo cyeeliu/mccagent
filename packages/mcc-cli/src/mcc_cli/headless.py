@@ -32,26 +32,31 @@ async def run_headless(source: EventSource, prompt: str, quiet: bool) -> int:
     cost_usd = 0.0
     had_error = False
 
-    async for ev in source.run(prompt):
-        if isinstance(ev, ToolCallStart):
-            if not quiet:
-                _eprint(f"  ⚙  {ev.name}…")
-        elif isinstance(ev, ToolCallEnd):
-            if ev.is_error and not quiet:
-                _eprint(f"  ✗  tool error: {ev.output[:120]}")
-        elif isinstance(ev, Notice):
-            if not quiet:
-                _eprint(f"  ℹ  {ev.text}")
-        elif isinstance(ev, ErrorEvent):
-            _eprint(f"  ✗  {ev.text}")
-            had_error = True
-        elif isinstance(ev, TextDelta):
-            final_text += ev.text
-        elif isinstance(ev, ThinkingDelta):
-            if not quiet:
-                _eprint(f"  ✻  {ev.text}")
-        elif isinstance(ev, TurnEnd):
-            cost_usd = ev.cost_usd
+    try:
+        async for ev in source.run(prompt):
+            if isinstance(ev, ToolCallStart):
+                if not quiet:
+                    _eprint(f"  ⚙  {ev.name}…")
+            elif isinstance(ev, ToolCallEnd):
+                if ev.is_error and not quiet:
+                    _eprint(f"  ✗  tool error: {ev.output[:120]}")
+            elif isinstance(ev, Notice):
+                if not quiet:
+                    _eprint(f"  ℹ  {ev.text}")
+            elif isinstance(ev, ErrorEvent):
+                _eprint(f"  ✗  {ev.text}")
+                had_error = True
+            elif isinstance(ev, TextDelta):
+                final_text += ev.text
+            elif isinstance(ev, ThinkingDelta):
+                if not quiet:
+                    _eprint(f"  ✻  {ev.text}")
+            elif isinstance(ev, TurnEnd):
+                cost_usd = ev.cost_usd
+    finally:
+        from mcc_cli.application import AgentApplication
+
+        await AgentApplication.from_source(source).shutdown()
 
     if had_error:
         return 1

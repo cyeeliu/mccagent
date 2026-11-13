@@ -128,6 +128,8 @@ class AgentEventSource(EventSource):
         skill_items: list[tuple[str, str]] | None = None,
         session_short_id: str | None = None,
         selection_responses: asyncio.Queue[SelectionDecision] | None = None,
+        runtime: Any | None = None,
+        coordinator: Any | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
@@ -143,6 +145,8 @@ class AgentEventSource(EventSource):
         self.skill_items = skill_items or []
         self.session_short_id = session_short_id
         self.selection_responses = selection_responses
+        self._runtime = runtime
+        self._coordinator = coordinator
 
     @property
     def goal_controller(self) -> GoalController | None:
@@ -204,6 +208,12 @@ class AgentEventSource(EventSource):
             resolved = self._slash_resolver(prompt)
             if resolved is not None:
                 prompt = resolved
+        if self._runtime is not None:
+            if not self._runtime.alive:
+                await self._runtime.start()
+            async for ev in self._runtime.run_turn(prompt):
+                yield ev
+            return
         queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
 
         async def worker() -> None:

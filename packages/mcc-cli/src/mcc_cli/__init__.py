@@ -285,6 +285,9 @@ async def _run_tui_mode(
         sink = getattr(source, "observability_sink", None)
         if sink is not None:
             _dump_metrics_snapshot(sink, work_dir)
+        from mcc_cli.application import AgentApplication
+
+        await AgentApplication.from_source(source).shutdown()
     return 0
 
 

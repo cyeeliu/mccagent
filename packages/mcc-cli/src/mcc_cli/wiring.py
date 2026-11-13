@@ -658,7 +658,13 @@ def build_source(
     obs_sink = _wire_observability(config, work_dir, sid, builder)
 
     agent = builder.build()
+    from mcc_harness import InteractiveRuntime, RuntimeCoordinator
+
     from mcc_cli.slash import build_default_registry
+
+    runtime = InteractiveRuntime(agent, session_id=sid, agent_id="main")
+    coordinator = RuntimeCoordinator()
+    coordinator.register(runtime)
 
     return AgentEventSource(
         agent,
@@ -674,4 +680,6 @@ def build_source(
         skills_catalog=skills_catalog,
         skill_items=skill_items,
         session_short_id=sid,
+        runtime=runtime,
+        coordinator=coordinator,
     )
