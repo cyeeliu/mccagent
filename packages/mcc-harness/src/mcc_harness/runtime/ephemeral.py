@@ -24,6 +24,7 @@ from .base import (
     RuntimeMode,
     RuntimeResult,
     RuntimeStatus,
+    WaitTimeoutError,
     _terminal_result,
 )
 
@@ -92,7 +93,7 @@ class EphemeralRuntime:
             timeout_secs=self._spec.timeout_secs,
         )
 
-    async def start(self, task: str, *, task_id: str | None = None) -> None:
+    async def start(self, task: str = "", *, task_id: str | None = None) -> None:
         if self._task is not None and not self._task.done():
             raise RuntimeError(f"ephemeral runtime {self.runtime_id} already running")
         self._status = RuntimeStatus.STARTING
@@ -145,12 +146,9 @@ class EphemeralRuntime:
         except asyncio.CancelledError:
             pass
         except TimeoutError:
-            return _terminal_result(
-                self.runtime_id,
-                RuntimeStatus.TIMEOUT,
-                summary=f"wait_done timed out after {timeout}s",
-                started_at=self._started_at,
-            )
+            raise WaitTimeoutError(
+                f"wait_done timed out after {timeout}s for {self.runtime_id}"
+            ) from None
         return self._finalize()
 
     def _finalize(self) -> RuntimeResult:

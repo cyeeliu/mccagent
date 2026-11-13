@@ -110,9 +110,51 @@ _PERSISTENT_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
     AgentState.SHUTDOWN: frozenset(),
 }
 
+_INTERACTIVE_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
+    AgentState.CREATED: frozenset({
+        AgentState.IDLE,
+        AgentState.RUNNING,
+        AgentState.SHUTDOWN,
+    }),
+    AgentState.IDLE: frozenset({
+        AgentState.RUNNING,
+        AgentState.STOPPING,
+        AgentState.SHUTDOWN,
+    }),
+    AgentState.RUNNING: frozenset({
+        AgentState.IDLE,
+        AgentState.COMPLETED,
+        AgentState.FAILED,
+        AgentState.CANCELLED,
+        AgentState.TIMEOUT,
+        AgentState.STOPPING,
+    }),
+    AgentState.COMPLETED: frozenset({
+        AgentState.IDLE,
+        AgentState.STOPPING,
+    }),
+    AgentState.FAILED: frozenset({
+        AgentState.IDLE,
+        AgentState.STOPPING,
+    }),
+    AgentState.CANCELLED: frozenset({
+        AgentState.IDLE,
+        AgentState.STOPPING,
+    }),
+    AgentState.TIMEOUT: frozenset({
+        AgentState.IDLE,
+        AgentState.STOPPING,
+    }),
+    AgentState.STOPPING: frozenset({
+        AgentState.SHUTDOWN,
+    }),
+    AgentState.SHUTDOWN: frozenset(),
+}
+
 _DEFAULT_TRANSITIONS: dict[RuntimeMode, dict[AgentState, frozenset[AgentState]]] = {
     RuntimeMode.EPHEMERAL: _EPHEMERAL_TRANSITIONS,
     RuntimeMode.PERSISTENT: _PERSISTENT_TRANSITIONS,
+    RuntimeMode.INTERACTIVE: _INTERACTIVE_TRANSITIONS,
 }
 
 

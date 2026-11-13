@@ -1,20 +1,26 @@
 """统一 AgentRuntime 抽象。
 
-为 Subagent（短生命周期）和 Teammate（常驻）提供一致的
-生命周期接口，通过 EphemeralRuntime 和 PersistentRuntime 适配。
-AgentStateMachine 提供独立于 Runtime 的状态管理。
+为 Subagent（短生命周期）、Teammate（常驻）和 CLI 主 Agent（交互式）提供
+一致的生命周期接口，通过 EphemeralRuntime、PersistentRuntime 和
+InteractiveRuntime 适配。AgentStateMachine 提供独立于 Runtime 的状态管理。
 """
 
 from __future__ import annotations
 
 from .base import (
     AgentRuntime,
+    InstructionInjectableRuntime,
+    PausableRuntime,
     RuntimeConfig,
     RuntimeMode,
     RuntimeResult,
     RuntimeStatus,
+    WaitTimeoutError,
 )
+from .coordinator import RuntimeCoordinator, RuntimeSnapshot, ShutdownReport
 from .ephemeral import EphemeralRuntime
+from .factory import RuntimeFactory
+from .interactive import InteractiveRuntime
 from .persistent import PersistentRuntime
 from .state_machine import (
     AgentState,
@@ -34,11 +40,19 @@ __all__ = [
     "EphemeralRuntime",
     "GuardRejectedError",
     "IllegalTransitionError",
+    "InstructionInjectableRuntime",
+    "InteractiveRuntime",
+    "PausableRuntime",
     "PersistentRuntime",
     "RuntimeConfig",
+    "RuntimeCoordinator",
+    "RuntimeFactory",
     "RuntimeMode",
     "RuntimeResult",
+    "RuntimeSnapshot",
     "RuntimeStatus",
+    "ShutdownReport",
     "StateTransition",
     "TransitionGuard",
+    "WaitTimeoutError",
 ]

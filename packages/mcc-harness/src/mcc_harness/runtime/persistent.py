@@ -17,6 +17,7 @@ from .base import (
     RuntimeMode,
     RuntimeResult,
     RuntimeStatus,
+    WaitTimeoutError,
     _terminal_result,
 )
 
@@ -92,7 +93,7 @@ class PersistentRuntime:
             require_plan=spec.require_plan,
         )
 
-    async def start(self, task: str, *, task_id: str | None = None) -> None:
+    async def start(self, task: str = "", *, task_id: str | None = None) -> None:
         if self._teammate.alive:
             raise RuntimeError(
                 f"persistent runtime {self.runtime_id} already running"
@@ -147,12 +148,9 @@ class PersistentRuntime:
             else:
                 await asyncio.shield(task)
         except TimeoutError:
-            return _terminal_result(
-                self.runtime_id,
-                self.status,
-                summary=f"wait_done timed out after {timeout}s",
-                started_at=self._started_at,
-            )
+            raise WaitTimeoutError(
+                f"wait_done timed out after {timeout}s for {self.runtime_id}"
+            ) from None
         except asyncio.CancelledError:
             pass
 
