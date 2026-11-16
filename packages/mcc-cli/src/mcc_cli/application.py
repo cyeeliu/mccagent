@@ -27,12 +27,6 @@ class AgentApplication:
         self._coordinator = coordinator
         self._shutdown = False
 
-    @classmethod
-    def from_source(cls, source: Any) -> AgentApplication:
-        """从 AgentEventSource 提取 coordinator 构建应用实例。"""
-        coordinator = getattr(source, "_coordinator", None)
-        return cls(coordinator=coordinator)
-
     @property
     def coordinator(self) -> Any | None:
         return self._coordinator

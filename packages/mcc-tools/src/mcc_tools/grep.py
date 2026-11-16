@@ -103,8 +103,17 @@ class GrepTool:
                 if p.is_file():
                     if is_ignored(p, search_root, spec):
                         continue
-                    if glob_filter and not fnmatch.fnmatch(p.name, glob_filter):
-                        continue
+                    if glob_filter:
+                        if glob_filter.startswith("**/"):
+                            if not fnmatch.fnmatch(p.name, glob_filter[3:]):
+                                continue
+                        elif "/" in glob_filter:
+                            rel_str = str(p.relative_to(search_root))
+                            if not fnmatch.fnmatch(rel_str, glob_filter):
+                                continue
+                        else:
+                            if not fnmatch.fnmatch(p.name, glob_filter):
+                                continue
                     files.append(p)
 
         out_parts: list[str] = []

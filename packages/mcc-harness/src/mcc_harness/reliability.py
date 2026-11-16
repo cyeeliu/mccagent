@@ -98,7 +98,7 @@ class CircuitOpenError(AgentError):
 class CircuitBreaker:
     """三态熔断器：closed →（连续失败达阈值）→ open →
     （reset_timeout 后）→ half-open（放行一次探测）→ 成功 closed /
-    失败重开。asyncio 单线程访问，无需原子操作。"""
+    失败重开。half-open 期间仅放行一个探测请求，其余快速失败。"""
 
     def __init__(
         self,
@@ -118,9 +118,14 @@ class CircuitBreaker:
         return self._opened_at is not None
 
     def check(self) -> None:
-        """放行或抛 CircuitOpenError。超时后进入 half-open 放行一次。"""
+        """放行或抛 CircuitOpenError。超时后进入 half-open 放行一次探测。"""
         if self._opened_at is None:
             return
+        if self._half_open:
+            raise CircuitOpenError(
+                f"circuit half-open: probe in progress, "
+                f"retry after {self.reset_timeout}s"
+            )
         if self._clock() - self._opened_at >= self.reset_timeout:
             self._half_open = True
             return

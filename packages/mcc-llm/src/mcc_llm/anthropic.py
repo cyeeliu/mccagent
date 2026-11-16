@@ -105,7 +105,12 @@ class AnthropicClient:
             async for line in resp.aiter_lines():
                 if line == "":
                     if event_type and data_parts:
-                        raw = json.loads("".join(data_parts))
+                        try:
+                            raw = json.loads("".join(data_parts))
+                        except json.JSONDecodeError:
+                            event_type = ""
+                            data_parts = []
+                            continue
                         ev = _parse_sse(event_type, raw, usage)
                         if isinstance(ev, tuple):
                             stop_reason, usage = ev
@@ -121,7 +126,10 @@ class AnthropicClient:
                     data_parts.append(line[5:])
 
             if event_type and data_parts:
-                raw = json.loads("".join(data_parts))
+                try:
+                    raw = json.loads("".join(data_parts))
+                except json.JSONDecodeError:
+                    return
                 ev = _parse_sse(event_type, raw, usage)
                 if isinstance(ev, tuple):
                     stop_reason, usage = ev

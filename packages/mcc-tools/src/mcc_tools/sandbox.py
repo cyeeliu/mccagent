@@ -23,9 +23,11 @@ exec接口统一为 ``SandboxExecutor.run(command, cwd, timeout)``，
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import resource
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Awaitable
@@ -75,6 +77,7 @@ async def _run_argv(
             cwd=str(cwd),
             env=env,
             preexec_fn=preexec_fn,
+            start_new_session=True,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -83,7 +86,8 @@ async def _run_argv(
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
-        proc.kill()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         await proc.wait()
         raise ExecTimeout(timeout) from None
     return ExecResult(

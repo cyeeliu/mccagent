@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import secrets
 import time
 from dataclasses import asdict, dataclass, field
@@ -19,6 +20,13 @@ from mcc_core import ToolContext, ToolOutput
 
 _TASK_ID_PATTERN = "task_[0-9a-f]{8}"
 _MAX_ID_RETRIES = 100
+
+
+def _atomic_write_text(path: Path, data: str) -> None:
+    """原子写入：写临时文件后 os.replace，避免崩溃留下半截 JSON。"""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 class TaskStatus(StrEnum):
@@ -130,15 +138,13 @@ class TaskStore:
             )
             path = self._path(task.id, create_root=True)
             if not path.exists():
-                path.write_text(
-                    json.dumps(asdict(task), indent=2), encoding="utf-8"
-                )
+                _atomic_write_text(path, json.dumps(asdict(task), indent=2))
                 return task
         raise TaskError("could not allocate a unique task ID")
 
     def save(self, task: Task) -> None:
         path = self._path(task.id, create_root=True)
-        path.write_text(json.dumps(asdict(task), indent=2), encoding="utf-8")
+        _atomic_write_text(path, json.dumps(asdict(task), indent=2))
 
     def load(self, task_id: str) -> Task:
         path = self._path(task_id)

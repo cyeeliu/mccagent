@@ -71,5 +71,11 @@ async def _mkdir(path: Path) -> None:
 
 async def _write_bytes(path: Path, data: bytes) -> None:
     import asyncio
+    import os
 
-    await asyncio.to_thread(path.write_bytes, data)
+    def _atomic_write() -> None:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+
+    await asyncio.to_thread(_atomic_write)

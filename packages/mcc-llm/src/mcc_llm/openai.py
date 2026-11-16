@@ -158,7 +158,10 @@ class OpenAiClient:
                 payload = line[6:]
                 if payload == "[DONE]":
                     break
-                chunk = json.loads(payload)
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
                 # usage-only 尾 chunk（include_usage）：choices 为空、
                 # 携带最终用量——先吸收再跳过 choice 解析
                 usage_raw = chunk.get("usage")

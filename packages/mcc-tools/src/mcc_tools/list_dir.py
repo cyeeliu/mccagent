@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,9 @@ class ListDirTool:
         if not root.is_dir():
             return ToolOutput.err(f"not a directory: {root}")
 
+        return await asyncio.to_thread(self._bfs, root, max_depth)
+
+    def _bfs(self, root: Path, max_depth: int) -> ToolOutput:
         spec = load_gitignore(root)
         out_parts: list[str] = []
         count = 0
