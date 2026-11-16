@@ -8,6 +8,7 @@ work/ 目录上重跑官方测试。批次目录因此自包含（cases.json + �
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -202,7 +203,8 @@ async def rebuild(
                 judge_results = await judge.prescore(
                     " ".join(snap.text_outputs), case.expectations
                 )
-            scored = score_case(
+            scored = await asyncio.to_thread(
+                score_case,
                 snap,
                 check=case.check,
                 expectations=case.expectations,

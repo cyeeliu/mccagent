@@ -412,7 +412,8 @@ async def run_case(
         judge_results = await judge.prescore(
             " ".join(snap.text_outputs), case.expectations
         )
-    scored = score_case(
+    scored = await asyncio.to_thread(
+        score_case,
         snap, check=case.check, expectations=case.expectations,
         work_dir=work_dir, judge_results=judge_results,
         allow_execution=True,

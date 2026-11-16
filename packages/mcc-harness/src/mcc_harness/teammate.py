@@ -461,7 +461,7 @@ class TeammateRuntime:
         from .worktree import WorktreeError as _WtErr
 
         try:
-            cwd = self._prepare_worktree()
+            cwd = await self._prepare_worktree()
         except _WtErr as e:
             summary = f"worktree creation failed: {e}"
             self._transition(TeammateStatus.FAILED, reason="worktree creation failed")
@@ -554,7 +554,7 @@ class TeammateRuntime:
                         error=summary,
                     )
 
-        self._cleanup_worktree()
+        await self._cleanup_worktree()
 
         self._set_task_future(outcome, summary)
         self._transition(
@@ -588,24 +588,26 @@ class TeammateRuntime:
             return False
         return True
 
-    def _prepare_worktree(self) -> Path | None:
+    async def _prepare_worktree(self) -> Path | None:
         if not self._worktree_enabled or not self._base_dir or not self._current.task_id:
             return None
         from .worktree import create_worktree
 
         wt_name = f"{self.name}_{self._current.work_version}"
-        wt = create_worktree(wt_name, self._current.task_id, self._base_dir)
+        wt = await asyncio.to_thread(
+            create_worktree, wt_name, self._current.task_id, self._base_dir
+        )
         self._worktree = wt
         return wt
 
-    def _cleanup_worktree(self) -> None:
+    async def _cleanup_worktree(self) -> None:
         if not self._worktree or not self._base_dir:
             return
         from .worktree import CleanupPolicy, WorktreeError, remove_worktree
 
         wt_name = f"{self.name}_{self._current.work_version}"
         with contextlib.suppress(WorktreeError):
-            remove_worktree(wt_name, self._base_dir, policy=CleanupPolicy.SAFE)
+            await asyncio.to_thread(remove_worktree, wt_name, self._base_dir, CleanupPolicy.SAFE)
         self._worktree = None
 
     def _build_agent(self, cwd: Path | None = None) -> AgentLoop:
@@ -1494,7 +1496,7 @@ class CreateWorktreeTool:
         if not name or not task_id:
             return ToolOutput.err("'name' and 'task_id' are both required")
         try:
-            wt = create_worktree(name, task_id, self._base_dir)
+            wt = await asyncio.to_thread(create_worktree, name, task_id, self._base_dir)
         except WorktreeError as e:
             return ToolOutput.err(str(e))
         return ToolOutput.ok(f"Worktree created at {wt}")
