@@ -107,6 +107,16 @@ _CONFIG_KEYS: dict[str, tuple[list[str], Callable[[str], Any], str]] = {
 
 _SECRET_KEYS = {"llm.api_key"}
 
+_MODEL_KEYS = {"model.main", "model.subagent", "model.summarize"}
+
+
+def _validate_model_id(raw: str) -> str | None:
+    """校验模型 ID：非空、无空白。返回清理后值或 None（不合法）。"""
+    mid = raw.strip()
+    if not mid or any(c.isspace() for c in mid):
+        return None
+    return mid
+
 
 def _mask_secret(value: Any) -> str:
     """凭据展示脱敏：只露前缀与末四位。"""
@@ -168,6 +178,11 @@ def _model(source: Any, args: str) -> SlashResult:
     if kind not in ("main", "subagent", "summarize"):
         return SlashResult(text=f"未知模型类型: {kind}（可选 main/subagent/summarize）")
 
+    validated = _validate_model_id(model_id)
+    if validated is None:
+        return SlashResult(text=f"无效模型 ID: {model_id!r}（须非空且无空白）")
+    model_id = validated
+
     if kind == "main":
         source.agent.model = model_id
         note = "即刻生效"
@@ -213,6 +228,13 @@ def _config(source: Any, args: str) -> SlashResult:
             value = convert(raw_value)
         except (ValueError, TypeError):
             return SlashResult(text=f"值 {raw_value!r} 不是合法的 {key} 类型")
+        if key in _MODEL_KEYS:
+            validated = _validate_model_id(str(value))
+            if validated is None:
+                return SlashResult(
+                    text=f"无效模型 ID: {raw_value!r}（须非空且无空白）"
+                )
+            value = validated
         update_home_setting(keys, value)
         _apply_runtime(config, key, value)
         model_update = str(value) if key == "model.main" else None
