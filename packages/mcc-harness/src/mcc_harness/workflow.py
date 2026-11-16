@@ -480,7 +480,7 @@ class ExecutionState:
         self.budget.add(run.tokens)
         self.task.usage["agents"] += 1
         self.task.usage["tokens"] += run.tokens
-        self.journal.record(key, run.value)
+        await asyncio.to_thread(self.journal.record, key, run.value)
         self._emit(f"[workflow] agent done: {label} ({run.tokens} tokens)")
         self.task.progress_event(
             "workflow_agent", label=label, phase=phase or self._phase,
@@ -659,7 +659,7 @@ class WorkflowTool(Tool):
         run_id = (
             validate_run_id(resume_from_run_id)
             if resuming
-            else reserve_run_id(meta, self._store)
+            else await asyncio.to_thread(reserve_run_id, meta, self._store)
         )
         async with workflow_run_lock(run_id):
             return await self._call_locked(
@@ -676,7 +676,7 @@ class WorkflowTool(Tool):
         ctx: ToolContext,
     ) -> dict[str, Any]:
         if resuming:
-            snapshot = _read_snapshot(self._store, run_id)
+            snapshot = await asyncio.to_thread(_read_snapshot, self._store, run_id)
             if snapshot.get("workflowName") != meta["name"]:
                 raise WorkflowInputError(
                     "resume run id does not match workflow meta"
@@ -691,7 +691,9 @@ class WorkflowTool(Tool):
         else:
             args = args or {}
 
-        journal = WorkflowJournal(run_id, self._store, resume=resuming)
+        journal = await asyncio.to_thread(
+            WorkflowJournal, run_id, self._store, resume=resuming
+        )
         task = WorkflowTask(
             task_id=f"{run_id}-task", run_id=run_id, meta=meta
         )
@@ -700,7 +702,8 @@ class WorkflowTool(Tool):
             workflow=meta["name"],
             resume=resuming,
         )
-        _write_json(
+        await asyncio.to_thread(
+            _write_json,
             self._store / f"{run_id}.json",
             {"runId": run_id, "workflowName": meta["name"],
              "args": args, "task": task.serialize()},
@@ -725,15 +728,20 @@ class WorkflowTool(Tool):
             task.status = "failed"
             result = {"error": str(exc)}
         finally:
-            journal.close()
+            await asyncio.to_thread(journal.close)
 
-        _write_json(self._store / f"{run_id}.output.json", result)
-        _write_json(
+        await asyncio.to_thread(
+            _write_json, self._store / f"{run_id}.output.json", result
+        )
+        await asyncio.to_thread(
+            _write_json,
             self._store / f"{run_id}.json",
             {"runId": run_id, "workflowName": meta["name"],
              "args": args, "task": task.serialize()},
         )
-        (self._store / "last_run.txt").write_text(run_id, encoding="utf-8")
+        await asyncio.to_thread(
+            (self._store / "last_run.txt").write_text, run_id, "utf-8"
+        )
         self._emit(
             f"[workflow] {meta['name']} {task.status}: "
             f"{task.usage['agents']} agent(s), {task.usage['tokens']} tokens "

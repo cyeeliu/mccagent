@@ -143,6 +143,15 @@ class MessageBus:
             path.write_text("", encoding="utf-8")
 
     @staticmethod
+    def _file_nonempty(path: Path) -> bool:
+        return path.exists() and path.stat().st_size > 0
+
+    @staticmethod
+    def _append_line(path: Path, line: str) -> None:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+
+    @staticmethod
     def _is_expired(msg: Message, now: float) -> bool:
         return msg.expires_at is not None and now > msg.expires_at
 
@@ -169,7 +178,7 @@ class MessageBus:
         async with self._lock(recipient):
             path = self._path(recipient)
             if message_id is not None:
-                for m in self._read_all(path):
+                for m in await asyncio.to_thread(self._read_all, path):
                     if m.message_id == message_id and m.status != "dead":
                         return m
             msg = Message(
@@ -186,15 +195,14 @@ class MessageBus:
                 priority=priority,
             )
             line = json.dumps(msg.to_dict(), ensure_ascii=False) + "\n"
-            with path.open("a", encoding="utf-8") as f:
-                f.write(line)
+            await asyncio.to_thread(self._append_line, path, line)
         return msg
 
     async def peek(self, recipient: str) -> bool:
         """检查 recipient 是否有未读消息。"""
         async with self._lock(recipient):
             path = self._path(recipient)
-            return path.exists() and path.stat().st_size > 0
+            return await asyncio.to_thread(self._file_nonempty, path)
 
     async def consume(self, recipient: str) -> list[Message]:
         """读取并清空 recipient 的全部消息（destructive read）。
@@ -204,10 +212,10 @@ class MessageBus:
         """
         async with self._lock(recipient):
             path = self._path(recipient)
-            if not path.exists() or path.stat().st_size == 0:
+            if not await asyncio.to_thread(self._file_nonempty, path):
                 return []
-            messages = self._read_all(path)
-            path.write_text("", encoding="utf-8")
+            messages = await asyncio.to_thread(self._read_all, path)
+            await asyncio.to_thread(self._write_all, path, [])
         return messages
 
     async def claim(
@@ -223,9 +231,9 @@ class MessageBus:
         """
         async with self._lock(recipient):
             path = self._path(recipient)
-            if not path.exists() or path.stat().st_size == 0:
+            if not await asyncio.to_thread(self._file_nonempty, path):
                 return []
-            messages = self._read_all(path)
+            messages = await asyncio.to_thread(self._read_all, path)
             now = time.time()
             claimed: list[Message] = []
             for msg in messages:
@@ -247,20 +255,20 @@ class MessageBus:
                     msg.claimed_at = now
                     claimed.append(msg)
             if claimed:
-                self._write_all(path, messages)
+                await asyncio.to_thread(self._write_all, path, messages)
             return claimed[:max_messages]
 
     async def ack(self, recipient: str, message_id: str, claim_token: str) -> bool:
         """确认消息处理完成，从文件中移除。返回是否成功。"""
         async with self._lock(recipient):
             path = self._path(recipient)
-            if not path.exists() or path.stat().st_size == 0:
+            if not await asyncio.to_thread(self._file_nonempty, path):
                 return False
-            messages = self._read_all(path)
+            messages = await asyncio.to_thread(self._read_all, path)
             for i, msg in enumerate(messages):
                 if msg.message_id == message_id and msg.claim_token == claim_token:
                     messages.pop(i)
-                    self._write_all(path, messages)
+                    await asyncio.to_thread(self._write_all, path, messages)
                     return True
             return False
 
@@ -274,9 +282,9 @@ class MessageBus:
         """处理失败，递增 attempt。返回 'retry' 或 'dead'。"""
         async with self._lock(recipient):
             path = self._path(recipient)
-            if not path.exists() or path.stat().st_size == 0:
+            if not await asyncio.to_thread(self._file_nonempty, path):
                 return "dead"
-            messages = self._read_all(path)
+            messages = await asyncio.to_thread(self._read_all, path)
             for msg in messages:
                 if msg.message_id == message_id and msg.claim_token == claim_token:
                     msg.attempt += 1
@@ -286,10 +294,10 @@ class MessageBus:
                         msg.meta.setdefault("nack_reasons", []).append(reason)
                     if msg.attempt >= msg.max_attempts:
                         msg.status = "dead"
-                        self._write_all(path, messages)
+                        await asyncio.to_thread(self._write_all, path, messages)
                         return "dead"
                     msg.status = "pending"
-                    self._write_all(path, messages)
+                    await asyncio.to_thread(self._write_all, path, messages)
                     return "retry"
             return "dead"
 
@@ -301,9 +309,9 @@ class MessageBus:
         """将 claimed 超时的消息重置为 pending。返回恢复数量。"""
         async with self._lock(recipient):
             path = self._path(recipient)
-            if not path.exists() or path.stat().st_size == 0:
+            if not await asyncio.to_thread(self._file_nonempty, path):
                 return 0
-            messages = self._read_all(path)
+            messages = await asyncio.to_thread(self._read_all, path)
             now = time.time()
             count = 0
             for msg in messages:
@@ -317,16 +325,16 @@ class MessageBus:
                     msg.claimed_at = None
                     count += 1
             if count:
-                self._write_all(path, messages)
+                await asyncio.to_thread(self._write_all, path, messages)
             return count
 
     async def dead_letters(self, recipient: str) -> list[Message]:
         """查看死信队列。"""
         async with self._lock(recipient):
             path = self._path(recipient)
-            if not path.exists() or path.stat().st_size == 0:
+            if not await asyncio.to_thread(self._file_nonempty, path):
                 return []
-            messages = self._read_all(path)
+            messages = await asyncio.to_thread(self._read_all, path)
             return [m for m in messages if m.status == "dead"]
 
 
