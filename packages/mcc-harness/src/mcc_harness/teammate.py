@@ -774,8 +774,7 @@ class TeammateManager:
 
             coordinator = RuntimeCoordinator()
         self._coordinator = coordinator
-        self._teammates: dict[str, TeammateRuntime] = {}
-        self._persistent_runtimes: dict[str, Any] = {}
+        self._runtime_ids: dict[str, str] = {}
 
     @property
     def bus(self) -> MessageBus:
@@ -785,8 +784,22 @@ class TeammateManager:
     def plan_store(self) -> PlanStore:
         return self._plan_store
 
+    def _get_active_pr(self, name: str):
+        rid = self._runtime_ids.get(name)
+        if rid is None:
+            raise ValueError(f"no active teammate: {name}")
+        pr = self._coordinator.get(rid)
+        if pr is None or not pr.alive:
+            raise ValueError(f"no active teammate: {name}")
+        return pr
+
     def list_active(self) -> list[TeammateInfo]:
-        return [rt.info() for rt in self._teammates.values() if rt.alive]
+        result: list[TeammateInfo] = []
+        for rid in self._runtime_ids.values():
+            pr = self._coordinator.get(rid)
+            if pr is not None and pr.alive:
+                result.append(pr.info())
+        return result
 
     async def spawn(
         self,
@@ -799,8 +812,11 @@ class TeammateManager:
         tools: list[str] | None = None,
     ) -> str:
         """启动一个长驻 teammate，返回其名称。"""
-        if name in self._teammates and self._teammates[name].alive:
-            raise ValueError(f"teammate already active: {name}")
+        rid = self._runtime_ids.get(name)
+        if rid is not None:
+            pr = self._coordinator.get(rid)
+            if pr is not None and pr.alive:
+                raise ValueError(f"teammate already active: {name}")
         if len(self.list_active()) >= self._max_teammates:
             raise ValueError(f"max teammates limit reached: {self._max_teammates}")
 
@@ -835,8 +851,7 @@ class TeammateManager:
             self._coordinator.unregister(pr.runtime_id)
             raise
 
-        self._teammates[name] = rt
-        self._persistent_runtimes[name] = pr
+        self._runtime_ids[name] = pr.runtime_id
 
         if self._agent_registry is not None:
             from .registry import AgentDescriptor
@@ -857,81 +872,66 @@ class TeammateManager:
 
     async def send_message(self, to: str, content: str) -> str:
         """lead 向 teammate 发消息并唤醒。"""
-        if to not in self._teammates or not self._teammates[to].alive:
-            raise ValueError(f"no active teammate: {to}")
+        pr = self._get_active_pr(to)
         await self._bus.send(LEAD_NAME, to, content, kind="message")
-        self._teammates[to].notify()
+        pr.notify()
         return f"Message sent to {to}"
 
     async def send_instruction(self, to: str, content: str) -> str:
         """lead 向运行中 teammate 发送运行时指令。"""
-        if to not in self._teammates or not self._teammates[to].alive:
-            raise ValueError(f"no active teammate: {to}")
-        pr = self._persistent_runtimes.get(to)
-        if pr is not None:
-            pr.inject_instruction(content)
+        pr = self._get_active_pr(to)
+        pr.inject_instruction(content)
         return f"Instruction sent to {to}"
 
     async def assign_task(self, to: str, content: str) -> str:
         """lead 向 teammate 分配新任务（排队，不覆盖当前任务）。"""
-        if to not in self._teammates or not self._teammates[to].alive:
-            raise ValueError(f"no active teammate: {to}")
+        pr = self._get_active_pr(to)
         await self._bus.send(LEAD_NAME, to, content, kind="assignment")
-        self._teammates[to].notify()
+        pr.notify()
         return f"Task assigned to {to}"
 
     async def cancel_teammate(self, name: str) -> str:
         """取消 teammate 当前任务。"""
-        rt = self._teammates.get(name)
-        if rt is None or not rt.alive:
-            raise ValueError(f"no active teammate: {name}")
-        pr = self._persistent_runtimes.get(name)
-        if pr is not None:
-            pr.cancel()
+        pr = self._get_active_pr(name)
+        pr.cancel()
         return f"Cancel signal sent to {name}"
 
     async def pause_teammate(self, name: str) -> str:
         """暂停 teammate 执行。"""
-        rt = self._teammates.get(name)
-        if rt is None or not rt.alive:
-            raise ValueError(f"no active teammate: {name}")
-        pr = self._persistent_runtimes.get(name)
-        if pr is not None:
-            pr.pause()
+        pr = self._get_active_pr(name)
+        pr.pause()
         return f"Pause signal sent to {name}"
 
     async def resume_teammate(self, name: str) -> str:
         """恢复 teammate 执行。"""
-        rt = self._teammates.get(name)
-        if rt is None or not rt.alive:
-            raise ValueError(f"no active teammate: {name}")
-        pr = self._persistent_runtimes.get(name)
-        if pr is not None:
-            pr.resume()
+        pr = self._get_active_pr(name)
+        pr.resume()
         return f"Resume signal sent to {name}"
 
     async def request_shutdown(self, name: str) -> str:
         """请求 teammate 关闭。"""
-        rt = self._teammates.get(name)
-        if rt is None or not rt.alive:
+        rid = self._runtime_ids.get(name)
+        if rid is None:
             raise ValueError(f"no active teammate: {name}")
-        pr = self._persistent_runtimes.get(name)
-        if pr is not None:
-            await pr.stop()
-            self._coordinator.unregister(pr.runtime_id)
-            self._persistent_runtimes.pop(name, None)
-            if self._orchestrator is not None:
-                self._orchestrator.unbind_runtime(name)
-            if self._agent_registry is not None:
-                with contextlib.suppress(Exception):
-                    self._agent_registry.unregister(name)
-        else:
-            await rt.shutdown()
+        pr = self._coordinator.get(rid)
+        if pr is None or not pr.alive:
+            raise ValueError(f"no active teammate: {name}")
+        await pr.stop()
+        self._coordinator.unregister(rid)
+        self._runtime_ids.pop(name, None)
+        if self._orchestrator is not None:
+            self._orchestrator.unbind_runtime(name)
+        if self._agent_registry is not None:
+            with contextlib.suppress(Exception):
+                self._agent_registry.unregister(name)
         return f"Teammate {name} shut down"
 
     async def shutdown_all(self) -> None:
         """关闭所有活跃 teammate。"""
-        names = [n for n, rt in self._teammates.items() if rt.alive]
+        names = [
+            n for n, rid in self._runtime_ids.items()
+            if (pr := self._coordinator.get(rid)) is not None and pr.alive
+        ]
         for name in names:
             with contextlib.suppress(Exception):
                 await self.request_shutdown(name)

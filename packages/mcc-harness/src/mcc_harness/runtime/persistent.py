@@ -12,7 +12,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from ..teammate import LEAD_NAME, TeammateRuntime, TeammateStatus
+from ..teammate import LEAD_NAME, TeammateInfo, TeammateRuntime, TeammateStatus
 from .base import (
     RuntimeConfig,
     RuntimeMode,
@@ -55,6 +55,10 @@ class PersistentRuntime:
     @property
     def runtime_id(self) -> str:
         return self._runtime_id
+
+    @property
+    def teammate(self) -> TeammateRuntime:
+        return self._teammate
 
     @property
     def status(self) -> RuntimeStatus:
@@ -115,6 +119,12 @@ class PersistentRuntime:
             return
         self._send("instruction", instruction)
         self._teammate.notify()
+
+    def notify(self) -> None:
+        self._teammate.notify()
+
+    def info(self) -> TeammateInfo:
+        return self._teammate.info()
 
     async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
         if self._final_result is not None:

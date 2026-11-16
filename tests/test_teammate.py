@@ -1610,7 +1610,7 @@ class TestTeammateManagerViaCoordinator:
         """spawn 后 coordinator 中注册了 PersistentRuntime。"""
         mgr, coord = _make_manager_with_coordinator(tmp_path)
         await mgr.spawn("worker", "coder", "task")
-        pr = mgr._persistent_runtimes["worker"]
+        pr = mgr._coordinator.get(mgr._runtime_ids["worker"])
         assert coord.get(pr.runtime_id) is pr
         assert pr.runtime_id.startswith("persistent::")
         assert pr.alive
@@ -1621,8 +1621,8 @@ class TestTeammateManagerViaCoordinator:
         mgr, coord = _make_manager_with_coordinator(tmp_path, max_teammates=5)
         await mgr.spawn("w1", "coder", "t1")
         await mgr.spawn("w2", "coder", "t2")
-        assert coord.get(mgr._persistent_runtimes["w1"].runtime_id) is not None
-        assert coord.get(mgr._persistent_runtimes["w2"].runtime_id) is not None
+        assert coord.get(mgr._coordinator.get(mgr._runtime_ids["w1"]).runtime_id) is not None
+        assert coord.get(mgr._coordinator.get(mgr._runtime_ids["w2"]).runtime_id) is not None
         assert coord.active_count >= 2
         await mgr.shutdown_all()
 
@@ -1630,7 +1630,7 @@ class TestTeammateManagerViaCoordinator:
         """request_shutdown 后 coordinator 注销 PersistentRuntime。"""
         mgr, coord = _make_manager_with_coordinator(tmp_path)
         await mgr.spawn("worker", "coder", "task")
-        rid = mgr._persistent_runtimes["worker"].runtime_id
+        rid = mgr._coordinator.get(mgr._runtime_ids["worker"]).runtime_id
         assert coord.get(rid) is not None
         await mgr.request_shutdown("worker")
         assert coord.get(rid) is None
@@ -1641,7 +1641,7 @@ class TestTeammateManagerViaCoordinator:
         mgr, coord = _make_manager_with_coordinator(tmp_path, max_teammates=5)
         await mgr.spawn("w1", "coder", "t1")
         await mgr.spawn("w2", "coder", "t2")
-        rids = [mgr._persistent_runtimes[n].runtime_id for n in ("w1", "w2")]
+        rids = [mgr._coordinator.get(mgr._runtime_ids[n]).runtime_id for n in ("w1", "w2")]
         await mgr.shutdown_all()
         for rid in rids:
             assert coord.get(rid) is None
@@ -1651,7 +1651,7 @@ class TestTeammateManagerViaCoordinator:
         mgr, coord = _make_manager_with_coordinator(tmp_path, max_teammates=5)
         await mgr.spawn("w1", "coder", "t1")
         await mgr.spawn("w2", "coder", "t2")
-        rids = [mgr._persistent_runtimes[n].runtime_id for n in ("w1", "w2")]
+        rids = [mgr._coordinator.get(mgr._runtime_ids[n]).runtime_id for n in ("w1", "w2")]
         report = await coord.stop_all(timeout=10.0)
         for rid in rids:
             assert rid in report.stopped
@@ -1701,7 +1701,7 @@ class TestTeammateManagerViaCoordinator:
         """coordinator.snapshot 包含 teammate 运行时。"""
         mgr, coord = _make_manager_with_coordinator(tmp_path)
         await mgr.spawn("worker", "coder", "task")
-        rid = mgr._persistent_runtimes["worker"].runtime_id
+        rid = mgr._coordinator.get(mgr._runtime_ids["worker"]).runtime_id
         snapshots = coord.snapshot()
         ids = [s.runtime_id for s in snapshots]
         assert rid in ids
@@ -1712,7 +1712,7 @@ class TestTeammateManagerViaCoordinator:
         mgr, coord = _make_manager_with_coordinator(tmp_path)
         await mgr.spawn("worker", "coder", "task")
         await asyncio.sleep(0.3)
-        pr = coord.get(mgr._persistent_runtimes["worker"].runtime_id)
+        pr = coord.get(mgr._coordinator.get(mgr._runtime_ids["worker"]).runtime_id)
         assert pr is not None
         assert pr.status.value in ("idle", "running", "starting")
         await mgr.shutdown_all()
@@ -1743,12 +1743,12 @@ class TestTeammateManagerViaCoordinator:
         """P2-04: 同名 teammate 重启后 coordinator 中注册的 runtime_id 不同。"""
         mgr, coord = _make_manager_with_coordinator(tmp_path)
         await mgr.spawn("worker", "coder", "task1")
-        rid1 = mgr._persistent_runtimes["worker"].runtime_id
+        rid1 = mgr._coordinator.get(mgr._runtime_ids["worker"]).runtime_id
         await mgr.request_shutdown("worker")
         assert coord.get(rid1) is None
 
         await mgr.spawn("worker", "coder", "task2")
-        rid2 = mgr._persistent_runtimes["worker"].runtime_id
+        rid2 = mgr._coordinator.get(mgr._runtime_ids["worker"]).runtime_id
         assert rid2 != rid1
         assert coord.get(rid2) is not None
         await mgr.shutdown_all()
@@ -1771,8 +1771,7 @@ class TestTeammateManagerViaCoordinator:
         finally:
             TeammateRuntime.start = original_teammate_start
 
-        assert "worker" not in mgr._teammates
-        assert "worker" not in mgr._persistent_runtimes
+        assert "worker" not in mgr._runtime_ids
         assert coord.active_count == 0
         assert coord.snapshot() == []
 
@@ -1824,7 +1823,7 @@ class TestTeammateManagerWithOrchestrator:
         """spawn 后 orchestrator 的 agent-runtime 映射包含绑定。"""
         mgr, _coord, _agent_reg, orch = _make_manager_with_orchestrator(tmp_path)
         await mgr.spawn("worker", "coder", "task")
-        pr = mgr._persistent_runtimes["worker"]
+        pr = mgr._coordinator.get(mgr._runtime_ids["worker"])
         assert orch._agent_runtime_map.get("worker") == pr.runtime_id
         await mgr.shutdown_all()
 
