@@ -82,6 +82,7 @@ class PersistentRuntime:
             budget_tokens=spec.budget_tokens,
             timeout_secs=spec.timeout_secs,
             require_plan=spec.require_plan,
+            capabilities=list(spec.tools),
         )
 
     async def start(self, task: str = "", *, task_id: str | None = None) -> None:

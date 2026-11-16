@@ -93,6 +93,7 @@ class EphemeralRuntime:
             max_tokens=self._spec.max_tokens,
             budget_tokens=self._spec.budget_tokens,
             timeout_secs=self._spec.timeout_secs,
+            capabilities=list(self._spec.tools),
         )
 
     async def start(self, task: str = "", *, task_id: str | None = None) -> None:

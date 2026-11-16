@@ -86,11 +86,16 @@ class InteractiveRuntime:
 
     @property
     def config(self) -> RuntimeConfig:
+        tool_names: list[str] = []
+        tool_reg = getattr(self._agent, "registry", None)
+        if tool_reg is not None and hasattr(tool_reg, "names"):
+            tool_names = list(tool_reg.names())
         return RuntimeConfig(
             name=self._agent_id,
             mode=RuntimeMode.INTERACTIVE,
             session_id=self._session_id,
             agent_id=self._agent_id,
+            capabilities=tool_names,
         )
 
     async def start(self, task: str = "", *, task_id: str | None = None) -> None:
