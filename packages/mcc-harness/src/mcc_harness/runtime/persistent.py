@@ -51,6 +51,7 @@ class PersistentRuntime:
         self._started_at: float = 0.0
         self._final_result: RuntimeResult | None = None
         self._runtime_id = f"persistent::{uuid4().hex[:12]}"
+        self._pending_sends: set[asyncio.Task] = set()
 
     @property
     def runtime_id(self) -> str:
@@ -178,9 +179,11 @@ class PersistentRuntime:
         return self._final_result
 
     def _send(self, kind: str, content: str) -> None:
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._bus.send(self._lead_name, self._teammate.name, content, kind=kind)
         )
+        self._pending_sends.add(task)
+        task.add_done_callback(self._pending_sends.discard)
 
     async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
         """向常驻运行时提交单个任务，返回 task_id。

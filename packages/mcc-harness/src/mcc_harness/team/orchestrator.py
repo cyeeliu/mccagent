@@ -85,6 +85,7 @@ class TeamPolicy:
     task_lease_secs: float = 300.0
     auto_cancel_on_failure: bool = False
     require_plan: bool = False
+    max_attempts: int = 1
     budget_policy: BudgetPolicy | None = None
 
     def __post_init__(self) -> None:
@@ -96,6 +97,8 @@ class TeamPolicy:
             raise OrchestratorError("heartbeat_interval_secs must be > 0")
         if self.task_lease_secs <= 0:
             raise OrchestratorError("task_lease_secs must be > 0")
+        if self.max_attempts < 1:
+            raise OrchestratorError("max_attempts must be >= 1")
 
 
 @dataclass(frozen=True)
@@ -737,9 +740,7 @@ class TeamOrchestrator:
 
         run.status = TeamRunStatus.RUNNING
         semaphore = asyncio.Semaphore(run.team.policy.max_concurrent_tasks)
-        max_attempts = 1
-        if hasattr(run.team.policy, "meta"):
-            max_attempts = run.team.policy.meta.get("max_attempts", 1)
+        max_attempts = run.team.policy.max_attempts
 
         tasks = [
             self._execute_assignment(run_id, assignment, semaphore, max_attempts)

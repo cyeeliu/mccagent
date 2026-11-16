@@ -136,6 +136,7 @@ class AgentEventSource(EventSource):
         runtime: Any | None = None,
         coordinator: Any | None = None,
         orchestrator: Any | None = None,
+        mcp_manager: Any | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
@@ -151,6 +152,7 @@ class AgentEventSource(EventSource):
         self.skill_items = skill_items or []
         self.session_short_id = session_short_id
         self.selection_responses = selection_responses
+        self._mcp_manager = mcp_manager
         if runtime is None:
             from mcc_harness import RuntimeFactory
 
@@ -170,7 +172,16 @@ class AgentEventSource(EventSource):
         return self._goal_controller
 
     async def shutdown(self, *, timeout: float = 10.0) -> None:
-        """关闭所有 Runtime，幂等，聚合异常不抛出。"""
+        """关闭所有 Runtime 与 MCP 子进程，幂等，聚合异常不抛出。"""
+        if self._mcp_manager is not None:
+            try:
+                await self._mcp_manager.close_all()
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "MCP close_all failed", exc_info=True
+                )
         report = await self._coordinator.stop_all(timeout=timeout)
         if report.has_errors:
             import logging

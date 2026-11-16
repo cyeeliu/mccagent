@@ -434,6 +434,7 @@ __all__ = [
     "TransitionGuard",
     "TransitionRecord",
     "TurnTimeoutInterceptor",
+    "WaitTimeoutError",
     "CleanupPolicy",
     "WorktreeError",
     "archive_worktree",

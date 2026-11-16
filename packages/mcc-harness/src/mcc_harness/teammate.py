@@ -25,6 +25,7 @@ from .mailbox import MessageBus
 from .permission import PermissionChecker
 from .plan import PlanStore
 from .runtime.base import RuntimeResult, RuntimeStatus, WaitTimeoutError, _terminal_result
+from .runtime.state_machine import _PERSISTENT_TRANSITIONS
 
 LEAD_NAME = "lead"
 
@@ -46,69 +47,6 @@ class TeammateStatus(StrEnum):
     SHUTDOWN = "shutdown"
 
 
-_TEAMMATE_TRANSITIONS: dict[TeammateStatus, frozenset[TeammateStatus]] = {
-    TeammateStatus.CREATED: frozenset({
-        TeammateStatus.STARTING,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.STARTING: frozenset({
-        TeammateStatus.IDLE,
-        TeammateStatus.ASSIGNED,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.IDLE: frozenset({
-        TeammateStatus.ASSIGNED,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.ASSIGNED: frozenset({
-        TeammateStatus.PLANNING,
-        TeammateStatus.RUNNING,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.PLANNING: frozenset({
-        TeammateStatus.WAITING_APPROVAL,
-        TeammateStatus.FAILED,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.WAITING_APPROVAL: frozenset({
-        TeammateStatus.RUNNING,
-        TeammateStatus.IDLE,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.RUNNING: frozenset({
-        TeammateStatus.REPORTING,
-        TeammateStatus.FAILED,
-        TeammateStatus.TIMEOUT,
-        TeammateStatus.CANCELLED,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.REPORTING: frozenset({
-        TeammateStatus.IDLE,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.FAILED: frozenset({
-        TeammateStatus.IDLE,
-        TeammateStatus.RESTARTING,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.TIMEOUT: frozenset({
-        TeammateStatus.IDLE,
-        TeammateStatus.RESTARTING,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.CANCELLED: frozenset({
-        TeammateStatus.IDLE,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.RESTARTING: frozenset({
-        TeammateStatus.IDLE,
-        TeammateStatus.SHUTTING_DOWN,
-    }),
-    TeammateStatus.SHUTTING_DOWN: frozenset({TeammateStatus.SHUTDOWN}),
-    TeammateStatus.SHUTDOWN: frozenset(),
-}
-
-
 _TEAMMATE_STATUS_MAP: dict[TeammateStatus, RuntimeStatus] = {
     TeammateStatus.CREATED: RuntimeStatus.CREATED,
     TeammateStatus.STARTING: RuntimeStatus.STARTING,
@@ -125,6 +63,83 @@ _TEAMMATE_STATUS_MAP: dict[TeammateStatus, RuntimeStatus] = {
     TeammateStatus.SHUTTING_DOWN: RuntimeStatus.STOPPING,
     TeammateStatus.SHUTDOWN: RuntimeStatus.SHUTDOWN,
 }
+
+
+_SUBSTATE_TRANSITIONS: dict[TeammateStatus, frozenset[TeammateStatus]] = {
+    TeammateStatus.ASSIGNED: frozenset({
+        TeammateStatus.PLANNING,
+        TeammateStatus.RUNNING,
+    }),
+    TeammateStatus.PLANNING: frozenset({
+        TeammateStatus.WAITING_APPROVAL,
+    }),
+    TeammateStatus.WAITING_APPROVAL: frozenset({
+        TeammateStatus.RUNNING,
+    }),
+    TeammateStatus.RUNNING: frozenset({
+        TeammateStatus.REPORTING,
+    }),
+    TeammateStatus.RESTARTING: frozenset({
+        TeammateStatus.IDLE,
+    }),
+}
+
+
+_EXTRA_TRANSITIONS: dict[TeammateStatus, frozenset[TeammateStatus]] = {
+    TeammateStatus.CREATED: frozenset({TeammateStatus.SHUTTING_DOWN}),
+    TeammateStatus.STARTING: frozenset({TeammateStatus.SHUTTING_DOWN}),
+    TeammateStatus.IDLE: frozenset({TeammateStatus.SHUTTING_DOWN}),
+    TeammateStatus.RESTARTING: frozenset({TeammateStatus.SHUTTING_DOWN}),
+    TeammateStatus.FAILED: frozenset({TeammateStatus.RESTARTING}),
+    TeammateStatus.TIMEOUT: frozenset({TeammateStatus.RESTARTING}),
+}
+
+_CANONICAL_TARGET: dict[RuntimeStatus, TeammateStatus] = {
+    RuntimeStatus.CREATED: TeammateStatus.CREATED,
+    RuntimeStatus.STARTING: TeammateStatus.STARTING,
+    RuntimeStatus.IDLE: TeammateStatus.IDLE,
+    RuntimeStatus.RUNNING: TeammateStatus.ASSIGNED,
+    RuntimeStatus.FAILED: TeammateStatus.FAILED,
+    RuntimeStatus.TIMEOUT: TeammateStatus.TIMEOUT,
+    RuntimeStatus.CANCELLED: TeammateStatus.CANCELLED,
+    RuntimeStatus.STOPPING: TeammateStatus.SHUTTING_DOWN,
+    RuntimeStatus.SHUTDOWN: TeammateStatus.SHUTDOWN,
+}
+
+_FORBIDDEN_CROSS: set[tuple[TeammateStatus, TeammateStatus]] = {
+    (TeammateStatus.RUNNING, TeammateStatus.IDLE),
+}
+
+
+def _teammate_transitions(
+    current: TeammateStatus,
+) -> frozenset[TeammateStatus]:
+    """从统一状态机派生 teammate 允许的目标状态。
+
+    跨 RuntimeStatus 的迁移委托 _PERSISTENT_TRANSITIONS，
+    但仅允许目标 RuntimeStatus 的规范入口子状态；
+    同一 RuntimeStatus 内的子状态迁移用 _SUBSTATE_TRANSITIONS；
+    teammate 特有的迁移（如从 CREATED 直接到 SHUTTING_DOWN）
+    由 _EXTRA_TRANSITIONS 补充。
+    """
+    current_rt = _TEAMMATE_STATUS_MAP[current]
+    allowed: set[TeammateStatus] = set()
+
+    for ts in TeammateStatus:
+        if ts == current:
+            continue
+        target_rt = _TEAMMATE_STATUS_MAP[ts]
+        if target_rt == current_rt:
+            if ts in _SUBSTATE_TRANSITIONS.get(current, frozenset()):
+                allowed.add(ts)
+        elif target_rt in _PERSISTENT_TRANSITIONS.get(current_rt, frozenset()) and (
+            ts == _CANONICAL_TARGET.get(target_rt)
+            and (current, ts) not in _FORBIDDEN_CROSS
+        ):
+            allowed.add(ts)
+
+    allowed |= _EXTRA_TRANSITIONS.get(current, frozenset())
+    return frozenset(allowed)
 
 
 class TeammateStateError(RuntimeError):
@@ -288,7 +303,7 @@ class TeammateRuntime:
 
     def _transition(self, target: TeammateStatus, reason: str = "") -> None:
         current = self._status
-        allowed = _TEAMMATE_TRANSITIONS.get(current, frozenset())
+        allowed = _teammate_transitions(current)
         if target not in allowed:
             raise TeammateStateError(
                 f"teammate {self.name} cannot transition from "

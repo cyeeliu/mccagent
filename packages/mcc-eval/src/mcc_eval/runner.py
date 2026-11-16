@@ -415,6 +415,7 @@ async def run_case(
     scored = score_case(
         snap, check=case.check, expectations=case.expectations,
         work_dir=work_dir, judge_results=judge_results,
+        allow_execution=True,
     )
     return CaseResult(
         case_id=case.case_id,
@@ -485,12 +486,27 @@ async def run_batch(
             )
             return result
 
-    jobs = [
-        one(case, attempt)
+    job_specs = [
+        (case, attempt)
         for case in cases
         for attempt in range(1, max(1, runs_per_case) + 1)
     ]
-    results = await asyncio.gather(*jobs)
+    raw_results = await asyncio.gather(
+        *(one(case, attempt) for case, attempt in job_specs),
+        return_exceptions=True,
+    )
+    results: list[CaseResult] = []
+    for (case, attempt), raw in zip(job_specs, raw_results, strict=False):
+        if isinstance(raw, CaseResult):
+            results.append(raw)
+        else:
+            results.append(CaseResult(
+                case_id=case.id,
+                status="error",
+                score=None,
+                reason=f"unhandled exception: {raw!r}",
+                attempt=attempt,
+            ))
     tracker.finish()
     return BatchResult(
         batch_id=batch_dir.name,
@@ -498,5 +514,5 @@ async def run_batch(
         model=model,
         started_at=started_at,
         finished_at=datetime.now(UTC).isoformat(),
-        results=list(results),
+        results=results,
     )

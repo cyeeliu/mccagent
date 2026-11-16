@@ -7,10 +7,8 @@
 from __future__ import annotations
 
 import pytest
-
 from mcc_tui.metrics import TerminalTextMetrics as metrics
 from mcc_tui.viewport import InputViewport
-
 
 # ────────────────────────────── fixtures ──────────────────────────────
 

@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 JSONRPC_VERSION = "2.0"
 MCP_PROTOCOL_VERSION = "2025-03-26"
@@ -29,14 +32,18 @@ class McpClient:
         command: str,
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
+        *,
+        read_timeout: float = 30.0,
     ) -> None:
         self.name = name
         self.command = command
         self.args = args or []
         self.env = env or {}
+        self._read_timeout = read_timeout
         self._proc: asyncio.subprocess.Process | None = None
         self._id = 0
         self._tools: list[dict[str, Any]] = []
+        self._stderr_task: asyncio.Task[None] | None = None
 
     @property
     def tools(self) -> list[dict[str, Any]]:
@@ -63,6 +70,7 @@ class McpClient:
                 f"MCP server {self.name!r}: failed to start: {e}"
             ) from e
 
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
         await self._initialize()
         self._tools = await self._tools_list()
 
@@ -97,6 +105,11 @@ class McpClient:
         return text, is_error
 
     async def close(self) -> None:
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            with __import__("contextlib").suppress(asyncio.CancelledError):
+                await self._stderr_task
+            self._stderr_task = None
         if self._proc is not None and self._proc.returncode is None:
             self._proc.terminate()
             try:
@@ -105,6 +118,20 @@ class McpClient:
                 self._proc.kill()
                 await self._proc.wait()
         self._proc = None
+
+    async def _drain_stderr(self) -> None:
+        """持续读取 stderr 防止管道缓冲区满导致 server 阻塞。"""
+        if self._proc is None or self._proc.stderr is None:
+            return
+        while True:
+            line = await self._proc.stderr.readline()
+            if not line:
+                break
+            logger.debug(
+                "MCP server %s stderr: %s",
+                self.name,
+                line.decode(errors="replace").rstrip(),
+            )
 
     async def _rpc(self, method: str, params: dict[str, Any]) -> Any:
         """发 JSON-RPC request，等对应 id 的 response。"""
@@ -137,7 +164,16 @@ class McpClient:
         if self._proc is None or self._proc.stdout is None:
             raise McpError(f"server {self.name!r} not connected")
         while True:
-            raw = await self._proc.stdout.readline()
+            try:
+                raw = await asyncio.wait_for(
+                    self._proc.stdout.readline(),
+                    timeout=self._read_timeout,
+                )
+            except TimeoutError:
+                raise McpError(
+                    f"server {self.name!r}: response timeout "
+                    f"after {self._read_timeout}s (id={expected_id})"
+                ) from None
             if not raw:
                 raise McpError(
                     f"server {self.name!r} closed stdout before response"

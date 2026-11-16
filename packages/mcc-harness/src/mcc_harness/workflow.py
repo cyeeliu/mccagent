@@ -69,8 +69,12 @@ _RUN_LOCKS: dict[str, asyncio.Lock] = {}
 async def workflow_run_lock(run_id: str):
     """同一 run_id 的 run/resume 串行执行。"""
     lock = _RUN_LOCKS.setdefault(run_id, asyncio.Lock())
-    async with lock:
-        yield
+    try:
+        async with lock:
+            yield
+    finally:
+        if not lock.locked() and run_id in _RUN_LOCKS:
+            _RUN_LOCKS.pop(run_id, None)
 
 
 # -- meta validation --

@@ -12,7 +12,7 @@ import contextlib
 import logging
 from dataclasses import dataclass, field
 
-from .base import AgentRuntime, RuntimeStatus, _TERMINAL_STATUSES
+from .base import _TERMINAL_STATUSES, AgentRuntime, RuntimeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +127,8 @@ class RuntimeCoordinator:
         if not runtimes:
             return ShutdownReport()
 
-        per_timeout = max(timeout / len(runtimes), 0.5)
         results = await asyncio.gather(
-            *(self._safe_stop(rt, per_timeout) for rt in runtimes),
+            *(self._safe_stop(rt, timeout) for rt in runtimes),
             return_exceptions=False,
         )
 

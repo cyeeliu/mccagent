@@ -7,11 +7,9 @@
 from __future__ import annotations
 
 import pytest
-from rich.text import Text
-
 from mcc_tui.metrics import TerminalTextMetrics as metrics
 from mcc_tui.render import _split_lines, _truncate, _wrap_line
-
+from rich.text import Text
 
 # ────────────────────────────── fixtures ──────────────────────────────
 

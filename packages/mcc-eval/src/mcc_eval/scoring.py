@@ -116,11 +116,25 @@ def score_case(
     work_dir: Path,
     timeout_s: float = CHECK_TIMEOUT_S,
     judge_results: dict[int, tuple[int, str]] | None = None,
+    allow_execution: bool = False,
 ) -> ScoreResult:
-    """评分入口：check 存在走执行式，否则走断言式。"""
+    """评分入口：check 存在走执行式，否则走断言式。
+
+    ``allow_execution`` 默认 False：当 check 非空时拒绝执行并返回
+    skipped，防止不可信 case 的 check 字段造成 RCE。调用方须显式
+    传 True 才会执行 check 代码。
+    """
     assertion = score_assertions(snapshot, expectations, judge_results)
     if check is None:
         return assertion
+
+    if not allow_execution:
+        return ScoreResult(
+            status="skipped",
+            score=None,
+            reason="execution check disabled; set allow_execution=True to run",
+            details=assertion.details,
+        )
 
     ok, output = run_execution_check(work_dir, check, timeout_s=timeout_s)
     status = "passed" if ok else "failed"

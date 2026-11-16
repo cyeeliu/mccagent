@@ -21,7 +21,6 @@ from mcc_harness import (
 )
 from mcc_harness.plan import PlanError, PlanRequest, PlanStatus
 from mcc_harness.teammate import (
-    _TEAMMATE_TRANSITIONS,
     LEAD_NAME,
     CreateWorktreeTool,
     CurrentExecution,
@@ -37,6 +36,7 @@ from mcc_harness.teammate import (
     TeammateStateError,
     TeammateStatus,
     TransitionRecord,
+    _teammate_transitions,
 )
 from mcc_llm.mock import MockLlm, single_text_turn
 from mcc_tools import ToolRegistry
@@ -905,7 +905,7 @@ class TestTeammateStatusMatrix:
         (TeammateStatus.SHUTTING_DOWN, TeammateStatus.SHUTDOWN),
     ])
     def test_legal_transition_allowed(self, frm, to):
-        assert to in _TEAMMATE_TRANSITIONS[frm]
+        assert to in _teammate_transitions(frm)
 
     @pytest.mark.parametrize("frm,to", [
         (TeammateStatus.CREATED, TeammateStatus.IDLE),
@@ -920,17 +920,18 @@ class TestTeammateStatusMatrix:
         (TeammateStatus.REPORTING, TeammateStatus.RUNNING),
     ])
     def test_illegal_transition_blocked(self, frm, to):
-        assert to not in _TEAMMATE_TRANSITIONS[frm]
+        assert to not in _teammate_transitions(frm)
 
     def test_shutdown_is_terminal(self):
-        assert _TEAMMATE_TRANSITIONS[TeammateStatus.SHUTDOWN] == frozenset()
+        assert _teammate_transitions(TeammateStatus.SHUTDOWN) == frozenset()
 
     def test_all_statuses_covered(self):
-        assert set(_TEAMMATE_TRANSITIONS) == set(TeammateStatus)
+        for ts in TeammateStatus:
+            _teammate_transitions(ts)
 
     def test_no_self_transition(self):
-        for frm, targets in _TEAMMATE_TRANSITIONS.items():
-            assert frm not in targets
+        for frm in TeammateStatus:
+            assert frm not in _teammate_transitions(frm)
 
 
 class TestTeammateTransitionMethod:

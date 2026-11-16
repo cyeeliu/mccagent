@@ -190,10 +190,14 @@ def _wire_cron(config, work_dir: Path, registry):
     return scheduler
 
 
-def _wire_mcp(config, registry) -> None:
-    """MCP server 连接与工具发现（stdio transport）。"""
+def _wire_mcp(config, registry):
+    """MCP server 连接与工具发现（stdio transport）。
+
+    返回 McpClientManager 或 None（未配置 MCP 时）。
+    调用方须持有引用以便 shutdown 时清理子进程。
+    """
     if not config.mcp_servers:
-        return
+        return None
 
     from mcc_mcp import McpClientManager
 
@@ -201,6 +205,7 @@ def _wire_mcp(config, registry) -> None:
     servers = {k: v.model_dump() for k, v in config.mcp_servers.items()}
     asyncio.run(mcp_manager.connect_all(servers))
     mcp_manager.register_all(registry)
+    return mcp_manager
 
 
 def _wire_todo_tasks(config, work_dir: Path, registry) -> tuple[Any, Any]:
@@ -644,7 +649,7 @@ def build_source(
 
     _executor, background_manager = _wire_sandbox_and_background(config, registry)
     cron_scheduler = _wire_cron(config, work_dir, registry)
-    _wire_mcp(config, registry)
+    mcp_manager = _wire_mcp(config, registry)
     todo_manager, task_store = _wire_todo_tasks(config, work_dir, registry)
     system, slash_resolver, skills_catalog, skill_items = _wire_prompt_system(
         config, work_dir, registry, no_skills
@@ -706,4 +711,5 @@ def build_source(
         runtime=runtime,
         coordinator=coordinator,
         orchestrator=orchestrator,
+        mcp_manager=mcp_manager,
     )

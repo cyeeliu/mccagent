@@ -8,12 +8,29 @@ import pathspec
 from pathspec import GitIgnoreSpec
 
 
-def resolve(cwd: Path, p: str) -> Path:
-    """将相对路径解析为相对于 cwd 的绝对路径。"""
+class PathEscapeError(ValueError):
+    """路径解析逃逸出工作目录边界。"""
+
+
+def resolve(cwd: Path, p: str, *, confine: bool = True) -> Path:
+    """将相对路径解析为相对于 cwd 的绝对路径。
+
+    当 confine=True 时，解析后的路径必须位于 cwd 内，
+    防止 ``../../etc/passwd`` 等路径逃逸。
+    """
     pb = Path(p)
     if pb.is_absolute():
-        return pb
-    return cwd / pb
+        return pb.resolve()
+    result = (cwd / pb).resolve()
+    if confine:
+        cwd_resolved = cwd.resolve()
+        try:
+            result.relative_to(cwd_resolved)
+        except ValueError:
+            raise PathEscapeError(
+                f"path {p!r} resolves outside working directory {cwd_resolved}"
+            ) from None
+    return result
 
 
 def cap_str(s: str, max_bytes: int) -> str:

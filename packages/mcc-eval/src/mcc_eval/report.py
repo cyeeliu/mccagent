@@ -208,6 +208,7 @@ async def rebuild(
                 expectations=case.expectations,
                 work_dir=trace_path.parent.parent / "work" / trace_path.stem,
                 judge_results=judge_results,
+                allow_execution=True,
             )
             duration = (events[-1].ts - events[0].ts) if len(events) > 1 else 0.0
             results.append(
