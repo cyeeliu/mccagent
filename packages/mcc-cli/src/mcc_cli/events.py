@@ -35,6 +35,8 @@ class EventSource(Protocol):
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]: ...
 
+    async def shutdown(self, *, timeout: float = 10.0) -> None: ...
+
 
 def history_events(history: list, cost_usd: float = 0.0) -> list:
     """把恢复的消息历史转换为 TUI 重放事件序列。
@@ -104,6 +106,9 @@ class EchoEventSource:
 
         yield TurnEnd(cost_usd=0.0)
 
+    async def shutdown(self, *, timeout: float = 10.0) -> None:
+        """EchoEventSource 无运行时，shutdown 为空操作。"""
+
 
 class AgentEventSource(EventSource):
     """将 AgentLoop 适配为 EventSource。
@@ -163,6 +168,18 @@ class AgentEventSource(EventSource):
     @property
     def goal_controller(self) -> GoalController | None:
         return self._goal_controller
+
+    async def shutdown(self, *, timeout: float = 10.0) -> None:
+        """关闭所有 Runtime，幂等，聚合异常不抛出。"""
+        report = await self._coordinator.stop_all(timeout=timeout)
+        if report.has_errors:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "shutdown completed with %d failure(s): %s",
+                len(report.failed),
+                report.failed,
+            )
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
         # slash 本地命令：/model /config /help /status /goal ——注册表

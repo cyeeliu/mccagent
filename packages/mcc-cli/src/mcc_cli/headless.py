@@ -54,9 +54,9 @@ async def run_headless(source: EventSource, prompt: str, quiet: bool) -> int:
             elif isinstance(ev, TurnEnd):
                 cost_usd = ev.cost_usd
     finally:
-        from mcc_cli.application import AgentApplication
-
-        await AgentApplication.from_source(source).shutdown()
+        _shutdown = getattr(source, "shutdown", None)
+        if _shutdown is not None:
+            await _shutdown()
 
     if had_error:
         return 1
