@@ -12,6 +12,7 @@ MockAdapter 用于无 API key 的链路冒烟与测试。
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import tempfile
 import uuid as uuid_module
@@ -32,6 +33,8 @@ from mcc_eval.events import (
     ToolResult,
     TraceEvent,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RunRequest(BaseModel):
@@ -237,7 +240,8 @@ class MccAdapter:
         if llm is None:
             try:
                 config = await load(Path.cwd())
-            except Exception:
+            except Exception as e:
+                logger.debug("config load failed, using defaults: %s", e)
                 config = None
             llm = build_llm_provider(config=config)
 

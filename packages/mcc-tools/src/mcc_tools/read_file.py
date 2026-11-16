@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,4 @@ class ReadFileTool:
 
 
 async def _read_text(path: Path) -> str:
-    import asyncio
-
     return await asyncio.to_thread(path.read_text, "utf-8")

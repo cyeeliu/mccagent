@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from pathlib import Path
 from typing import Any
@@ -88,24 +89,16 @@ class EditFileTool:
 
 
 async def _read_text(path: Path) -> str:
-    import asyncio
-
     return await asyncio.to_thread(path.read_text, "utf-8")
 
 
 async def _write_text(path: Path, data: str) -> None:
-    import asyncio
-
     await asyncio.to_thread(path.write_text, data, "utf-8")
 
 
 async def _rename(src: Path, dst: Path) -> None:
-    import asyncio
-
     await asyncio.to_thread(src.rename, dst)
 
 
 async def _unlink(path: Path) -> None:
-    import asyncio
-
     await asyncio.to_thread(path.unlink)

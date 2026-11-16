@@ -13,11 +13,14 @@ provider 构建已下沉至 mcc_llm.factory.build_llm_provider（配置层
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 
 from mcc_config.loader import load
 from mcc_config.models import Config, ModelConfig
+
+logger = logging.getLogger(__name__)
 
 # 兜底默认与 ModelConfig.main 的默认值保持同源：无论「无配置文件」
 # 还是「配置加载失败」，解析结果都是同一个模型，调用方不感知差异
@@ -52,7 +55,8 @@ def resolve_model(
     if config is None:
         try:
             config = asyncio.run(load(work_dir or Path.cwd()))
-        except Exception:
+        except Exception as e:
+            logger.debug("config load failed, returning default: %s", e)
             return default
 
     configured = getattr(config.model, kind, None)

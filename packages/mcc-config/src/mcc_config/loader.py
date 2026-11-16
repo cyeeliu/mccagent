@@ -10,6 +10,7 @@ home (~/.mcc/settings.json) 与 project (cwd/.mcc/settings.json) 合并：
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from mcc_config.models import (
@@ -163,6 +164,4 @@ def update_home_setting(keys: list[str], value: object) -> None:
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.chmod(0o600)
-    import os
-
     os.replace(tmp, path)

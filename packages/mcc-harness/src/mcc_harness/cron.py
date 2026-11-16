@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import secrets
 import threading
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from mcc_core import Tool, ToolContext, ToolOutput
+
+logger = logging.getLogger(__name__)
 
 # -- Cron expression parsing --
 
@@ -182,8 +185,10 @@ class CronScheduler:
 
     async def _poll_loop(self) -> None:
         while not self._stopped:
-            with contextlib.suppress(Exception):
+            try:
                 await self.poll(datetime.now())
+            except Exception as e:
+                logger.warning("cron poll error: %s", e)
             await asyncio.sleep(self._poll_interval)
 
     # -- scheduling --

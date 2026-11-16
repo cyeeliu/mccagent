@@ -9,9 +9,12 @@ mock/CI 冒烟链路。
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from mcc_core import Message
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_score(text: str) -> int | None:
@@ -51,7 +54,8 @@ class JudgeScorer:
 
             provider = build_llm_provider()
             model = resolve_model("judge")
-        except Exception:
+        except Exception as e:
+            logger.debug("judge provider init failed: %s", e)
             return None
         self._provider = provider
         self._model = model

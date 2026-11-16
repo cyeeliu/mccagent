@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -64,15 +66,10 @@ class WriteFileTool:
 
 
 async def _mkdir(path: Path) -> None:
-    import asyncio
-
     await asyncio.to_thread(lambda: path.mkdir(parents=True))
 
 
 async def _write_bytes(path: Path, data: bytes) -> None:
-    import asyncio
-    import os
-
     def _atomic_write() -> None:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_bytes(data)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol, runtime_checkable
 
@@ -177,15 +178,11 @@ class AgentEventSource(EventSource):
             try:
                 await self._mcp_manager.close_all()
             except Exception:
-                import logging
-
                 logging.getLogger(__name__).warning(
                     "MCP close_all failed", exc_info=True
                 )
         report = await self._coordinator.stop_all(timeout=timeout)
         if report.has_errors:
-            import logging
-
             logging.getLogger(__name__).warning(
                 "shutdown completed with %d failure(s): %s",
                 len(report.failed),

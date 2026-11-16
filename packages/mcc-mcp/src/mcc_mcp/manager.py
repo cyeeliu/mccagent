@@ -10,7 +10,7 @@ import logging
 from typing import Any
 
 from mcc_mcp.adapter import McpToolAdapter
-from mcc_mcp.client import McpClient, McpError
+from mcc_mcp.client import McpClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class McpClientManager:
                     "MCP server %r connected: %d tools",
                     name, len(client.tools),
                 )
-            except (McpError, Exception) as e:
+            except Exception as e:
                 logger.warning("MCP server %r failed: %s", name, e)
 
     def register_all(self, registry: object) -> int:
@@ -56,7 +56,7 @@ class McpClientManager:
                     adapter = McpToolAdapter(server_name, tool_info, client)
                     registry.register(adapter)
                     count += 1
-                except (ValueError, Exception) as e:
+                except Exception as e:
                     logger.warning(
                         "MCP tool %r/%r skipped: %s",
                         server_name, tool_info.get("name"), e,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import re
 from pathlib import Path
 from typing import Any
@@ -93,8 +94,6 @@ class GrepTool:
         spec: Any,
         pattern_str: str,
     ) -> ToolOutput:
-        import fnmatch
-
         files: list[Path] = []
         if search_root.is_file():
             files = [search_root]

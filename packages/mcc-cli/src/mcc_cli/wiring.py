@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import uuid
 from pathlib import Path
@@ -403,8 +404,6 @@ _REVIEW_VERDICT_SCHEMA = {
 
 async def _review_changes_workflow(ctx, args):
     """按审查维度流水线（audit → verify-each），仅保留被确认的发现。"""
-    import json as _json
-
     ctx.phase("Review")
     changes = args.get("changes", "")
     if not isinstance(changes, str):
@@ -431,7 +430,7 @@ async def _review_changes_workflow(ctx, args):
             (lambda f=f: ctx.agent(
                 f"Adversarially verify this {dimension} finding against the "
                 f"supplied change context.\n\nChange context:\n{review_input}"
-                f"\n\nFinding:\n{_json.dumps(f, ensure_ascii=False)}",
+                f"\n\nFinding:\n{json.dumps(f, ensure_ascii=False)}",
                 schema=_REVIEW_VERDICT_SCHEMA,
                 label=f"verify:{dimension}:{f['title']}",
                 phase="Verify",
@@ -476,8 +475,6 @@ def _wire_observability(config, work_dir: Path, sid: str, builder):
     if not config.observability.enabled:
         return None
 
-    import logging as _logging
-
     from mcc_observability import (
         JsonFormatter,
         Metrics,
@@ -486,13 +483,13 @@ def _wire_observability(config, work_dir: Path, sid: str, builder):
 
     log_dir = work_dir / ".mcc" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    handler = _logging.FileHandler(log_dir / "mcc.log.jsonl", encoding="utf-8")
+    handler = logging.FileHandler(log_dir / "mcc.log.jsonl", encoding="utf-8")
     handler.setFormatter(
         JsonFormatter(text=config.observability.log_format == "text")
     )
-    logger = _logging.getLogger("mcc")
+    logger = logging.getLogger("mcc")
     logger.setLevel(config.observability.log_level.upper())
-    if not any(isinstance(h, _logging.FileHandler) for h in logger.handlers):
+    if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
         logger.addHandler(handler)
     logger.propagate = False
     sink = ObservabilitySink(

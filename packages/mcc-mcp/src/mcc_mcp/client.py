@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -107,7 +108,7 @@ class McpClient:
     async def close(self) -> None:
         if self._stderr_task is not None:
             self._stderr_task.cancel()
-            with __import__("contextlib").suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._stderr_task
             self._stderr_task = None
         if self._proc is not None and self._proc.returncode is None:

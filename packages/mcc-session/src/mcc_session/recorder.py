@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from mcc_core import ContentBlock, Message, Role, TextBlock, ToolResultBlock, Us
 from mcc_llm import CompleteRequest
 
 from .models import SessionMeta, TurnSnapshot
+
+logger = logging.getLogger(__name__)
 
 
 def default_sessions_base() -> Path:
@@ -213,7 +216,8 @@ def list_sessions(base_dir: Path | None = None) -> list[SessionMeta]:
                 metas.append(
                     SessionMeta.model_validate_json(f.read_text(encoding="utf-8"))
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning("skipping corrupt session meta %s: %s", f, e)
                 continue
     metas.sort(key=lambda m: m.started_at, reverse=True)
     return metas
@@ -299,7 +303,8 @@ async def maybe_generate_title(
                 temperature=0.0,
             )
         )
-    except Exception:
+    except Exception as e:
+        logger.debug("title generation failed: %s", e)
         return None
 
     text = ""

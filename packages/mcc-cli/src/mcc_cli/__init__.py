@@ -86,8 +86,6 @@ def _history_events(history: list, cost_usd: float = 0.0) -> list:
 
 def _dump_metrics_snapshot(sink, work_dir: Path | None) -> None:
     """TUI 退出时落盘指标快照并向 stderr 打一行汇总。"""
-    import sys as _sys
-
     snapshot = sink.metrics.snapshot()
     target_dir = work_dir or Path.cwd()
     try:
@@ -116,7 +114,7 @@ def _dump_metrics_snapshot(sink, work_dir: Path | None) -> None:
         parts.append(f"p95={latency['p95']:.0f}ms")
     if cache:
         parts.append(f"cache_hit_rate={cache['sum'] / max(cache['count'], 1):.2f}")
-    print(f"[observability] {' '.join(parts)}", file=_sys.stderr)
+    print(f"[observability] {' '.join(parts)}", file=sys.stderr)
 
 
 async def _run_tui_mode(
