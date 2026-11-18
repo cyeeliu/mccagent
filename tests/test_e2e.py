@@ -334,7 +334,7 @@ class _StubRuntime:
 
     @property
     def capabilities(self) -> RuntimeCapabilities:
-        return RuntimeCapabilities()
+        return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
 
     @property
     def alive(self) -> bool:

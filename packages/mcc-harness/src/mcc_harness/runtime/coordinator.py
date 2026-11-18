@@ -142,11 +142,10 @@ class RuntimeCoordinator:
         """
         results: dict[str, Any] = {}
         for rid, rt in list(self._runtimes.items()):
-            health_check = getattr(rt, "health_check", None)
-            if not callable(health_check):
+            if not rt.capabilities.supports_health_check:
                 continue
             try:
-                results[rid] = await health_check()
+                results[rid] = await rt.health_check()
             except Exception:
                 logger.exception("health_check failed for runtime %s", rid)
         return results
@@ -237,11 +236,10 @@ class RuntimeCoordinator:
         while not self._stopped:
             await asyncio.sleep(self._health_interval)
             for rid, rt in list(self._runtimes.items()):
-                health_check = getattr(rt, "health_check", None)
-                if not callable(health_check):
+                if not rt.capabilities.supports_health_check:
                     continue
                 try:
-                    health = await health_check()
+                    health = await rt.health_check()
                     if (
                         hasattr(health, "state")
                         and str(health.state) == "unhealthy"
@@ -367,7 +365,7 @@ class RuntimeCoordinator:
     ) -> tuple[str, str | None]:
         """尝试停止但不等待（用于总超时后的尽力清理）。"""
         try:
-            if rt.alive:
+            if rt.alive and rt.capabilities.supports_cancel:
                 rt.cancel()
             return "timeout", None
         except Exception as exc:
@@ -376,13 +374,11 @@ class RuntimeCoordinator:
     async def cancel_all(self) -> None:
         """向所有活跃 Runtime 发送取消信号。"""
         for rt in self._runtimes.values():
-            if rt.alive:
-                cancel_fn = getattr(rt, "cancel", None)
-                if callable(cancel_fn):
-                    with contextlib.suppress(Exception):
-                        result = cancel_fn()
-                        if asyncio.iscoroutine(result):
-                            await result
+            if rt.alive and rt.capabilities.supports_cancel:
+                with contextlib.suppress(Exception):
+                    result = rt.cancel()
+                    if asyncio.iscoroutine(result):
+                        await result
 
     def clear_terminal(self) -> list[str]:
         """移除所有已到达终态的 Runtime，返回被移除的 ID 列表。"""

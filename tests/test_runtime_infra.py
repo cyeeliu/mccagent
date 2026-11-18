@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from mcc_core import AgentEvent, TextDelta, TurnEnd, Usage
 from mcc_core.runtime import RuntimeStatus as V2RuntimeStatus
+from mcc_core.runtime.capabilities import RuntimeCapabilities
 from mcc_core.runtime.protocols import AgentRuntime
 from mcc_harness import (
     InteractiveRuntimeV2,
@@ -441,6 +442,10 @@ class TestRuntimeCoordinator:
             def alive(self) -> bool:
                 return True
 
+            @property
+            def capabilities(self) -> RuntimeCapabilities:
+                return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
+
             async def start(self, task: str = "", *, task_id=None) -> None:
                 pass
 
@@ -539,6 +544,10 @@ class TestRuntimeCoordinator:
             @property
             def alive(self) -> bool:
                 return False
+
+            @property
+            def capabilities(self) -> RuntimeCapabilities:
+                return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
 
             async def start(self, task: str = "", *, task_id=None) -> None:
                 pass

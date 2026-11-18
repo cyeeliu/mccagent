@@ -13,6 +13,7 @@ import unittest.mock
 from pathlib import Path
 
 import pytest
+from mcc_core.runtime import RuntimeCapabilities
 from mcc_harness import (
     AgentDescriptor,
     AgentRegistry,
@@ -820,6 +821,10 @@ class StubRuntime:
             RuntimeStatus.SHUTDOWN,
         )
 
+    @property
+    def capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
+
     async def start(self, task: str = "", *, task_id: str | None = None) -> None:
         self.call_log.append(f"start:{task}")
         self.start_count += 1
@@ -1290,6 +1295,10 @@ class StubPersistentRuntime:
     @property
     def alive(self) -> bool:
         return True
+
+    @property
+    def capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
 
     async def start(self, task: str = "", *, task_id: str | None = None) -> None:
         self.start_count += 1

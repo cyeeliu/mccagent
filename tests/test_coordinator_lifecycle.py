@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 from mcc_core.runtime import RuntimeStatus as V2RuntimeStatus
+from mcc_core.runtime.capabilities import RuntimeCapabilities
 from mcc_harness import (
     InteractiveRuntimeV2,
     RuntimeCoordinator,
@@ -48,6 +49,10 @@ class FailingStartRuntime:
     @property
     def alive(self) -> bool:
         return False
+
+    @property
+    def capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
 
     async def start(self, task: str = "", *, task_id=None) -> None:
         raise RuntimeError("start failed")
@@ -86,6 +91,10 @@ class SlowStopRuntime:
     @property
     def alive(self) -> bool:
         return True
+
+    @property
+    def capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
 
     async def start(self, task: str = "", *, task_id=None) -> None:
         pass
@@ -126,6 +135,10 @@ class HealthCheckRuntime:
     @property
     def alive(self) -> bool:
         return True
+
+    @property
+    def capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(supports_cancel=True, supports_health_check=True)
 
     async def start(self, task: str = "", *, task_id=None) -> None:
         pass
@@ -205,6 +218,10 @@ class TestPriorityShutdown:
             @property
             def alive(self) -> bool:
                 return self._status is RuntimeStatus.RUNNING
+
+            @property
+            def capabilities(self) -> RuntimeCapabilities:
+                return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
 
             async def start(self, task: str = "", *, task_id=None) -> None:
                 pass
@@ -524,6 +541,10 @@ class _HealthCheckStub:
     def alive(self) -> bool:
         return True
 
+    @property
+    def capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(supports_cancel=True, supports_health_check=True)
+
     async def start(self, task: str = "", *, task_id=None) -> None:
         pass
 
@@ -587,6 +608,10 @@ class TestHealthCheckAll:
             @property
             def alive(self) -> bool:
                 return True
+
+            @property
+            def capabilities(self) -> RuntimeCapabilities:
+                return RuntimeCapabilities(supports_cancel=True, supports_health_check=True)
 
             async def start(self, task: str = "", *, task_id=None) -> None:
                 pass

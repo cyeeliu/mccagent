@@ -22,6 +22,7 @@ from mcc_core.runtime import (
     InMemoryTaskStore,
     InvalidTransitionError,
     LeaseExpiredError,
+    RuntimeCapabilities,
     RuntimeEventType,
     RuntimeTask,
     TaskAssignment,
@@ -396,6 +397,10 @@ class _StubRuntime:
     @property
     def alive(self) -> bool:
         return True
+
+    @property
+    def capabilities(self) -> RuntimeCapabilities:
+        return RuntimeCapabilities(supports_cancel=False, supports_health_check=False)
 
     async def submit(self, task: RuntimeTask):
         from mcc_core.runtime import TaskHandle

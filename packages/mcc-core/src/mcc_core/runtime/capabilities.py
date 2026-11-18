@@ -15,6 +15,7 @@ class RuntimeCapabilities:
     supports_pause: bool = False
     supports_resume: bool = False
     supports_cancel_task: bool = True
+    supports_cancel: bool = False
     supports_health_check: bool = True
     supports_subscribe_events: bool = True
     supports_multiple_tasks: bool = False
@@ -27,6 +28,7 @@ class RuntimeCapabilities:
             "pause": self.supports_pause,
             "resume": self.supports_resume,
             "cancel_task": self.supports_cancel_task,
+            "cancel": self.supports_cancel,
             "health_check": self.supports_health_check,
             "subscribe_events": self.supports_subscribe_events,
             "multiple_tasks": self.supports_multiple_tasks,
@@ -37,6 +39,7 @@ INTERACTIVE_CAPABILITIES = RuntimeCapabilities(
     supports_pause=False,
     supports_resume=False,
     supports_cancel_task=True,
+    supports_cancel=True,
     supports_health_check=True,
     supports_subscribe_events=True,
     supports_multiple_tasks=False,
@@ -57,6 +60,7 @@ PERSISTENT_CAPABILITIES = RuntimeCapabilities(
     supports_pause=True,
     supports_resume=True,
     supports_cancel_task=True,
+    supports_cancel=True,
     supports_health_check=True,
     supports_subscribe_events=True,
     supports_multiple_tasks=True,
