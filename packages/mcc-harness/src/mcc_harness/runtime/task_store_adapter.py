@@ -3,17 +3,21 @@
 TaskDispatcher 需要异步 TaskStoreProtocol 接口，但 Orchestrator 历史上使用
 同步 mcc_tools.TaskStore（文件持久化）。本适配器桥接两者：
 - 任务级操作委托给 mcc_tools.TaskStore（同步调用包装为 async）
-- Attempt 级操作使用内存存储（mcc_tools.TaskStore 无 Attempt 概念）
+- Attempt/Assignment 级操作默认内存存储；提供 persist_dir 时持久化到 JSON 文件
 - 状态字符串与 TaskStatus 枚举互转
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from mcc_core.runtime.enums import TaskStatus
+from mcc_core.runtime.result import TokenUsage
 from mcc_core.runtime.task_record import (
     AssignmentStatus,
     AttemptStatus,
@@ -67,6 +71,16 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _dt_to_iso(dt: datetime | None) -> str | None:
+    """datetime 转 ISO 字符串，None 保持 None。"""
+    return dt.isoformat() if dt else None
+
+
+def _dt_from_iso(value: str | None) -> datetime | None:
+    """ISO 字符串转 datetime，空值返回 None。"""
+    return datetime.fromisoformat(value) if value else None
+
+
 def _gen_attempt_id() -> str:
     import uuid
 
@@ -76,16 +90,154 @@ def _gen_attempt_id() -> str:
 class TaskStoreAdapter:
     """将同步 mcc_tools.TaskStore 适配为异步 TaskStoreProtocol。
 
-    任务级操作委托给底层 TaskStore；Attempt 级操作使用内存存储。
+    任务级操作委托给底层 TaskStore；Attempt/Assignment 级操作默认内存存储，
+    提供 persist_dir 时持久化到 JSON 文件（原子写入），跨进程可恢复。
     """
 
-    def __init__(self, store: Any) -> None:
+    def __init__(
+        self,
+        store: Any,
+        *,
+        persist_dir: Path | None = None,
+    ) -> None:
         self._store = store
+        self._persist_dir = persist_dir
         self._attempts: dict[str, TaskAttempt] = {}
         self._task_attempts: dict[str, list[str]] = {}
         self._idempotency_index: dict[str, str] = {}
         self._assignments: dict[str, TaskAssignment] = {}
         self._lock = asyncio.Lock()
+        if persist_dir is not None:
+            persist_dir.mkdir(parents=True, exist_ok=True)
+            self._load_attempts()
+            self._load_assignments()
+
+    # -- 持久化 --
+
+    @staticmethod
+    def _atomic_write(path: Path, data: str) -> None:
+        """原子写入：写临时文件后 os.replace，避免崩溃留下半截 JSON。"""
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, path)
+
+    @staticmethod
+    def _attempt_to_dict(attempt: TaskAttempt) -> dict[str, Any]:
+        return {
+            "attempt_id": attempt.attempt_id,
+            "task_id": attempt.task_id,
+            "agent_id": attempt.agent_id,
+            "runtime_id": attempt.runtime_id,
+            "status": attempt.status.value,
+            "idempotency_key": attempt.idempotency_key,
+            "started_at": _dt_to_iso(attempt.started_at),
+            "finished_at": _dt_to_iso(attempt.finished_at),
+            "error": attempt.error,
+            "summary": attempt.summary,
+            "output": attempt.output,
+            "usage": attempt.usage.to_dict() if attempt.usage else None,
+            "cost_usd": attempt.cost_usd,
+            "version": attempt.version,
+        }
+
+    @staticmethod
+    def _attempt_from_dict(data: dict[str, Any]) -> TaskAttempt:
+        usage = None
+        if data.get("usage") is not None:
+            usage = TokenUsage(**data["usage"])
+        return TaskAttempt(
+            attempt_id=data["attempt_id"],
+            task_id=data["task_id"],
+            agent_id=data["agent_id"],
+            runtime_id=data.get("runtime_id"),
+            status=AttemptStatus(data["status"]),
+            idempotency_key=data.get("idempotency_key", ""),
+            started_at=_dt_from_iso(data.get("started_at")),
+            finished_at=_dt_from_iso(data.get("finished_at")),
+            error=data.get("error"),
+            summary=data.get("summary"),
+            output=data.get("output"),
+            usage=usage,
+            cost_usd=data.get("cost_usd"),
+            version=data.get("version", 0),
+        )
+
+    @staticmethod
+    def _assignment_to_dict(asgn: TaskAssignment) -> dict[str, Any]:
+        return {
+            "assignment_id": asgn.assignment_id,
+            "task_id": asgn.task_id,
+            "attempt_id": asgn.attempt_id,
+            "agent_id": asgn.agent_id,
+            "runtime_id": asgn.runtime_id,
+            "status": asgn.status.value,
+            "assigned_at": _dt_to_iso(asgn.assigned_at),
+            "lease_expires_at": _dt_to_iso(asgn.lease_expires_at),
+            "completed_at": _dt_to_iso(asgn.completed_at),
+            "version": asgn.version,
+        }
+
+    @staticmethod
+    def _assignment_from_dict(data: dict[str, Any]) -> TaskAssignment:
+        return TaskAssignment(
+            assignment_id=data["assignment_id"],
+            task_id=data["task_id"],
+            attempt_id=data["attempt_id"],
+            agent_id=data["agent_id"],
+            runtime_id=data.get("runtime_id"),
+            status=AssignmentStatus(data["status"]),
+            assigned_at=_dt_from_iso(data.get("assigned_at")) or _now(),
+            lease_expires_at=_dt_from_iso(data.get("lease_expires_at")),
+            completed_at=_dt_from_iso(data.get("completed_at")),
+            version=data.get("version", 0),
+        )
+
+    def _load_attempts(self) -> None:
+        """从 persist_dir 加载 attempts，并派生 task_attempts 与 idempotency 索引。"""
+        if self._persist_dir is None:
+            return
+        path = self._persist_dir / "attempts.json"
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        for item in data:
+            attempt = self._attempt_from_dict(item)
+            self._attempts[attempt.attempt_id] = attempt
+            self._task_attempts.setdefault(attempt.task_id, []).append(attempt.attempt_id)
+            if attempt.idempotency_key:
+                self._idempotency_index[attempt.idempotency_key] = attempt.attempt_id
+
+    def _save_attempts(self) -> None:
+        """将 attempts 持久化到 persist_dir（原子写入）。"""
+        if self._persist_dir is None:
+            return
+        path = self._persist_dir / "attempts.json"
+        payload = [self._attempt_to_dict(a) for a in self._attempts.values()]
+        self._atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
+
+    def _load_assignments(self) -> None:
+        if self._persist_dir is None:
+            return
+        path = self._persist_dir / "assignments.json"
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        for item in data:
+            asgn = self._assignment_from_dict(item)
+            self._assignments[asgn.assignment_id] = asgn
+
+    def _save_assignments(self) -> None:
+        if self._persist_dir is None:
+            return
+        path = self._persist_dir / "assignments.json"
+        payload = [self._assignment_to_dict(a) for a in self._assignments.values()]
+        self._atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
     async def create_task(
         self,
@@ -197,6 +349,7 @@ class TaskStoreAdapter:
             self._task_attempts.setdefault(task_id, []).append(attempt_id)
             if idempotency_key:
                 self._idempotency_index[idempotency_key] = attempt_id
+            self._save_attempts()
             return attempt
 
     async def get_attempt(self, attempt_id: str) -> TaskAttempt | None:
@@ -222,6 +375,7 @@ class TaskStoreAdapter:
             attempt.status = AttemptStatus.SUCCEEDED
             attempt.summary = summary
             attempt.finished_at = _now()
+            self._save_attempts()
             return attempt
 
     async def fail_attempt(
@@ -237,6 +391,7 @@ class TaskStoreAdapter:
             attempt.status = AttemptStatus.FAILED
             attempt.error = error
             attempt.finished_at = _now()
+            self._save_attempts()
             return attempt
 
     async def find_by_idempotency_key(self, key: str) -> TaskAttempt | None:
@@ -266,6 +421,7 @@ class TaskStoreAdapter:
             status=AssignmentStatus.ACTIVE,
         )
         self._assignments[assignment_id] = assignment
+        self._save_assignments()
         return assignment
 
     async def get_assignment(self, assignment_id: str) -> TaskAssignment | None:
@@ -292,6 +448,7 @@ class TaskStoreAdapter:
         if assignment is None:
             raise KeyError(assignment_id)
         assignment.status = AssignmentStatus.COMPLETED
+        self._save_assignments()
         return assignment
 
 

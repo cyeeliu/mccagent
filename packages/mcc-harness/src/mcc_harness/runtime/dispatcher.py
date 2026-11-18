@@ -76,7 +76,6 @@ class TaskDispatcher:
         self._store = task_store
         self._coordinator = coordinator
         self._pending: dict[str, asyncio.Future[RuntimeEvent]] = {}
-        self._dispatched: set[str] = set()
 
     async def dispatch(
         self,
@@ -101,6 +100,22 @@ class TaskDispatcher:
 
             raise TaskNotFoundError(task_id)
 
+        # 幂等检查：依赖 TaskStore 的 idempotency_key 机制（持久化、跨进程），
+        # 而非内存 set。若已有同 key 的 attempt，直接返回 handle 不重复 submit。
+        if idempotency_key is not None:
+            existing = await self._store.find_by_idempotency_key(idempotency_key)
+            if existing is not None:
+                logger.info(
+                    "idempotent dispatch: task=%s attempt=%s already exists",
+                    task_id,
+                    existing.attempt_id,
+                )
+                return TaskHandle(
+                    task_id=task_id,
+                    attempt_id=existing.attempt_id,
+                    runtime_id=runtime_id,
+                )
+
         attempt = await self._store.create_attempt(
             task_id=task_id,
             agent_id=agent_id,
@@ -108,7 +123,8 @@ class TaskDispatcher:
             idempotency_key=idempotency_key,
         )
 
-        if attempt.status is not AttemptStatus.PENDING or attempt.attempt_id in self._dispatched:
+        # create_attempt 内部可能因竞态返回已有非 PENDING attempt，同样视为幂等
+        if attempt.status is not AttemptStatus.PENDING:
             logger.info(
                 "idempotent dispatch: task=%s attempt=%s already exists",
                 task_id,
@@ -151,7 +167,6 @@ class TaskDispatcher:
                     agent_id=agent_id,
                 )
             handle = await runtime.submit(rt_task)
-            self._dispatched.add(attempt.attempt_id)
             await self._store.transition_task(
                 task_id,
                 TaskStatus.DISPATCHED,

@@ -92,8 +92,18 @@ class BoundedTaskQueue:
         self._pending -= 1
         self._queue.task_done()
 
-    async def close(self, *, drain: bool = False) -> list[Any]:
-        """关闭队列。drain=True 时排空并返回未处理任务。"""
+    async def close(
+        self,
+        *,
+        drain: bool = False,
+        num_sentinels: int = 1,
+    ) -> list[Any]:
+        """关闭队列。drain=True 时排空并返回未处理任务。
+
+        drain=False 时放入 num_sentinels 个 None 哨兵，使每个阻塞在 get()
+        的消费者都能收到关闭信号并优雅退出。num_sentinels 应等于消费者
+        （worker）数量，否则多余消费者将永久阻塞。
+        """
         self._closed = True
         drained: list[Any] = []
         if drain:
@@ -103,7 +113,8 @@ class BoundedTaskQueue:
                     drained.append(entry.task)
                     self._pending -= 1
         else:
-            await self._queue.put(None)
+            for _ in range(max(1, num_sentinels)):
+                await self._queue.put(None)
         return drained
 
 

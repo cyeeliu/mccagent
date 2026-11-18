@@ -65,7 +65,8 @@ class WorkerPool:
         if not self._started:
             return
         self._stop_event.set()
-        await self._queue.close()
+        # 为每个 worker 放入一个 sentinel，使其都能优雅退出而非依赖超时+cancel
+        await self._queue.close(num_sentinels=self._max_workers)
         try:
             await asyncio.wait_for(
                 asyncio.gather(*self._workers, return_exceptions=True),
