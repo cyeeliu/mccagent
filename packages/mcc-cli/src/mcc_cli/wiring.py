@@ -350,12 +350,24 @@ def _wire_team(
     bus = MessageBus(work_dir)
     plan_store = PlanStore()
     agent_registry = AgentRegistry()
+
+    from mcc_core.runtime import InMemoryTaskStore
+    from mcc_harness.runtime import TaskDispatcher, TaskStoreAdapter
+
+    async_task_store: Any = None
+    if task_store is not None:
+        async_task_store = TaskStoreAdapter(task_store)
+    else:
+        async_task_store = InMemoryTaskStore()
+    dispatcher = TaskDispatcher(async_task_store, coordinator) if coordinator else None
+
     orchestrator = TeamOrchestrator(
         registry=agent_registry,
         bus=bus,
         plan_store=plan_store,
         task_store=task_store,
         coordinator=coordinator,
+        dispatcher=dispatcher,
     )
     team_manager = TeammateManager(
         llm=llm,
