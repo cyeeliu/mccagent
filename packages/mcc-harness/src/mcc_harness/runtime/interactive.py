@@ -30,6 +30,7 @@ class InteractiveRuntimeV2:
         runtime_id: str | None = None,
         session_id: str = "",
         agent_id: str = "",
+        task_store: Any | None = None,
     ) -> None:
         from mcc_core.runtime import INTERACTIVE_CAPABILITIES
 
@@ -45,6 +46,7 @@ class InteractiveRuntimeV2:
             runtime_id=self._runtime_id,
             agent_id=self._agent_id,
         )
+        self._task_store = task_store
 
         from mcc_core.runtime import RuntimeStatus
 
@@ -126,7 +128,7 @@ class InteractiveRuntimeV2:
             task_id=task.task_id,
             attempt_id=task.attempt_id,
         )
-        asyncio.create_task(self._execute_task(task))
+        self._current_task = asyncio.create_task(self._execute_task(task))
         return handle
 
     async def _execute_task(self, task: Any) -> None:
@@ -140,14 +142,24 @@ class InteractiveRuntimeV2:
         )
         try:
             result = await self._executor.execute(task)
+            if self._task_store is not None:
+                await self._write_result_to_store(task, result)
             event_type = "task_completed" if result.is_success else "task_failed"
+            payload: dict[str, object] = {"status": str(result.status)}
+            if result.summary:
+                payload["summary"] = result.summary
             await self._emit_event(
                 event_type,
                 task_id=task.task_id,
                 attempt_id=task.attempt_id,
-                payload={"status": str(result.status)},
+                payload=payload,
             )
         except Exception as exc:
+            if self._task_store is not None:
+                with contextlib.suppress(Exception):
+                    await self._task_store.fail_attempt(
+                        task.attempt_id, error=str(exc),
+                    )
             await self._emit_event(
                 "task_failed",
                 task_id=task.task_id,
@@ -156,12 +168,33 @@ class InteractiveRuntimeV2:
             )
         finally:
             self._active_tasks -= 1
+            self._current_task = None
+
+    async def _write_result_to_store(self, task: Any, result: Any) -> None:
+        """将 RuntimeResult 写入 TaskStore（P0-03）。"""
+        if result.is_success:
+            cost = float(result.cost_usd) if result.cost_usd is not None else None
+            output = dict(result.output) if result.output else None
+            await self._task_store.complete_attempt(
+                task.attempt_id,
+                summary=result.summary or None,
+                output=output,
+                usage=result.usage,
+                cost_usd=cost,
+            )
+        else:
+            error_msg = str(result.error) if result.error else (result.summary or "failed")
+            await self._task_store.fail_attempt(
+                task.attempt_id, error=error_msg,
+            )
 
     async def cancel_task(
         self, task_id: str, attempt_id: str, reason: str | None = None,
     ) -> None:
         if self._cancel_event is not None:
             self._cancel_event.set()
+        if self._current_task is not None and not self._current_task.done():
+            self._current_task.cancel()
         await self._emit_event(
             "task_cancelled",
             task_id=task_id,

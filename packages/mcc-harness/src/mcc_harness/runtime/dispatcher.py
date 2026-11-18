@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
+from uuid import uuid4
 
 from mcc_core.runtime import (
     RuntimeEvent,
@@ -28,6 +30,7 @@ from mcc_core.runtime import (
 )
 from mcc_core.runtime.task_record import (
     AttemptStatus,
+    TaskAttempt,
 )
 
 from .coordinator import RuntimeCoordinator
@@ -40,6 +43,13 @@ _TASK_DONE_EVENTS = frozenset({
     RuntimeEventType.TASK_CANCELLED,
     RuntimeEventType.TASK_TIMED_OUT,
 })
+
+_ATTEMPT_STATUS_TO_EVENT: dict[AttemptStatus, RuntimeEventType] = {
+    AttemptStatus.SUCCEEDED: RuntimeEventType.TASK_COMPLETED,
+    AttemptStatus.FAILED: RuntimeEventType.TASK_FAILED,
+    AttemptStatus.TIMED_OUT: RuntimeEventType.TASK_TIMED_OUT,
+    AttemptStatus.CANCELLED: RuntimeEventType.TASK_CANCELLED,
+}
 
 
 class DispatchError(RuntimeError):
@@ -171,15 +181,21 @@ class TaskDispatcher:
     ) -> RuntimeEvent:
         """等待任务完成，返回完成事件。
 
-        监听 Runtime 事件流，直到收到 TASK_COMPLETED / TASK_FAILED /
+        先查 TaskStore：若 attempt 已终态，直接返回合成事件（不依赖事件流）。
+        否则监听 Runtime 事件流，直到收到 TASK_COMPLETED / TASK_FAILED /
         TASK_CANCELLED / TASK_TIMED_OUT 事件。
-        结果先写 TaskStore，再返回事件。
+        超时仅抛 TaskTimeoutError，不修改 attempt 状态。
         """
         runtime = self._coordinator.get(handle.runtime_id)
         if runtime is None:
             raise DispatchError(
                 f"runtime not found: {handle.runtime_id}",
             )
+
+        # P0-01: 先查 TaskStore，若已终态直接返回合成事件
+        attempt = await self._store.get_attempt(handle.attempt_id)
+        if attempt is not None and attempt.is_terminal:
+            return self._synthetic_event(handle, attempt)
 
         event_iter = runtime.subscribe_events(
             task_id=handle.task_id,
@@ -203,18 +219,49 @@ class TaskDispatcher:
         except TimeoutError:
             from mcc_core.runtime.errors import TaskTimeoutError
 
-            await self._store.fail_attempt(
-                handle.attempt_id,
-                error=f"wait_for_result timeout after {timeout}s",
-            )
             raise TaskTimeoutError(handle.task_id, handle.attempt_id) from None
+
+    def _synthetic_event(
+        self,
+        handle: TaskHandle,
+        attempt: TaskAttempt,
+    ) -> RuntimeEvent:
+        """从 TaskAttempt 终态构造合成 RuntimeEvent。"""
+        event_type = _ATTEMPT_STATUS_TO_EVENT.get(attempt.status)
+        if event_type is None:
+            raise DispatchError(
+                f"attempt {attempt.attempt_id} has non-terminal status "
+                f"{attempt.status}",
+            )
+        payload: dict[str, object] = {}
+        if attempt.summary:
+            payload["summary"] = attempt.summary
+        if attempt.error:
+            payload["error"] = attempt.error
+        return RuntimeEvent(
+            event_id=f"evt-{uuid4().hex[:12]}",
+            event_type=event_type,
+            runtime_id=handle.runtime_id,
+            task_id=handle.task_id,
+            attempt_id=handle.attempt_id,
+            sequence=0,
+            occurred_at=datetime.now(UTC),
+            payload=payload,
+        )
 
     async def _record_result(
         self,
         handle: TaskHandle,
         event: RuntimeEvent,
     ) -> None:
-        """将结果写入 TaskStore。"""
+        """将结果写入 TaskStore。
+
+        若 attempt 已终态（Runtime 已写入完整结果），则跳过不覆盖。
+        """
+        attempt = await self._store.get_attempt(handle.attempt_id)
+        if attempt is not None and attempt.is_terminal:
+            return
+
         if event.event_type is RuntimeEventType.TASK_COMPLETED:
             await self._store.complete_attempt(
                 handle.attempt_id,
