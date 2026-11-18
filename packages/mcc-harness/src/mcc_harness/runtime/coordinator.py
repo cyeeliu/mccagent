@@ -11,8 +11,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from .base import _TERMINAL_STATUSES, RuntimeStatus
@@ -22,6 +24,19 @@ logger = logging.getLogger(__name__)
 
 class CoordinatorClosedError(RuntimeError):
     """Coordinator 已关闭，不再接受注册。"""
+
+
+class CoordinatorState(Enum):
+    """Coordinator 生命周期状态。
+
+    OPEN：接受新注册。
+    CLOSING：禁止新注册，正在停止 Runtime。
+    CLOSED：关闭完成，幂等空操作。
+    """
+
+    OPEN = "open"
+    CLOSING = "closing"
+    CLOSED = "closed"
 
 
 @dataclass
@@ -50,6 +65,16 @@ class ShutdownReport:
         return len(self.stopped) + len(self.failed) + len(self.timed_out)
 
 
+@dataclass
+class RuntimeMonitorState:
+    """单个 Runtime 的健康监控状态，用于回调去重。"""
+
+    last_health: str = "healthy"
+    failure_reported: bool = False
+    exit_callback_invoked: bool = False
+    last_check_at: float = 0.0
+
+
 ExitCallback = Callable[[str, RuntimeStatus], Awaitable[None]]
 
 
@@ -72,12 +97,23 @@ class RuntimeCoordinator:
         self._runtimes: dict[str, Any] = {}
         self._priorities: dict[str, int] = {}
         self._lock = asyncio.Lock()
-        self._stopped = False
+        self._state: CoordinatorState = CoordinatorState.OPEN
         self._health_task: asyncio.Task[None] | None = None
         self._health_interval: float = 30.0
         self._exit_callbacks: list[ExitCallback] = []
         self._exit_monitor_task: asyncio.Task[None] | None = None
         self._exit_monitor_runtimes: set[str] = set()
+        self._monitor_states: dict[str, RuntimeMonitorState] = {}
+
+    @property
+    def state(self) -> CoordinatorState:
+        """当前生命周期状态。"""
+        return self._state
+
+    @property
+    def is_closing(self) -> bool:
+        """是否已开始关闭（CLOSING 或 CLOSED），禁止新注册。"""
+        return self._state != CoordinatorState.OPEN
 
     def register(
         self,
@@ -88,8 +124,10 @@ class RuntimeCoordinator:
         """注册 Runtime，重复 ID 抛 RuntimeError，已关闭抛 CoordinatorClosedError。
 
         priority 控制关闭顺序：数值越小越先停止（依赖方优先）。
+        同步方法仅做状态检查与字典写入，真正的并发事务安全由
+        register_and_start 的 async 版本通过锁保证。
         """
-        if self._stopped:
+        if self._state != CoordinatorState.OPEN:
             raise CoordinatorClosedError(
                 "coordinator is closed; create a new one to register runtimes"
             )
@@ -105,23 +143,63 @@ class RuntimeCoordinator:
         *,
         priority: int = 0,
     ) -> None:
-        """注册并启动 Runtime，启动失败时自动回滚注销。
+        """注册并启动 Runtime，启动失败或关闭并发时自动回滚注销。
 
         事务语义：要么 Runtime 注册且启动成功，要么不留任何半注册对象。
+        流程：锁内检查 OPEN 并预留 → 锁外启动 → 锁内确认仍为 OPEN，
+        若关闭已开始则回滚并停止刚启动的 Runtime。
+        不在持有锁时 await Runtime.start/stop，避免死锁。
         """
-        self.register(runtime, priority=priority)
+        rid = runtime.runtime_id
+        async with self._lock:
+            if self._state != CoordinatorState.OPEN:
+                raise CoordinatorClosedError(
+                    "coordinator is closed; create a new one to register runtimes"
+                )
+            if rid in self._runtimes:
+                raise RuntimeError(f"duplicate runtime id: {rid}")
+            self._runtimes[rid] = runtime
+            self._priorities[rid] = priority
+
+        rollback_on_close = False
         try:
             start_coro = runtime.start()
             if asyncio.iscoroutine(start_coro):
                 await start_coro
         except Exception:
-            self.unregister(runtime.runtime_id)
+            await self._rollback_registration(rid)
             raise
+
+        async with self._lock:
+            if self._state != CoordinatorState.OPEN:
+                self._runtimes.pop(rid, None)
+                self._priorities.pop(rid, None)
+                self._exit_monitor_runtimes.discard(rid)
+                self._monitor_states.pop(rid, None)
+                rollback_on_close = True
+
+        if rollback_on_close:
+            with contextlib.suppress(Exception):
+                stop_coro = runtime.stop()
+                if asyncio.iscoroutine(stop_coro):
+                    await stop_coro
+            raise CoordinatorClosedError(
+                "coordinator began shutdown during start; runtime rolled back"
+            )
+
+    async def _rollback_registration(self, runtime_id: str) -> None:
+        """回滚注册：锁内移除字典记录。"""
+        async with self._lock:
+            self._runtimes.pop(runtime_id, None)
+            self._priorities.pop(runtime_id, None)
+            self._exit_monitor_runtimes.discard(runtime_id)
+            self._monitor_states.pop(runtime_id, None)
 
     def unregister(self, runtime_id: str) -> Any | None:
         """注销 Runtime，返回被移除的实例（不存在则返回 None，幂等）。"""
         self._priorities.pop(runtime_id, None)
         self._exit_monitor_runtimes.discard(runtime_id)
+        self._monitor_states.pop(runtime_id, None)
         return self._runtimes.pop(runtime_id, None)
 
     def get(self, runtime_id: str) -> Any | None:
@@ -194,7 +272,7 @@ class RuntimeCoordinator:
 
     async def _exit_monitor_loop(self) -> None:
         """自然退出监控循环：轮询 Runtime 状态，到达终态时触发回调。"""
-        while not self._stopped:
+        while self._state != CoordinatorState.CLOSED:
             await asyncio.sleep(0.5)
             for rid, rt in list(self._runtimes.items()):
                 if rid in self._exit_monitor_runtimes:
@@ -232,31 +310,50 @@ class RuntimeCoordinator:
             self._health_task = None
 
     async def _health_monitor_loop(self) -> None:
-        """健康监控循环：定期调用各 Runtime 的 health_check。"""
-        while not self._stopped:
+        """健康监控循环：定期调用各 Runtime 的 health_check。
+
+        使用 RuntimeMonitorState 去重：HEALTHY→UNHEALTHY 只触发一次故障回调，
+        恢复后重置，再次故障可重新触发。
+        """
+        while self._state != CoordinatorState.CLOSED:
             await asyncio.sleep(self._health_interval)
             for rid, rt in list(self._runtimes.items()):
                 if not rt.capabilities.supports_health_check:
                     continue
+                mstate = self._monitor_states.setdefault(
+                    rid, RuntimeMonitorState()
+                )
+                mstate.last_check_at = time.monotonic()
                 try:
                     health = await rt.health_check()
-                    if (
+                    is_unhealthy = (
                         hasattr(health, "state")
                         and str(health.state) == "unhealthy"
-                    ):
-                        logger.warning(
-                            "runtime %s is unhealthy: %s",
-                            rid,
-                            health,
-                        )
-                        for cb in self._exit_callbacks:
-                            try:
-                                await cb(rid, rt.status)
-                            except Exception:
-                                logger.exception(
-                                    "exit callback failed for runtime %s",
-                                    rid,
-                                )
+                    )
+                    if is_unhealthy:
+                        if not mstate.failure_reported:
+                            mstate.failure_reported = True
+                            mstate.last_health = "unhealthy"
+                            logger.warning(
+                                "runtime %s is unhealthy: %s",
+                                rid,
+                                health,
+                            )
+                            for cb in self._exit_callbacks:
+                                try:
+                                    await cb(rid, rt.status)
+                                except Exception:
+                                    logger.exception(
+                                        "exit callback failed for runtime %s",
+                                        rid,
+                                    )
+                        else:
+                            mstate.last_health = "unhealthy"
+                    else:
+                        if mstate.last_health == "unhealthy":
+                            mstate.last_health = "healthy"
+                            mstate.failure_reported = False
+                            logger.info("runtime %s recovered to healthy", rid)
                 except Exception:
                     logger.exception(
                         "health_check failed for runtime %s",
@@ -275,6 +372,16 @@ class RuntimeCoordinator:
             return
         await rt.stop(timeout=timeout)
 
+    async def begin_shutdown(self) -> None:
+        """切换到 CLOSING 状态，禁止新注册，但不停止 Runtime。
+
+        供 Application shutdown 第一阶段调用，尽早关闭 Admission。
+        幂等：已 CLOSING/CLOSED 时为空操作。
+        """
+        async with self._lock:
+            if self._state == CoordinatorState.OPEN:
+                self._state = CoordinatorState.CLOSING
+
     async def shutdown_all(
         self,
         *,
@@ -288,22 +395,31 @@ class RuntimeCoordinator:
         - 按 priority 升序停止（数值越小越先停止）。
         - 已调用过 shutdown_all 后再次调用为空操作。
         - 单个 Runtime 停止失败不阻止其他 Runtime 的停止。
+
+        状态转换：OPEN/CLOSING → CLOSING（锁内）→ 停止 Runtime（锁外）→ CLOSED（锁内）。
+        不在持有锁时 await Runtime.stop，避免死锁。
         """
-        if self._stopped:
-            return ShutdownReport()
-        self._stopped = True
+        async with self._lock:
+            if self._state == CoordinatorState.CLOSED:
+                return ShutdownReport()
+            self._state = CoordinatorState.CLOSING
 
         await self.stop_health_monitor()
         await self.stop_exit_monitor()
 
-        runtimes = list(self._runtimes.values())
+        async with self._lock:
+            runtimes = list(self._runtimes.values())
+            priorities = dict(self._priorities)
+
         if not runtimes:
+            async with self._lock:
+                self._state = CoordinatorState.CLOSED
             return ShutdownReport()
 
         prt = per_runtime_timeout or timeout
         sorted_runtimes = sorted(
             runtimes,
-            key=lambda rt: self._priorities.get(rt.runtime_id, 0),
+            key=lambda rt: priorities.get(rt.runtime_id, 0),
         )
 
         try:
@@ -328,6 +444,10 @@ class RuntimeCoordinator:
                 report.timed_out.append(rt.runtime_id)
             else:
                 report.failed[rt.runtime_id] = err or "unknown error"
+
+        async with self._lock:
+            self._state = CoordinatorState.CLOSED
+
         if report.has_errors:
             logger.warning(
                 "shutdown_all completed with %d failures, %d timeouts: %s",
@@ -391,6 +511,7 @@ class RuntimeCoordinator:
             self._runtimes.pop(rid, None)
             self._priorities.pop(rid, None)
             self._exit_monitor_runtimes.discard(rid)
+            self._monitor_states.pop(rid, None)
         return terminal_ids
 
     @property
@@ -406,4 +527,4 @@ class RuntimeCoordinator:
     @property
     def is_closed(self) -> bool:
         """Coordinator 是否已关闭。"""
-        return self._stopped
+        return self._state == CoordinatorState.CLOSED
