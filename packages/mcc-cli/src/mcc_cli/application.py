@@ -101,21 +101,80 @@ class AgentApplication:
         return await self._coordinator.health_check_all()
 
     async def shutdown(self, *, timeout: float = 10.0) -> None:
-        """关闭所有 Runtime 与 MCP 子进程，幂等，聚合异常不抛出。"""
+        """完整 8 步注销事务，幂等，聚合异常不抛出。
+
+        顺序遵循方案 §8.3 注销事务：
+        1. 标记 STOPPING — 阻止新注册与新任务
+        2. 优雅关闭 TeammateManager — 通过消息总线发送 shutdown（需 runtime 存活）
+        3. 取消所有运行中任务 — 向活跃 Runtime 发送 cancel 信号
+        4. 停止所有 Runtime — 含停止健康/退出监控，按优先级停止
+        5. 关闭 MCP 子进程
+        6. 关闭 EventSource — 关闭事件管道
+        7. 清理终端 — 移除已到达终态的 Runtime
+        8. 汇总报告 — 记录失败与超时
+        """
         if self._shutdown:
             return
         self._shutdown = True
+
+        # Step 2: 优雅关闭 TeammateManager（需 runtime 存活才能通过消息总线通信）
+        if self._team_manager is not None:
+            try:
+                await self._team_manager.shutdown_all()
+            except Exception:
+                logger.warning(
+                    "shutdown step 2: team_manager.shutdown_all failed",
+                    exc_info=True,
+                )
+
+        # Step 3: 取消所有运行中任务
+        try:
+            await self._coordinator.cancel_all()
+        except Exception:
+            logger.warning(
+                "shutdown step 3: coordinator.cancel_all failed",
+                exc_info=True,
+            )
+
+        # Step 4: 停止所有 Runtime（含停止健康/退出监控）
+        report = await self._coordinator.stop_all(timeout=timeout)
+
+        # Step 5: 关闭 MCP 子进程
         if self._mcp_manager is not None:
             try:
                 await self._mcp_manager.close_all()
             except Exception:
-                logger.warning("MCP close_all failed", exc_info=True)
-        report = await self._coordinator.stop_all(timeout=timeout)
+                logger.warning(
+                    "shutdown step 5: mcp_manager.close_all failed",
+                    exc_info=True,
+                )
+
+        # Step 6: 关闭 EventSource
+        if self._event_source is not None:
+            try:
+                await self._event_source.shutdown(timeout=timeout)
+            except Exception:
+                logger.warning(
+                    "shutdown step 6: event_source.shutdown failed",
+                    exc_info=True,
+                )
+
+        # Step 7: 清理终端 Runtime
+        try:
+            self._coordinator.clear_terminal()
+        except Exception:
+            logger.warning(
+                "shutdown step 7: coordinator.clear_terminal failed",
+                exc_info=True,
+            )
+
+        # Step 8: 汇总报告
         if report.has_errors:
             logger.warning(
-                "shutdown completed with %d failure(s): %s",
+                "shutdown completed with %d failure(s), %d timeout(s): %s",
                 len(report.failed),
-                report.failed,
+                len(report.timed_out),
+                {"failed": report.failed, "timed_out": report.timed_out},
             )
 
     # -- 团队操作 --
