@@ -299,12 +299,15 @@ def _wire_subagent_workflow(
 ) -> tuple[Any, Any]:
     """SubagentRunner + Workflow 运行时（可信代码编排多步调用）。"""
     from mcc_harness import SpawnSubagentTool, SubagentRunner, default_presets
+    from mcc_harness.execution import DefaultAgentFactory
 
+    agent_factory = DefaultAgentFactory()
     runner = SubagentRunner(
         llm=llm,
         registry=registry,
         concurrency=4,
         hooks=hooks,
+        agent_factory=agent_factory,
     )
     registry.register(
         SpawnSubagentTool(
@@ -346,10 +349,12 @@ def _wire_team(
         TeamOrchestrator,
         register_team_tools,
     )
+    from mcc_harness.execution import DefaultAgentFactory
 
     bus = MessageBus(work_dir)
     plan_store = PlanStore()
     agent_registry = AgentRegistry()
+    agent_factory = DefaultAgentFactory()
 
     from mcc_core.runtime import InMemoryTaskStore
     from mcc_harness.runtime import TaskDispatcher, TaskStoreAdapter
@@ -384,6 +389,7 @@ def _wire_team(
         coordinator=coordinator,
         agent_registry=agent_registry,
         orchestrator=orchestrator,
+        agent_factory=agent_factory,
     )
     register_team_tools(registry, team_manager)
     return team_manager, orchestrator

@@ -243,6 +243,7 @@ class TeammateRuntime:
         permission: PermissionChecker | None = None,
         lead_name: str = LEAD_NAME,
         executor: TeammateExecutor | None = None,
+        agent_factory: Any | None = None,
     ) -> None:
         self.spec = spec
         self._llm = llm
@@ -256,6 +257,7 @@ class TeammateRuntime:
         self._permission = permission
         self._lead_name = lead_name
         self._executor = executor
+        self._agent_factory = agent_factory
 
         self._task: asyncio.Task[None] | None = None
         self._shutdown_evt = asyncio.Event()
@@ -647,6 +649,20 @@ class TeammateRuntime:
         in_m, out_m = model_price_per_1m(self.spec.model)
         budget_usd = self.spec.budget_tokens / 1_000_000.0 * (in_m + out_m) / 2.0
 
+        if self._agent_factory is not None:
+            return self._agent_factory.build_agent_loop(
+                llm=self._llm,
+                registry=teammate_registry,
+                ctx=ctx,
+                system=self.spec.system,
+                model=self.spec.model,
+                max_tokens=self.spec.max_tokens,
+                max_iterations=self.spec.max_iterations,
+                temperature=0.0,
+                permission=self._permission,
+                max_cost_usd=budget_usd,
+                hooks=self._hooks,
+            )
         return AgentLoop(
             llm=self._llm,
             registry=teammate_registry,
@@ -779,6 +795,7 @@ class TeammateManager:
         coordinator: Any | None = None,
         agent_registry: Any | None = None,
         orchestrator: Any | None = None,
+        agent_factory: Any | None = None,
     ) -> None:
         self._llm = llm
         self._registry = registry
@@ -793,6 +810,7 @@ class TeammateManager:
         self._permission = permission
         self._agent_registry = agent_registry
         self._orchestrator = orchestrator
+        self._agent_factory = agent_factory
         if coordinator is None:
             from .runtime.coordinator import RuntimeCoordinator
 
@@ -863,6 +881,7 @@ class TeammateManager:
             worktree_enabled=self._worktree_enabled,
             hooks=self._hooks,
             permission=self._permission,
+            agent_factory=self._agent_factory,
         )
 
         from .runtime.persistent import PersistentRuntimeV2

@@ -468,6 +468,7 @@ class SubagentRunner:
         permission_auto_allow: frozenset[str] = frozenset(),
         permission_timeout_secs: float = 30.0,
         budget_ledger: BudgetLedger | None = None,
+        agent_factory: Any | None = None,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -478,6 +479,7 @@ class SubagentRunner:
         self._permission_auto_allow = permission_auto_allow
         self._permission_timeout_secs = permission_timeout_secs
         self._budget_ledger = budget_ledger
+        self._agent_factory = agent_factory
 
     async def run(
         self,
@@ -531,21 +533,38 @@ class SubagentRunner:
                     timeout_secs=self._permission_timeout_secs,
                 )
 
-            agent = AgentLoop(
-                llm=self.llm,
-                registry=self.registry.subset(spec.tools),
-                ctx=ctx,
-                system=spec.system,
-                model=spec.model,
-                max_tokens=spec.max_tokens,
-                max_iterations=spec.max_iterations,
-                temperature=0.0,
-                permission=self.permission,
-                max_cost_usd=token_budget_to_usd(spec.budget_tokens, spec.model),
-                hooks=self.hooks,
-                permission_responses=channel.response_queue,
-                permission_timeout_secs=self._permission_timeout_secs,
-            )
+            if self._agent_factory is not None:
+                agent = self._agent_factory.build_agent_loop(
+                    llm=self.llm,
+                    registry=self.registry.subset(spec.tools),
+                    ctx=ctx,
+                    system=spec.system,
+                    model=spec.model,
+                    max_tokens=spec.max_tokens,
+                    max_iterations=spec.max_iterations,
+                    temperature=0.0,
+                    permission=self.permission,
+                    max_cost_usd=token_budget_to_usd(spec.budget_tokens, spec.model),
+                    hooks=self.hooks,
+                    permission_responses=channel.response_queue,
+                    permission_timeout_secs=self._permission_timeout_secs,
+                )
+            else:
+                agent = AgentLoop(
+                    llm=self.llm,
+                    registry=self.registry.subset(spec.tools),
+                    ctx=ctx,
+                    system=spec.system,
+                    model=spec.model,
+                    max_tokens=spec.max_tokens,
+                    max_iterations=spec.max_iterations,
+                    temperature=0.0,
+                    permission=self.permission,
+                    max_cost_usd=token_budget_to_usd(spec.budget_tokens, spec.model),
+                    hooks=self.hooks,
+                    permission_responses=channel.response_queue,
+                    permission_timeout_secs=self._permission_timeout_secs,
+                )
 
             tx: asyncio.Queue = asyncio.Queue()
 

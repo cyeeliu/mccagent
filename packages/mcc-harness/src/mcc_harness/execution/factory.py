@@ -76,6 +76,45 @@ class DefaultAgentFactory:
             agent_id=agent_id,
         )
 
+    @staticmethod
+    def build_agent_loop(
+        *,
+        llm: Any,
+        registry: Any,
+        ctx: Any,
+        system: str = "",
+        model: str = "claude-sonnet-4-6",
+        max_tokens: int = 8192,
+        max_iterations: int = 40,
+        temperature: float = 0.0,
+        permission: Any | None = None,
+        max_cost_usd: float = 0.0,
+        hooks: Any | None = None,
+        permission_responses: Any | None = None,
+        permission_timeout_secs: float = 120.0,
+    ) -> Any:
+        """统一 AgentLoop 构造入口（AR-001）。
+
+        所有 AgentLoop 实例必须经此方法创建，禁止直接构造。
+        """
+        from mcc_harness.agent import AgentLoop
+
+        return AgentLoop(
+            llm=llm,
+            registry=registry,
+            ctx=ctx,
+            system=system,
+            model=model,
+            max_tokens=max_tokens,
+            max_iterations=max_iterations,
+            temperature=temperature,
+            permission=permission,
+            max_cost_usd=max_cost_usd,
+            hooks=hooks,
+            permission_responses=permission_responses,
+            permission_timeout_secs=permission_timeout_secs,
+        )
+
     def build_interactive_runtime_v2(
         self,
         builder: Any,
