@@ -657,7 +657,7 @@ def build_source(
     subagent_model = resolve_model("subagent", config=config)
     summarize_model = resolve_model("summarize", config=config)
 
-    from mcc_harness import RuntimeCoordinator, RuntimeFactory
+    from mcc_harness import RuntimeCoordinator
 
     coordinator = RuntimeCoordinator()
     _runner, workflow_tool = _wire_subagent_workflow(
@@ -683,13 +683,25 @@ def build_source(
 
     obs_sink = _wire_observability(config, work_dir, sid, builder)
 
-    agent = builder.build()
+    from mcc_harness.execution import DefaultAgentFactory
 
     from mcc_cli.slash import build_default_registry
 
-    factory = RuntimeFactory()
-    runtime = factory.create_interactive(agent, session_id=sid, agent_id="main")
+    agent_factory = DefaultAgentFactory()
+    runtime = agent_factory.build_interactive_runtime_v2(
+        builder, session_id=sid, agent_id="main",
+    )
+    agent = runtime.agent
     coordinator.register(runtime)
+
+    from mcc_cli.application import AgentApplication
+
+    application = AgentApplication(
+        coordinator=coordinator,
+        mcp_manager=mcp_manager,
+        team_manager=team_manager,
+        orchestrator=orchestrator,
+    )
 
     return AgentEventSource(
         agent,
@@ -709,4 +721,5 @@ def build_source(
         coordinator=coordinator,
         orchestrator=orchestrator,
         mcp_manager=mcp_manager,
+        application=application,
     )

@@ -852,7 +852,24 @@ class StubRuntime:
         if self._raise_error is not None:
             raise self._raise_error
         if self._raise_timeout:
-            raise WaitTimeoutError("timed out")
+            raise WaitTimeoutError("rt-stub", 1.0)
+        self._status = self._result.status
+        return self._result
+
+    async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
+        self.call_log.append(f"submit_task:{task}")
+        self.start_count += 1
+        self._status = RuntimeStatus.RUNNING
+        return task_id or f"task::{task}"
+
+    async def wait_task(self, task_id: str, *, timeout: float | None = None) -> RuntimeResult:
+        self.call_log.append("wait_task")
+        if self._delay > 0:
+            await asyncio.sleep(self._delay)
+        if self._raise_error is not None:
+            raise self._raise_error
+        if self._raise_timeout:
+            raise WaitTimeoutError("rt-stub", 1.0)
         self._status = self._result.status
         return self._result
 
@@ -983,6 +1000,15 @@ class TestOrchestratorExecutionLoop:
                 self._status = self._result.status
                 return self._result
 
+            async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
+                await self.start(task, task_id=task_id)
+                return task_id or f"task::{task}"
+
+            async def wait_task(
+                self, task_id: str, *, timeout: float | None = None,
+            ) -> RuntimeResult:
+                return await self.wait_done(timeout=timeout)
+
         rt1 = TimedStubRuntime("rt-1")
         rt2 = TimedStubRuntime("rt-2")
         coordinator.register(rt1)
@@ -1034,6 +1060,11 @@ class TestOrchestratorExecutionLoop:
                     summary="ok",
                 )
 
+            async def wait_task(
+                self, task_id: str, *, timeout: float | None = None,
+            ) -> RuntimeResult:
+                return await self.wait_done(timeout=timeout)
+
         rt = RetryStubRuntime("rt-1")
         coordinator.register(rt)
         orch.bind_runtime(agent_ids[0], "rt-1")
@@ -1041,8 +1072,8 @@ class TestOrchestratorExecutionLoop:
         run = await orch.start(team, "build feature A")
         original_execute = orch._execute_assignment
 
-        async def patched_execute(run_id, assignment, semaphore, max_attempts=1):
-            return await original_execute(run_id, assignment, semaphore, max_attempts=3)
+        async def patched_execute(run_id, assignment, semaphore, max_attempts=1, **kwargs):
+            return await original_execute(run_id, assignment, semaphore, max_attempts=3, **kwargs)
 
         with unittest.mock.patch.object(orch, "_execute_assignment", patched_execute):
             run = await orch.execute_run(run.run_id)
@@ -1405,7 +1436,7 @@ class TestOrchestratorPersistentExecution:
                 self, task_id: str, *, timeout: float | None = None,
             ) -> RuntimeResult:
                 self.wait_task_count += 1
-                raise WaitTimeoutError("task timed out")
+                raise WaitTimeoutError("rt-stub", 1.0)
 
         orch = TeamOrchestrator(
             registry=registry, bus=bus, plan_store=plan_store,

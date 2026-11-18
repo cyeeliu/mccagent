@@ -45,7 +45,7 @@ async def _create_session_with_history(
     from mcc_core import Message
     from mcc_session import TurnSnapshot
 
-    recorder = SessionRecorder.open_sync(sid, work_dir)
+    recorder = SessionRecorder.open_sync(sid, work_dir, base_dir=work_dir)
     turn = TurnSnapshot(
         ts=datetime.now(UTC),
         iteration=0,
@@ -75,7 +75,7 @@ async def test_resume_full_flow_through_tui_mode(tmp_path: Path):
 
     # 2. 创建当前会话（模拟用户刚启动 mcc）
     current_sid = "cur99999"
-    SessionRecorder.open_sync(current_sid, tmp_path)
+    SessionRecorder.open_sync(current_sid, tmp_path, base_dir=tmp_path)
 
     # 3. 构建 AgentEventSource
     agent = _MockAgent()
@@ -86,6 +86,7 @@ async def test_resume_full_flow_through_tui_mode(tmp_path: Path):
         session_short_id=current_sid,
         selection_responses=selection_responses,
     )
+    source.session_base_dir = tmp_path
 
     captured: list = []
 
@@ -200,7 +201,7 @@ async def test_resume_marks_current_session(tmp_path: Path):
     current_sid = "curr0003"
     await _create_session_with_history(tmp_path, sid1, "msg1", "reply1")
     await _create_session_with_history(tmp_path, sid2, "msg2", "reply2")
-    SessionRecorder.open_sync(current_sid, tmp_path)
+    SessionRecorder.open_sync(current_sid, tmp_path, base_dir=tmp_path)
 
     agent = _MockAgent()
     selection_responses: asyncio.Queue = asyncio.Queue()
@@ -210,6 +211,7 @@ async def test_resume_marks_current_session(tmp_path: Path):
         session_short_id=current_sid,
         selection_responses=selection_responses,
     )
+    source.session_base_dir = tmp_path
 
     events = []
     async for ev in source.run("/resume"):

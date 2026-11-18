@@ -1,6 +1,6 @@
 # 子代理（Subagents）
 
-主代理通过 `spawn_subagent` 工具把一次性任务派给子代理：子代理在**独立上下文**中啃大量原始资料，只把精炼结论返还主代理——适合"读 100 个文件只为一个小答案"的场景，也用于并行 fan-out。执行通过 `EphemeralRuntime` 适配 `SubagentRunner`，由 `RuntimeCoordinator` 统一管理生命周期（注册 → start → wait_done → 注销），`coordinator` 为 `None` 时自动创建默认实例。
+主代理通过 `spawn_subagent` 工具把一次性任务派给子代理：子代理在**独立上下文**中啃大量原始资料，只把精炼结论返还主代理——适合"读 100 个文件只为一个小答案"的场景，也用于并行 fan-out。执行通过 `TaskRuntime`（包装 `SubagentExecutor`）适配，由 `RuntimeCoordinator` 统一管理生命周期（注册 → start → wait_done → 注销），`coordinator` 为 `None` 时自动创建默认实例。
 
 ## 预设角色
 
@@ -18,7 +18,7 @@
 |---|---|
 | 超时 | `asyncio.wait_for` 强制截断，返回 `reason=timeout` 的错误结果而非异常 |
 | token 预算 | `budget_tokens` 按模型定价折算为单次运行 USD 上限，复用主循环成本熔断 |
-| 并发上限 | `asyncio.Semaphore`（默认 4），超出的派生排队等待；每个子代理以独立 `EphemeralRuntime` 实例运行，由 `RuntimeCoordinator` 统一管理生命周期 |
+| 并发上限 | `asyncio.Semaphore`（默认 4），超出的派生排队等待；每个子代理以独立 `TaskRuntime` 实例运行，由 `RuntimeCoordinator` 统一管理生命周期 |
 
 ## 递归防护（双保险）
 
@@ -33,7 +33,7 @@
 
 ## Fan-out 用法
 
-主代理单轮发出多个 `spawn_subagent` 调用，主循环的并行工具执行自动 fan-out。每个子代理以独立 `EphemeralRuntime` 实例注册到 `RuntimeCoordinator` 并行执行，结果映射为 `ToolOutput` 返回。`commands/analyze-repo.json` 记录了教科书用例——4 个 `code_explorer` 并行分析仓库不同侧面（入口 / 核心模块 / I/O 层 / 测试组织），主代理收到 4 份摘要后综合成整体架构说明。
+主代理单轮发出多个 `spawn_subagent` 调用，主循环的并行工具执行自动 fan-out。每个子代理以独立 `TaskRuntime` 实例注册到 `RuntimeCoordinator` 并行执行，结果映射为 `ToolOutput` 返回。`commands/analyze-repo.json` 记录了教科书用例——4 个 `code_explorer` 并行分析仓库不同侧面（入口 / 核心模块 / I/O 层 / 测试组织），主代理收到 4 份摘要后综合成整体架构说明。
 
 调用返回格式：
 

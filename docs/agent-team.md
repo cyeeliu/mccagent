@@ -8,12 +8,12 @@
 ```
 lead (主 AgentLoop)
  ├── spawn_teammate("coder", prompt="...")
- │    └── PersistentRuntime (包装 TeammateRuntime, 注册到 RuntimeCoordinator)
+ │    └── PersistentRuntimeV2 (BoundedTaskQueue + WorkerPool, 注册到 RuntimeCoordinator)
  │         └── TeammateRuntime (asyncio.Task)
  │              ├── WORK: consume inbox → AgentLoop.run → send_to_lead
  │              ├── IDLE: claim_task 或等待唤醒
  │              └── SHUTDOWN: lead request_shutdown
- ├── RuntimeCoordinator (管理所有 PersistentRuntime 生命周期)
+  ├── RuntimeCoordinator (管理所有 PersistentRuntimeV2 生命周期)
  ├── MessageBus (.mailboxes/{name}.jsonl)
  ├── PlanStore (plan approval 状态机)
  └── Worktree (.worktrees/{name}/ git 隔离)
@@ -64,15 +64,15 @@ teammate 发消息给 lead 时，lead 在下一轮交互前检查 inbox：
 
 | 工具 | 说明 |
 |------|------|
-| `spawn_teammate` | 启动长驻 teammate（name, role, prompt, model?, task_id?, require_plan?），创建 PersistentRuntime 注册到 RuntimeCoordinator |
+| `spawn_teammate` | 启动长驻 teammate（name, role, prompt, model?, task_id?, require_plan?），创建 PersistentRuntimeV2 注册到 RuntimeCoordinator |
 | `list_teammates` | 列出所有活跃 teammate 及状态 |
 | `send_message` | 向 teammate 发消息 |
-| `send_instruction` | 向运行中 teammate 发送运行时指令（经 PersistentRuntime.inject_instruction） |
+| `send_instruction` | 向运行中 teammate 发送运行时指令（经 PersistentRuntimeV2.inject_instruction） |
 | `assign_task` | 向 teammate 分配新任务（排队，不覆盖当前任务） |
-| `cancel_teammate` | 取消 teammate 当前任务（经 PersistentRuntime.cancel） |
-| `pause_teammate` | 暂停 teammate 执行（经 PersistentRuntime.pause） |
-| `resume_teammate` | 恢复 teammate 执行（经 PersistentRuntime.resume） |
-| `request_shutdown` | 请求 teammate 关闭（经 PersistentRuntime.stop + coordinator 注销） |
+| `cancel_teammate` | 取消 teammate 当前任务（经 PersistentRuntimeV2.cancel） |
+| `pause_teammate` | 暂停 teammate 执行（经 PersistentRuntimeV2.pause） |
+| `resume_teammate` | 恢复 teammate 执行（经 PersistentRuntimeV2.resume） |
+| `request_shutdown` | 请求 teammate 关闭（经 PersistentRuntimeV2.stop + coordinator 注销） |
 | `review_plan` | 审批或驳回 teammate 的 plan |
 | `create_worktree` | 为 task 创建隔离工作目录 |
 

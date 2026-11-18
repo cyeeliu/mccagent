@@ -1,9 +1,8 @@
-"""InteractiveRuntime：CLI 主 Agent 的交互式运行时。
+"""InteractiveRuntimeV2：CLI 主 Agent 的交互式运行时（新 Protocol）。
 
-多轮交互模型：start → idle → (run_turn → idle)* → stop → shutdown。
-同一 Session 默认禁止并发执行多个 turn（asyncio.Lock 保护）。
-通过 asyncio.Queue 桥接 AgentLoop.run_streaming 的 push 模型与
-run_turn 的 pull 模型（async generator）。
+多轮交互模型：start → ready → (submit → running → ready)* → stop → stopped。
+通过 AgentLoopExecutor 执行任务，通过 subscribe_events 获取事件流。
+保留 run_turn 方法供 CLI TUI 兼容使用。
 """
 
 from __future__ import annotations
@@ -15,30 +14,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
-from mcc_core import AgentEvent, Usage
-
-from .base import (
-    RuntimeConfig,
-    RuntimeMode,
-    RuntimeResult,
-    RuntimeStatus,
-    _terminal_result,
-)
-
-_ACTIVE_STATUSES = frozenset({
-    RuntimeStatus.STARTING,
-    RuntimeStatus.RUNNING,
-    RuntimeStatus.IDLE,
-    RuntimeStatus.PAUSED,
-})
+from mcc_core import AgentEvent
 
 
-class InteractiveRuntime:
-    """交互式运行时：包装 AgentLoop 的多轮对话。
+class InteractiveRuntimeV2:
+    """InteractiveRuntimeV2：实现 mcc_core.runtime.protocols.AgentRuntime。
 
-    持有构建完成的 AgentLoop，通过 run_turn 驱动每一轮流式执行。
-    同一实例禁止并发执行多个 turn（asyncio.Lock）。
-    stop/cancel 在下一安全边界生效（cancel_event 协作取消）。
+    Phase 4 交付物：新 Protocol InteractiveRuntimeV2 实现。
     """
 
     def __init__(
@@ -49,101 +31,289 @@ class InteractiveRuntime:
         session_id: str = "",
         agent_id: str = "",
     ) -> None:
+        from mcc_core.runtime import INTERACTIVE_CAPABILITIES
+
+        from mcc_harness.execution.agent_loop_executor import AgentLoopExecutor
+
         self._agent = agent
         self._runtime_id = runtime_id or f"interactive::{uuid4().hex[:12]}"
         self._session_id = session_id
         self._agent_id = agent_id or self._runtime_id
+        self._capabilities = INTERACTIVE_CAPABILITIES
+        self._executor = AgentLoopExecutor(
+            agent,
+            runtime_id=self._runtime_id,
+            agent_id=self._agent_id,
+        )
+
+        from mcc_core.runtime import RuntimeStatus
+
         self._status = RuntimeStatus.CREATED
         self._turn_lock = asyncio.Lock()
         self._closed = False
-        self._done_event: asyncio.Event = asyncio.Event()
         self._cancel_event: asyncio.Event | None = None
         self._current_task: asyncio.Task[None] | None = None
         self._started_at: float = 0.0
-        self._result: RuntimeResult | None = None
-        self._last_usage: Usage | None = None
-        self._last_cost: float = 0.0
+        self._active_tasks: int = 0
+        self._event_seq = 0
+        self._event_listeners: list[asyncio.Queue] = []
 
     @property
     def runtime_id(self) -> str:
         return self._runtime_id
 
     @property
-    def status(self) -> RuntimeStatus:
+    def agent_id(self) -> str:
+        return self._agent_id
+
+    @property
+    def status(self) -> Any:
         return self._status
 
     @property
     def alive(self) -> bool:
-        return self._status in _ACTIVE_STATUSES
+        from mcc_core.runtime import RuntimeStatus
+
+        return self._status in (
+            RuntimeStatus.STARTING,
+            RuntimeStatus.READY,
+            RuntimeStatus.PAUSING,
+            RuntimeStatus.PAUSED,
+        )
+
+    @property
+    def capabilities(self) -> Any:
+        return self._capabilities
+
+    @property
+    def agent(self) -> Any:
+        return self._agent
 
     @property
     def session_id(self) -> str:
         return self._session_id
 
-    @property
-    def agent_id(self) -> str:
-        return self._agent_id
+    async def start(self) -> None:
+        from mcc_core.runtime import RuntimeStatus
 
-    @property
-    def config(self) -> RuntimeConfig:
-        tool_names: list[str] = []
-        tool_reg = getattr(self._agent, "registry", None)
-        if tool_reg is not None and hasattr(tool_reg, "names"):
-            tool_names = list(tool_reg.names())
-        return RuntimeConfig(
-            name=self._agent_id,
-            mode=RuntimeMode.INTERACTIVE,
-            session_id=self._session_id,
-            agent_id=self._agent_id,
-            capabilities=tool_names,
+        if self._closed:
+            raise RuntimeError(f"interactive runtime {self._runtime_id} is closed")
+        if self._status is RuntimeStatus.READY:
+            raise RuntimeError(f"interactive runtime {self._runtime_id} already started")
+        self._started_at = time.monotonic()
+        self._status = RuntimeStatus.STARTING
+        await self._emit_event("runtime_started")
+        self._status = RuntimeStatus.READY
+        await self._emit_event("runtime_ready")
+
+    async def submit(self, task: Any) -> Any:
+        from mcc_core.runtime import RuntimeStatus
+        from mcc_core.runtime.errors import RuntimeNotReadyError
+        from mcc_core.runtime.handle import TaskHandle
+
+        if self._status is not RuntimeStatus.READY:
+            raise RuntimeNotReadyError(self._runtime_id, str(self._status))
+        if self._active_tasks > 0:
+            raise RuntimeNotReadyError(self._runtime_id, "已有活跃任务")
+        self._active_tasks += 1
+        handle = TaskHandle(
+            task_id=task.task_id,
+            attempt_id=task.attempt_id,
+            runtime_id=self._runtime_id,
+        )
+        await self._emit_event(
+            "task_accepted",
+            task_id=task.task_id,
+            attempt_id=task.attempt_id,
+        )
+        asyncio.create_task(self._execute_task(task))
+        return handle
+
+    async def _execute_task(self, task: Any) -> None:
+        from mcc_core.runtime import RuntimeStatus
+
+        self._status = RuntimeStatus.READY
+        await self._emit_event(
+            "task_started",
+            task_id=task.task_id,
+            attempt_id=task.attempt_id,
+        )
+        try:
+            result = await self._executor.execute(task)
+            event_type = "task_completed" if result.is_success else "task_failed"
+            await self._emit_event(
+                event_type,
+                task_id=task.task_id,
+                attempt_id=task.attempt_id,
+                payload={"status": str(result.status)},
+            )
+        except Exception as exc:
+            await self._emit_event(
+                "task_failed",
+                task_id=task.task_id,
+                attempt_id=task.attempt_id,
+                payload={"error": str(exc)},
+            )
+        finally:
+            self._active_tasks -= 1
+
+    async def cancel_task(
+        self, task_id: str, attempt_id: str, reason: str | None = None,
+    ) -> None:
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        await self._emit_event(
+            "task_cancelled",
+            task_id=task_id,
+            attempt_id=attempt_id,
+            payload={"reason": reason} if reason else {},
         )
 
-    async def start(self, task: str = "", *, task_id: str | None = None) -> None:
-        """标记运行时就绪，进入 IDLE 状态等待 turn。
+    async def pause(self) -> None:
+        from mcc_core.runtime.errors import UnsupportedOperationError
 
-        task 参数保留用于满足 AgentRuntime 协议签名，
-        实际执行通过 run_turn 驱动。
-        """
-        if self._closed:
-            raise RuntimeError(
-                f"interactive runtime {self._runtime_id} is closed"
-            )
-        if self._status is RuntimeStatus.RUNNING:
-            raise RuntimeError(
-                f"interactive runtime {self._runtime_id} already running"
-            )
-        if self._status is RuntimeStatus.IDLE:
-            raise RuntimeError(
-                f"interactive runtime {self._runtime_id} already started"
-            )
-        self._started_at = time.monotonic()
-        self._result = None
-        self._status = RuntimeStatus.IDLE
+        raise UnsupportedOperationError("pause", self._runtime_id)
+
+    async def resume(self) -> None:
+        from mcc_core.runtime.errors import UnsupportedOperationError
+
+        raise UnsupportedOperationError("resume", self._runtime_id)
+
+    async def stop(
+        self,
+        timeout: float | None = None,
+        *,
+        cancel_running: bool = False,
+    ) -> None:
+        from mcc_core.runtime import RuntimeStatus
+
+        if self._status in (RuntimeStatus.STOPPED, RuntimeStatus.FAILED):
+            return
+        self._closed = True
+        self._status = RuntimeStatus.STOPPING
+        await self._emit_event("runtime_stopping")
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        if self._current_task is not None and not self._current_task.done():
+            self._current_task.cancel()
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                t = timeout if timeout is not None else 5.0
+                await asyncio.wait_for(self._current_task, timeout=t)
+        await self._executor.close()
+        self._status = RuntimeStatus.STOPPED
+        await self._emit_event("runtime_stopped")
+        for listener in self._event_listeners:
+            await listener.put(None)
+
+    def cancel(self) -> None:
+        """取消当前正在执行的 turn。"""
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        if self._current_task is not None and not self._current_task.done():
+            self._current_task.cancel()
+
+    async def wait_done(self, *, timeout: float | None = None) -> Any:
+        """等待当前任务完成。"""
+        if self._current_task is not None:
+            try:
+                if timeout is not None:
+                    await asyncio.wait_for(self._current_task, timeout=timeout)
+                else:
+                    await self._current_task
+            except (TimeoutError, asyncio.CancelledError):
+                pass
+        return self._status, None
+
+    async def health_check(self) -> Any:
+        from mcc_core.runtime import HealthState, RuntimeHealth, RuntimeStatus
+
+        uptime = time.monotonic() - self._started_at if self._started_at else 0.0
+        state = HealthState.HEALTHY
+        if self._status is RuntimeStatus.FAILED:
+            state = HealthState.UNHEALTHY
+        elif self._status in (RuntimeStatus.STOPPING, RuntimeStatus.STOPPED):
+            state = HealthState.UNKNOWN
+        return RuntimeHealth(
+            runtime_id=self._runtime_id,
+            state=state,
+            active_tasks=self._active_tasks,
+            uptime_seconds=uptime,
+        )
+
+    def subscribe_events(
+        self,
+        *,
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> AsyncIterator[Any]:
+        return self._event_iterator(task_id=task_id, attempt_id=attempt_id)
+
+    async def _event_iterator(
+        self,
+        *,
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> AsyncIterator[Any]:
+        queue: asyncio.Queue = asyncio.Queue()
+        self._event_listeners.append(queue)
+        try:
+            while True:
+                ev = await queue.get()
+                if ev is None:
+                    break
+                if task_id is not None and ev.task_id != task_id:
+                    continue
+                if attempt_id is not None and ev.attempt_id != attempt_id:
+                    continue
+                yield ev
+        finally:
+            if queue in self._event_listeners:
+                self._event_listeners.remove(queue)
+
+    async def _emit_event(
+        self,
+        event_type: str,
+        *,
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from mcc_core.runtime import RuntimeEvent, RuntimeEventType
+
+        self._event_seq += 1
+        event = RuntimeEvent(
+            event_id=f"evt-{uuid4().hex[:12]}",
+            event_type=RuntimeEventType(event_type),
+            runtime_id=self._runtime_id,
+            agent_id=self._agent_id,
+            task_id=task_id,
+            attempt_id=attempt_id,
+            sequence=self._event_seq,
+            occurred_at=datetime.now(UTC),
+            payload=payload or {},
+        )
+        for listener in self._event_listeners:
+            await listener.put(event)
 
     async def run_turn(self, prompt: str) -> AsyncIterator[AgentEvent]:
-        """执行一个交互轮次，产出 AgentEvent 事件流。
-
-        同一实例禁止并发执行多个 turn（asyncio.Lock 保护）。
-        cancel_event 在下一迭代边界协作取消。
-        """
+        """CLI TUI 兼容接口：执行一个交互轮次，产出 AgentEvent 事件流。"""
         if self._closed:
             raise RuntimeError(
                 f"interactive runtime {self._runtime_id} is closed"
             )
         async with self._turn_lock:
-            self._status = RuntimeStatus.RUNNING
             self._cancel_event = asyncio.Event()
             queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
 
             async def worker() -> None:
                 try:
-                    run = await self._agent.run_streaming(
+                    await self._agent.run_streaming(
                         prompt,
                         queue,
                         cancel_event=self._cancel_event,
                     )
-                    self._last_usage = run.total_usage
-                    self._last_cost = run.cost_usd
                 except Exception as exc:
                     from mcc_core import Error as ErrorEvent
 
@@ -165,57 +335,3 @@ class InteractiveRuntime:
                     await asyncio.gather(task, return_exceptions=True)
                 self._current_task = None
                 self._cancel_event = None
-                if not self._closed:
-                    self._status = RuntimeStatus.IDLE
-
-    async def stop(self, *, timeout: float = 5.0) -> None:
-        """关闭运行时，取消当前 turn 并等待退出。"""
-        if self._closed:
-            return
-        self._closed = True
-        self._done_event.set()
-        if self._cancel_event is not None:
-            self._cancel_event.set()
-        if self._current_task is not None and not self._current_task.done():
-            self._current_task.cancel()
-            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
-                await asyncio.wait_for(self._current_task, timeout=timeout)
-        self._status = RuntimeStatus.SHUTDOWN
-
-    def cancel(self) -> None:
-        """发送取消信号（协作式，下一迭代边界生效）。"""
-        if self._cancel_event is not None:
-            self._cancel_event.set()
-
-    async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
-        """等待运行时到达终态。
-
-        InteractiveRuntime 需要外部调用 stop() 后才会到达终态。
-        未关闭时阻塞等待直到 stop() 被调用；timeout 到期时抛出 WaitTimeoutError。
-        """
-        from .base import WaitTimeoutError
-
-        if self._result is not None:
-            return self._result
-
-        if not self._closed:
-            try:
-                if timeout is not None:
-                    await asyncio.wait_for(self._done_event.wait(), timeout=timeout)
-                else:
-                    await self._done_event.wait()
-            except TimeoutError:
-                raise WaitTimeoutError(
-                    f"wait_done timed out after {timeout}s for {self._runtime_id}"
-                ) from None
-
-        self._result = _terminal_result(
-            self.runtime_id,
-            RuntimeStatus.SHUTDOWN,
-            summary="shutdown",
-            started_at=self._started_at,
-            agent_id=self._agent_id,
-            usage=self._last_usage,
-            cost_usd=self._last_cost,
-        )
-        return self._result

@@ -29,7 +29,7 @@
 | `mcc-llm` | `LlmProvider` 协议 + `AnthropicClient`（SSE 流式）+ `OpenAiClient`（Chat Completions 兼容）+ `MockLlm` |
 | `mcc-tools` | `ToolRegistry`（含 `subset` 筛选）+ 7 个文件/进程工具 |
 | `mcc-session` | `SessionRecorder`（JSONL + meta）+ `MarkdownMemoryStore` + 记忆工具 |
-| `mcc-harness` | `AgentLoop` 主循环 + `PermissionChecker` + Hook 机制 + 子代理 + runtime 协调层（`RuntimeCoordinator` / `InteractiveRuntime` / `EphemeralRuntime` / `PersistentRuntime`） |
+| `mcc-harness` | `AgentLoop` 主循环 + `PermissionChecker` + Hook 机制 + 子代理 + runtime 协调层（`RuntimeCoordinator` / `InteractiveRuntimeV2` / `TaskRuntime` / `PersistentRuntimeV2`） |
 | `mcc-tui` | Textual 应用、按键读取、消息渲染 |
 | `mcc-cli` | click 入口，装配全部组件 |
 
@@ -79,8 +79,8 @@ TextDelta  ToolCallStart    PermissionRequest
 
 工具在 `ToolContext`（cwd / session_id / depth）中执行；同一轮的多个调用并行执行，单个失败不中断其余。
 
-agent 派生工具（`spawn_subagent`、`spawn_teammate`）不走 `asyncio.gather` 直接调用路径，而是经由 runtime 协调层执行：创建 `EphemeralRuntime` / `PersistentRuntime` 实例 → 注册到 `RuntimeCoordinator` → `start` → `wait_done` → 将 `RuntimeResult` 映射为 `ToolOutput`。`runtime` / `coordinator` 参数为 `None` 时自动创建默认实例，确保唯一执行路径。
+agent 派生工具（`spawn_subagent`、`spawn_teammate`）不走 `asyncio.gather` 直接调用路径，而是经由 runtime 协调层执行：创建 `TaskRuntime` / `PersistentRuntimeV2` 实例 → 注册到 `RuntimeCoordinator` → `start` → `wait_done` → 将 `RuntimeResult` 映射为 `ToolOutput`。`runtime` / `coordinator` 参数为 `None` 时自动创建默认实例，确保唯一执行路径。
 
 ## 子代理
 
-`SubagentRunner` 复用 `AgentLoop`：预设规格（system / model / 工具子集 / 护栏）→ 派生深度 +1 的上下文 → 独立消息历史 → 只把精炼结论返还主代理。执行通过 `EphemeralRuntime` 适配，由 `RuntimeCoordinator` 统一管理生命周期（注册 → start → wait_done → 注销）。详见 [subagents.md](subagents.md)。
+`SubagentRunner` 复用 `AgentLoop`：预设规格（system / model / 工具子集 / 护栏）→ 派生深度 +1 的上下文 → 独立消息历史 → 只把精炼结论返还主代理。执行通过 `TaskRuntime`（包装 `SubagentExecutor`）适配，由 `RuntimeCoordinator` 统一管理生命周期（注册 → start → wait_done → 注销）。详见 [subagents.md](subagents.md)。

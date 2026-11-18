@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol, runtime_checkable
 
@@ -138,6 +137,7 @@ class AgentEventSource(EventSource):
         coordinator: Any | None = None,
         orchestrator: Any | None = None,
         mcp_manager: Any | None = None,
+        application: Any | None = None,
     ) -> None:
         self.agent = agent
         self._slash_resolver = slash_resolver
@@ -155,10 +155,10 @@ class AgentEventSource(EventSource):
         self.selection_responses = selection_responses
         self._mcp_manager = mcp_manager
         if runtime is None:
-            from mcc_harness import RuntimeFactory
+            from mcc_harness.execution import DefaultAgentFactory
 
-            factory = RuntimeFactory()
-            runtime = factory.create_interactive(agent)
+            agent_factory = DefaultAgentFactory()
+            runtime = agent_factory.create_interactive_runtime(agent)
         self._runtime = runtime
         if coordinator is None:
             from mcc_harness import RuntimeCoordinator
@@ -167,27 +167,38 @@ class AgentEventSource(EventSource):
             coordinator.register(runtime)
         self._coordinator = coordinator
         self.orchestrator = orchestrator
+        self._application = application
 
     @property
     def goal_controller(self) -> GoalController | None:
         return self._goal_controller
 
-    async def shutdown(self, *, timeout: float = 10.0) -> None:
-        """关闭所有 Runtime 与 MCP 子进程，幂等，聚合异常不抛出。"""
-        if self._mcp_manager is not None:
-            try:
-                await self._mcp_manager.close_all()
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "MCP close_all failed", exc_info=True
-                )
-        report = await self._coordinator.stop_all(timeout=timeout)
-        if report.has_errors:
-            logging.getLogger(__name__).warning(
-                "shutdown completed with %d failure(s): %s",
-                len(report.failed),
-                report.failed,
+    @property
+    def runtime(self) -> Any:
+        return self._runtime
+
+    @property
+    def coordinator(self) -> Any:
+        return self._coordinator
+
+    @property
+    def application(self) -> Any:
+        """返回关联的 AgentApplication，惰性创建。"""
+        if self._application is None:
+            from mcc_cli.application import AgentApplication
+
+            self._application = AgentApplication(
+                coordinator=self._coordinator,
+                mcp_manager=self._mcp_manager,
+                event_source=self,
+                team_manager=self.team_manager,
+                orchestrator=self.orchestrator,
             )
+        return self._application
+
+    async def shutdown(self, *, timeout: float = 10.0) -> None:
+        """委托给 AgentApplication 统一清理。"""
+        await self.application.shutdown(timeout=timeout)
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
         # slash 本地命令：/model /config /help /status /goal ——注册表

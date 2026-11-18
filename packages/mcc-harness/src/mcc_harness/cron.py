@@ -298,10 +298,7 @@ class CronScheduler:
                 else:
                     self._jobs.pop(current.id)
             if any(j.durable for j in jobs):
-                try:
-                    self._save_durable()
-                except Exception:
-                    raise
+                self._save_durable()
 
     async def restore(self, jobs: list[CronJob]) -> None:
         async with self._lock:

@@ -332,9 +332,10 @@ def _resume(source: Any, args: str) -> SlashResult:
     """
     from mcc_session import SessionNotFoundError, list_sessions, load_session
 
+    session_base_dir = getattr(source, "session_base_dir", None)
     stripped = args.strip()
     if not stripped:
-        metas = list_sessions()
+        metas = list_sessions(base_dir=session_base_dir)
         if not metas:
             return SlashResult(text="没有历史会话")
         current_sid = getattr(source, "session_short_id", "")
@@ -356,7 +357,7 @@ def _resume(source: Any, args: str) -> SlashResult:
         )
 
     try:
-        meta, history = load_session(stripped)
+        meta, history = load_session(stripped, base_dir=session_base_dir)
     except SessionNotFoundError as e:
         return SlashResult(text=f"错误: {e}")
 
@@ -385,56 +386,26 @@ async def _team(source: Any, args: str) -> SlashResult:
     有参数 → 将参数作为 objective，触发
     orchestrator.start → execute_run → collect_results 完整闭环。
     """
-    orchestrator = getattr(source, "orchestrator", None)
-    team_manager = getattr(source, "team_manager", None)
+    app = getattr(source, "application", None)
+    if app is None:
+        from mcc_cli.application import AgentApplication
 
-    if orchestrator is None or team_manager is None:
+        app = AgentApplication(
+            coordinator=getattr(source, "coordinator", None),
+            team_manager=getattr(source, "team_manager", None),
+            orchestrator=getattr(source, "orchestrator", None),
+        )
+
+    if not app.team_enabled:
         return SlashResult(text="团队功能未启用（config.team.enabled=false）")
 
     objective = args.strip()
 
     if not objective:
-        active = team_manager.list_active()
-        lines = [f"活跃 teammate: {len(active)}"]
-        for info in active:
-            lines.append(f"  {info.name} ({info.role}) — {info.status}")
-        return SlashResult(text="\n".join(lines))
+        return SlashResult(text=app.format_team_status())
 
     try:
-        team = orchestrator.create_team("default", "default", "lead")
-
-        specs = await orchestrator.planner.plan(objective)
-        active_names = {info.name for info in team_manager.list_active()}
-        for i in range(len(specs)):
-            worker_name = f"worker-{i + 1}"
-            if worker_name not in active_names:
-                await team_manager.spawn(
-                    name=worker_name,
-                    role="worker",
-                    prompt="",
-                )
-
-        run = await orchestrator.start(team, objective)
-
-        if not run.assignments:
-            return SlashResult(
-                text=f"TeamRun {run.run_id} 已启动但无任务分配（planner 返回空）"
-            )
-
-        await orchestrator.execute_run(run.run_id)
-        result = await orchestrator.collect_results(run.run_id)
-
-        lines = [
-            f"TeamRun {result.run_id} — {result.status.value}",
-            f"完成: {result.completed_count}/{result.total_count}, "
-            f"失败: {result.failed_count}",
-        ]
-        for r in result.results:
-            marker = "✓" if r.status == "completed" else "✗"
-            lines.append(
-                f"  {marker} {r.agent_id}: {r.summary or r.error or ''}"
-            )
-        return SlashResult(text="\n".join(lines))
+        return SlashResult(text=await app.run_team(objective))
     except Exception as e:
         return SlashResult(
             text=f"团队执行失败: {type(e).__name__}: {e}"

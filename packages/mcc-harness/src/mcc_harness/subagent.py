@@ -641,7 +641,7 @@ class SpawnSubagentTool:
     子代理的注册表来自 subset 筛选，不含本工具自身，
     深度上限作为第二道递归护栏。
 
-    当 coordinator 提供时，通过 EphemeralRuntime 执行并由
+    当 coordinator 提供时，通过 TaskRuntime 执行并由
     Coordinator 管理生命周期；否则回退到直接调用 runner.run。
     """
 
@@ -709,27 +709,53 @@ class SpawnSubagentTool:
     async def _run_via_runtime(
         self, spec: SubagentSpec, task: str, ctx: ToolContext
     ) -> ToolOutput:
-        """通过 EphemeralRuntime 执行，由 Coordinator 管理生命周期。
+        """通过 Runtime 执行，由 Coordinator 管理生命周期。
 
-        创建 EphemeralRuntime 并注册到 Coordinator，启动后等待终态，
-        将 RuntimeResult 映射为 ToolOutput 返回。注册失败（重复 ID）
-        时回退到直接调用路径。
+        统一使用 TaskRuntime + SubagentExecutor 执行，
+        将结果映为 ToolOutput。
         """
-        from .runtime.base import RuntimeStatus
+        return await self._run_via_task_runtime(spec, task, ctx)
+
+    async def _run_via_task_runtime(
+        self, spec: SubagentSpec, task: str, ctx: ToolContext
+    ) -> ToolOutput:
+        """V2 路径：通过 TaskRuntime + SubagentExecutor 执行。"""
+        from uuid import uuid4
+
+        from mcc_core.runtime import TaskStatus
+        from mcc_core.runtime.task import RuntimeTask
+
+        from .execution.subagent_executor import SubagentExecutor
         from .runtime.factory import RuntimeFactory
 
+        executor = SubagentExecutor(self.runner, spec, ctx)
         factory = RuntimeFactory()
-        rt = factory.create_ephemeral(self.runner, spec, ctx)
+        rt = factory.create_task(executor, agent_id=spec.name)
         self._coordinator.register(rt)
 
+        task_id = uuid4().hex[:12]
+        attempt_id = uuid4().hex[:12]
+        runtime_task = RuntimeTask(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            agent_id=spec.name,
+            objective=task,
+        )
+
         try:
-            await rt.start(task)
-            result = await rt.wait_done()
+            await rt.start()
+            await rt.submit(runtime_task)
+            result = await self._await_task_result(rt, task_id)
         except Exception as e:
             return ToolOutput.err(f"subagent failed: {e}")
         finally:
             with contextlib.suppress(Exception):
+                await rt.stop()
+            with contextlib.suppress(Exception):
                 self._coordinator.unregister(rt.runtime_id)
+
+        if result is None:
+            return ToolOutput.err(f"subagent {spec.name} produced no result")
 
         if result.usage is not None:
             tokens = f"{result.usage.input_tokens}in/{result.usage.output_tokens}out"
@@ -737,21 +763,31 @@ class SpawnSubagentTool:
             tokens = "unknown"
 
         _reason_map = {
-            RuntimeStatus.COMPLETED: "end_turn",
-            RuntimeStatus.TIMEOUT: "timeout",
-            RuntimeStatus.CANCELLED: "cancelled",
-            RuntimeStatus.BUDGET_EXCEEDED: "budget_exceeded",
-            RuntimeStatus.FAILED: "error",
+            TaskStatus.SUCCEEDED: "end_turn",
+            TaskStatus.TIMED_OUT: "timeout",
+            TaskStatus.CANCELLED: "cancelled",
+            TaskStatus.FAILED: "error",
         }
         reason = _reason_map.get(result.status, str(result.status))
         content = (
             f"[subagent={spec.name} status={result.status.value} "
             f"tokens={tokens} reason={reason}]\n{result.summary}"
         )
-        if result.status is RuntimeStatus.COMPLETED:
+        if result.status is TaskStatus.SUCCEEDED:
             return ToolOutput.ok(content)
         return ToolOutput.err(content)
 
+    async def _await_task_result(self, rt: Any, task_id: str) -> Any:
+        """轮询 TaskRuntime.get_result 直到结果就绪或超时。"""
+        import time
+
+        deadline = time.monotonic() + 300.0
+        while time.monotonic() < deadline:
+            result = rt.get_result(task_id)
+            if result is not None:
+                return result
+            await asyncio.sleep(0.05)
+        return None
 
 __all__ = [
     "CODE_EXPLORER_SYSTEM",

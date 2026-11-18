@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcc_core import (
     AgentError,
@@ -67,6 +67,15 @@ from mcc_harness.compactor import (
 from mcc_harness.interceptors import IterationContext
 
 from .goal import GoalController
+
+if TYPE_CHECKING:
+    from mcc_observability import ObservabilitySink
+
+    from mcc_harness.background import BackgroundTaskManager
+    from mcc_harness.cron import CronScheduler
+    from mcc_harness.interceptors import IterationInterceptor, LlmCallGuard
+    from mcc_harness.reliability import CircuitBreaker, RetryPolicy
+    from mcc_harness.security import SecurityPolicy
 from .hooks import HookContext, HookRegistry, HookType
 from .permission import (
     Allow,
@@ -1054,15 +1063,15 @@ class AgentLoopBuilder:
         self._todo: TodoManager | None = None
         self._todo_reminder_interval: int = 3
         self._tasks_enabled: bool = False
-        self._background: Any | None = None
-        self._cron: Any | None = None
-        self._observability: Any | None = None
-        self._security: Any | None = None
-        self._retry_policy: Any | None = None
-        self._circuit_breaker: Any | None = None
+        self._background: BackgroundTaskManager | None = None
+        self._cron: CronScheduler | None = None
+        self._observability: ObservabilitySink | None = None
+        self._security: SecurityPolicy | None = None
+        self._retry_policy: RetryPolicy | None = None
+        self._circuit_breaker: CircuitBreaker | None = None
         self._turn_timeout_secs: float = 0.0
-        self._extra_interceptors: list[Any] = []
-        self._extra_guards: list[Any] = []
+        self._extra_interceptors: list[IterationInterceptor] = []
+        self._extra_guards: list[LlmCallGuard] = []
         self._thinking: dict[str, Any] | None = None
 
     def system(self, s: str) -> AgentLoopBuilder:
@@ -1156,27 +1165,27 @@ class AgentLoopBuilder:
         self._tasks_enabled = b
         return self
 
-    def background(self, mgr: Any) -> AgentLoopBuilder:
+    def background(self, mgr: BackgroundTaskManager) -> AgentLoopBuilder:
         self._background = mgr
         return self
 
-    def cron(self, sched: Any) -> AgentLoopBuilder:
+    def cron(self, sched: CronScheduler) -> AgentLoopBuilder:
         self._cron = sched
         return self
 
-    def observability(self, sink: Any) -> AgentLoopBuilder:
+    def observability(self, sink: ObservabilitySink) -> AgentLoopBuilder:
         self._observability = sink
         return self
 
-    def security(self, policy: Any) -> AgentLoopBuilder:
+    def security(self, policy: SecurityPolicy) -> AgentLoopBuilder:
         self._security = policy
         return self
 
-    def retry_policy(self, policy: Any) -> AgentLoopBuilder:
+    def retry_policy(self, policy: RetryPolicy) -> AgentLoopBuilder:
         self._retry_policy = policy
         return self
 
-    def circuit_breaker(self, breaker: Any) -> AgentLoopBuilder:
+    def circuit_breaker(self, breaker: CircuitBreaker) -> AgentLoopBuilder:
         self._circuit_breaker = breaker
         return self
 
@@ -1184,13 +1193,13 @@ class AgentLoopBuilder:
         self._turn_timeout_secs = secs
         return self
 
-    def interceptor(self, it: Any) -> AgentLoopBuilder:
+    def interceptor(self, it: IterationInterceptor) -> AgentLoopBuilder:
         """注册自定义迭代拦截器（IterationInterceptor 协议），
         在内置拦截器之后按注册顺序执行。"""
         self._extra_interceptors.append(it)
         return self
 
-    def guard(self, g: Any) -> AgentLoopBuilder:
+    def guard(self, g: LlmCallGuard) -> AgentLoopBuilder:
         """注册自定义 LLM 调用守卫（LlmCallGuard 协议），
         在可靠性守卫之后按注册顺序包裹（后注册的更内层）。"""
         self._extra_guards.append(g)

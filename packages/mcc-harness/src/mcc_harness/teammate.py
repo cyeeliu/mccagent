@@ -24,7 +24,13 @@ from .hooks import HookRegistry
 from .mailbox import MessageBus
 from .permission import PermissionChecker
 from .plan import PlanStore
-from .runtime.base import RuntimeResult, RuntimeStatus, WaitTimeoutError, _terminal_result
+from .runtime.base import (
+    RuntimeResult,
+    RuntimeStatus,
+    RuntimeStopTimeoutError,
+    WaitTimeoutError,
+    _terminal_result,
+)
 from .runtime.state_machine import _PERSISTENT_TRANSITIONS
 
 LEAD_NAME = "lead"
@@ -333,7 +339,7 @@ class TeammateRuntime:
     def _set_task_future(
         self, outcome: TeammateStatus, summary: str,
     ) -> None:
-        """设置当前任务的 future 结果，供 PersistentRuntime.wait_task 等待。"""
+        """设置当前任务的 future 结果，供 PersistentRuntimeV2.wait_task 等待。"""
         task_id = self._current.task_id
         if task_id and task_id in self._task_futures:
             future = self._task_futures.pop(task_id)
@@ -421,7 +427,7 @@ class TeammateRuntime:
         for msg in inbox:
             if msg.kind == "shutdown":
                 self._shutdown_evt.set()
-            elif msg.kind in ("assignment", "message"):
+            elif msg.kind in ("task_submitted", "message"):
                 self._assignment_queue.append({
                     "content": msg.content,
                     "task_id": msg.task_id,
@@ -681,6 +687,7 @@ class TeammateRuntime:
                 self._force_stop = True
                 self._task.cancel()
                 await asyncio.gather(self._task, return_exceptions=True)
+                raise RuntimeStopTimeoutError(self.runtime_id, timeout) from None
 
     async def stop(self, *, timeout: float = 5.0) -> None:
         """AgentRuntime Protocol：委托 shutdown。"""
@@ -711,7 +718,7 @@ class TeammateRuntime:
             raise
         except TimeoutError:
             raise WaitTimeoutError(
-                f"wait_done timed out after {timeout}s for {self.runtime_id}"
+                self.runtime_id, timeout or 0.0,
             ) from None
         except asyncio.CancelledError:
             pass
@@ -858,12 +865,13 @@ class TeammateManager:
             permission=self._permission,
         )
 
-        from .runtime.persistent import PersistentRuntime
+        from .runtime.persistent import PersistentRuntimeV2
 
-        pr = PersistentRuntime(rt, self._bus, lead_name=LEAD_NAME)
+        pr = PersistentRuntimeV2.from_teammate(rt, self._bus, lead_name=LEAD_NAME)
         self._coordinator.register(pr)
         try:
             await rt.start(prompt, task_id=task_id)
+            await pr.start()
         except Exception:
             self._coordinator.unregister(pr.runtime_id)
             raise
@@ -901,10 +909,13 @@ class TeammateManager:
         return f"Instruction sent to {to}"
 
     async def assign_task(self, to: str, content: str) -> str:
-        """lead 向 teammate 分配新任务（排队，不覆盖当前任务）。"""
+        """lead 向 teammate 分配新任务（排队，不覆盖当前任务）。
+
+        通过 PersistentRuntimeV2.submit_task() 正式路径提交，
+        不再直接通过 MessageBus 派发。
+        """
         pr = self._get_active_pr(to)
-        await self._bus.send(LEAD_NAME, to, content, kind="assignment")
-        pr.notify()
+        await pr.submit_task(content)
         return f"Task assigned to {to}"
 
     async def cancel_teammate(self, name: str) -> str:
@@ -916,13 +927,17 @@ class TeammateManager:
     async def pause_teammate(self, name: str) -> str:
         """暂停 teammate 执行。"""
         pr = self._get_active_pr(name)
-        pr.pause()
+        result = pr.pause()
+        if asyncio.iscoroutine(result):
+            await result
         return f"Pause signal sent to {name}"
 
     async def resume_teammate(self, name: str) -> str:
         """恢复 teammate 执行。"""
         pr = self._get_active_pr(name)
-        pr.resume()
+        result = pr.resume()
+        if asyncio.iscoroutine(result):
+            await result
         return f"Resume signal sent to {name}"
 
     async def request_shutdown(self, name: str) -> str:

@@ -31,6 +31,7 @@ from mcc_harness import (
     PermissionChannelRequest,
     PermissionChecker,
     SpawnSubagentTool,
+    SubagentResult,
     SubagentRunner,
     SubagentSpec,
     SubagentStatus,
@@ -201,7 +202,7 @@ class TestSpawnSubagentToolContract:
         )
         assert not out.is_error
         assert (
-            "[subagent=summarizer status=completed tokens=7in/3out reason=end_turn]"
+            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]"
             in out.content
         )
         assert "found entrypoint" in out.content
@@ -658,10 +659,10 @@ class TestSubagentLifecycle:
         out = await tool.execute({"preset": "slowpoke", "task": "t"}, ctx)
         assert out.is_error
         assert "tokens=unknown" in out.content
-        assert "status=timeout" in out.content
+        assert "status=timed_out" in out.content
 
     async def test_tool_output_status_on_success(self, registry, ctx):
-        """成功时工具输出含 status=completed。"""
+        """成功时工具输出含 status=succeeded。"""
         llm = MockLlm(
             [single_text_turn("result", Usage(input_tokens=5, output_tokens=3))]
         )
@@ -670,7 +671,7 @@ class TestSubagentLifecycle:
             {"preset": "summarizer", "task": "t"}, ctx
         )
         assert not out.is_error
-        assert "status=completed" in out.content
+        assert "status=succeeded" in out.content
 
 
 # ---------- 并发护栏 ----------
@@ -1389,7 +1390,7 @@ class TestSubagentBudgetLedger:
         assert result.summary == "done"
 
 
-# ---------- SpawnSubagentTool via EphemeralRuntime ----------
+# ---------- SpawnSubagentTool via TaskRuntime ----------
 
 
 def _tool_with_coordinator(llm, registry, presets=None, max_depth=3, **runner_kwargs):
@@ -1405,7 +1406,7 @@ def _tool_with_coordinator(llm, registry, presets=None, max_depth=3, **runner_kw
 
 
 class TestSpawnSubagentToolViaRuntime:
-    """SpawnSubagentTool 通过 EphemeralRuntime 执行的集成测试。"""
+    """SpawnSubagentTool 通过 TaskRuntime 执行的集成测试。"""
 
     async def test_runtime_path_success(self, registry, ctx):
         """通过 runtime 路径执行成功，输出格式与直接路径一致。"""
@@ -1418,7 +1419,7 @@ class TestSpawnSubagentToolViaRuntime:
         )
         assert not out.is_error
         assert (
-            "[subagent=summarizer status=completed tokens=7in/3out reason=end_turn]"
+            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]"
             in out.content
         )
         assert "found it" in out.content
@@ -1436,7 +1437,7 @@ class TestSpawnSubagentToolViaRuntime:
         )
         out = await tool.execute({"preset": "failer", "task": "t"}, ctx)
         assert out.is_error
-        assert "status=timeout" in out.content
+        assert "status=timed_out" in out.content
 
     async def test_coordinator_registers_and_unregisters(self, registry, ctx):
         """执行期间 runtime 注册到 coordinator，完成后注销。"""
@@ -1554,3 +1555,216 @@ class TestSpawnSubagentToolViaRuntime:
 
         await run_and_observe()
         assert len(observed) == 1
+
+
+class TestSpawnSubagentToolViaTaskRuntime:
+    """SpawnSubagentTool 通过 TaskRuntime（V2 路径）执行的集成测试。"""
+
+    async def test_v2_path_success(self, registry, ctx):
+        """V2 路径执行成功，输出格式与 V1 一致。"""
+        llm = MockLlm(
+            [single_text_turn("found it", Usage(input_tokens=7, output_tokens=3))]
+        )
+        tool, coordinator = _tool_with_coordinator(llm, registry)
+        out = await tool.execute(
+            {"preset": "summarizer", "task": "find it"}, ctx
+        )
+        assert not out.is_error
+        assert (
+            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]"
+            in out.content
+        )
+        assert "found it" in out.content
+
+    async def test_v2_path_error_status(self, registry, ctx):
+        """异常时 V2 路径返回 error 状态。"""
+        spec = SubagentSpec(
+            name="failer", system="s", model="claude-haiku-4-5",
+            tools=[], timeout_secs=0.05,
+        )
+        tool, coordinator = _tool_with_coordinator(
+            SlowLlm(), registry, {"failer": spec}
+        )
+        out = await tool.execute({"preset": "failer", "task": "t"}, ctx)
+        assert out.is_error
+        assert "status=timed_out" in out.content
+
+    async def test_v2_coordinator_registers_and_unregisters(self, registry, ctx):
+        """执行期间 TaskRuntime 注册到 coordinator，完成后注销。"""
+        llm = MockLlm([single_text_turn("ok")])
+        tool, coordinator = _tool_with_coordinator(llm, registry)
+        assert coordinator.count == 0
+
+        out = await tool.execute(
+            {"preset": "summarizer", "task": "t"}, ctx
+        )
+        assert not out.is_error
+        assert coordinator.count == 0
+
+    async def test_v2_path_unknown_tokens_on_timeout(self, registry, ctx):
+        """超时时 V2 路径输出 tokens=unknown。"""
+        spec = SubagentSpec(
+            name="slowpoke", system="s", model="claude-haiku-4-5",
+            tools=[], timeout_secs=0.05,
+        )
+        tool, coordinator = _tool_with_coordinator(
+            SlowLlm(), registry, {"slowpoke": spec}
+        )
+        out = await tool.execute({"preset": "slowpoke", "task": "t"}, ctx)
+        assert out.is_error
+        assert "tokens=unknown" in out.content
+
+    async def test_v2_path_depth_limit(self, registry, ctx):
+        """V2 路径也遵守深度限制。"""
+        tool, coordinator = _tool_with_coordinator(
+            MockLlm([]), registry, max_depth=3
+        )
+        deep = ToolContext(cwd=ctx.cwd, session_id="s", depth=3)
+        out = await tool.execute(
+            {"preset": "summarizer", "task": "t"}, deep
+        )
+        assert out.is_error
+        assert "depth limit" in out.content
+
+    async def test_v2_path_unknown_preset(self, registry, ctx):
+        """V2 路径也校验 preset。"""
+        tool, coordinator = _tool_with_coordinator(
+            MockLlm([]), registry
+        )
+        out = await tool.execute({"preset": "nope", "task": "t"}, ctx)
+        assert out.is_error
+        assert "unknown preset" in out.content
+
+    async def test_v2_concurrent_no_cross_talk(self, registry, ctx):
+        """多个子代理通过 V2 路径并发执行不串线。"""
+        llm = MockLlm([
+            single_text_turn("alpha", Usage(input_tokens=1, output_tokens=1)),
+            single_text_turn("beta", Usage(input_tokens=2, output_tokens=2)),
+        ])
+        tool, coordinator = _tool_with_coordinator(llm, registry)
+        results = await asyncio.gather(
+            tool.execute({"preset": "summarizer", "task": "a"}, ctx),
+            tool.execute({"preset": "summarizer", "task": "b"}, ctx),
+        )
+        summaries = {r.content.split("\n", 1)[1] for r in results}
+        assert summaries == {"alpha", "beta"}
+        assert coordinator.count == 0
+
+
+class TestSubagentExecutor:
+    """SubagentExecutor 适配器单元测试。"""
+
+    async def test_execute_maps_completed_to_succeeded(self, tmp_path):
+        from mcc_core import ToolContext
+        from mcc_core.runtime import TaskStatus
+        from mcc_core.runtime.task import RuntimeTask
+        from mcc_harness.execution.subagent_executor import SubagentExecutor
+
+        class _StubRunner:
+            async def run(self, spec, task, ctx, *, channel=None):
+                from mcc_core import Usage
+                from mcc_harness.subagent import SubagentResult
+
+                return SubagentResult(
+                    name=spec.name, summary="done",
+                    status=SubagentStatus.COMPLETED,
+                    usage=Usage(input_tokens=10, output_tokens=5),
+                    cost_usd=0.01,
+                )
+
+        spec = SubagentSpec(name="test", system="s", model="m")
+        ctx = ToolContext(cwd=tmp_path, session_id="s1")
+        executor = SubagentExecutor(_StubRunner(), spec, ctx)
+        task = RuntimeTask(
+            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
+        )
+        result = await executor.execute(task)
+        assert result.status is TaskStatus.SUCCEEDED
+        assert result.summary == "done"
+        assert result.usage is not None
+        assert result.usage.input_tokens == 10
+
+    async def test_execute_maps_timeout_to_timed_out(self, tmp_path):
+        from mcc_core import ToolContext
+        from mcc_core.runtime import TaskStatus
+        from mcc_core.runtime.task import RuntimeTask
+        from mcc_harness.execution.subagent_executor import SubagentExecutor
+
+        class _StubRunner:
+            async def run(self, spec, task, ctx, *, channel=None):
+                return SubagentResult(
+                    name=spec.name, summary="timed out",
+                    status=SubagentStatus.TIMEOUT,
+                )
+
+        spec = SubagentSpec(name="test", system="s", model="m")
+        ctx = ToolContext(cwd=tmp_path, session_id="s1")
+        executor = SubagentExecutor(_StubRunner(), spec, ctx)
+        task = RuntimeTask(
+            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
+        )
+        result = await executor.execute(task)
+        assert result.status is TaskStatus.TIMED_OUT
+
+    async def test_execute_maps_error_to_failed(self, tmp_path):
+        from mcc_core import ToolContext
+        from mcc_core.runtime import TaskStatus
+        from mcc_core.runtime.task import RuntimeTask
+        from mcc_harness.execution.subagent_executor import SubagentExecutor
+
+        class _StubRunner:
+            async def run(self, spec, task, ctx, *, channel=None):
+                return SubagentResult(
+                    name=spec.name, summary="boom",
+                    status=SubagentStatus.ERROR, error="something broke",
+                )
+
+        spec = SubagentSpec(name="test", system="s", model="m")
+        ctx = ToolContext(cwd=tmp_path, session_id="s1")
+        executor = SubagentExecutor(_StubRunner(), spec, ctx)
+        task = RuntimeTask(
+            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
+        )
+        result = await executor.execute(task)
+        assert result.status is TaskStatus.FAILED
+        assert result.error is not None
+        assert "something broke" in result.error.message
+
+    async def test_execute_maps_budget_exceeded_to_failed(self, tmp_path):
+        from mcc_core import ToolContext
+        from mcc_core.runtime import TaskStatus
+        from mcc_core.runtime.task import RuntimeTask
+        from mcc_harness.execution.subagent_executor import SubagentExecutor
+
+        class _StubRunner:
+            async def run(self, spec, task, ctx, *, channel=None):
+                return SubagentResult(
+                    name=spec.name, summary="over budget",
+                    status=SubagentStatus.BUDGET_EXCEEDED,
+                )
+
+        spec = SubagentSpec(name="test", system="s", model="m")
+        ctx = ToolContext(cwd=tmp_path, session_id="s1")
+        executor = SubagentExecutor(_StubRunner(), spec, ctx)
+        task = RuntimeTask(
+            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
+        )
+        result = await executor.execute(task)
+        assert result.status is TaskStatus.FAILED
+
+    async def test_close_makes_executor_return_error(self, tmp_path):
+        from mcc_core import ToolContext
+        from mcc_core.runtime import TaskStatus
+        from mcc_core.runtime.task import RuntimeTask
+        from mcc_harness.execution.subagent_executor import SubagentExecutor
+
+        spec = SubagentSpec(name="test", system="s", model="m")
+        ctx = ToolContext(cwd=tmp_path, session_id="s1")
+        executor = SubagentExecutor(SubagentRunner.__new__(SubagentRunner), spec, ctx)
+        await executor.close()
+        task = RuntimeTask(
+            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
+        )
+        result = await executor.execute(task)
+        assert result.status is TaskStatus.FAILED
+        assert "已关闭" in result.summary

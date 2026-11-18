@@ -1,27 +1,25 @@
-"""统一 AgentRuntime 抽象测试：接口契约 + Ephemeral/Persistent 生命周期 + 旧 API 兼容。
+"""统一 AgentRuntime 抽象测试：接口契约 + PersistentRuntimeV2 生命周期 + 兼容接口。
 
-P2-01 验收标准：
-- 两种 Runtime 均通过同一接口启动、停止和查询状态。
-- 旧 API 可通过兼容适配器继续工作。
+验证：
+- PersistentRuntimeV2 通过新 Protocol 接口启动、停止和查询状态。
+- submit_task / wait_task 兼容接口完成单任务执行闭环。
+- 旧 API（SubagentRunner、TeammateRuntime）继续工作。
 """
 
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 
 import pytest
 from mcc_core import ToolContext, Usage
+from mcc_core.runtime import RuntimeStatus as V2RuntimeStatus
+from mcc_core.runtime.protocols import AgentRuntime
 from mcc_harness import (
     LEAD_NAME,
-    AgentRuntime,
-    EphemeralRuntime,
     MessageBus,
-    PersistentRuntime,
+    PersistentRuntimeV2,
     PlanStore,
-    RuntimeConfig,
-    RuntimeMode,
     RuntimeResult,
     RuntimeStatus,
     SubagentResult,
@@ -38,26 +36,11 @@ from mcc_tools import ToolRegistry, default_registry
 # -- helpers --
 
 
-def _make_ephemeral(
-    tmp_path: Path,
-    llm=None,
-    spec_name: str = "explorer",
-) -> EphemeralRuntime:
-    registry = default_registry()
-    runner = SubagentRunner(llm or MockLlm([single_text_turn("ok")]), registry)
-    presets = default_presets()
-    spec = presets.get(spec_name, SubagentSpec(
-        name=spec_name, system="test", model="claude-haiku-4-5",
-    ))
-    ctx = ToolContext(cwd=tmp_path, session_id="rt-test", depth=0)
-    return EphemeralRuntime(runner, spec, ctx)
-
-
 def _make_persistent(
     tmp_path: Path,
     llm=None,
     name: str = "worker",
-) -> PersistentRuntime:
+) -> PersistentRuntimeV2:
     bus = MessageBus(tmp_path)
     plan_store = PlanStore()
     registry = ToolRegistry()
@@ -72,38 +55,17 @@ def _make_persistent(
         plan_store=plan_store,
         base_dir=tmp_path,
     )
-    return PersistentRuntime(rt, bus)
-
-
-class _SlowRunner:
-    """慢速 runner，用于测试 wait_done 超时后底层 task 是否仍存活。"""
-
-    def __init__(self, delay: float = 5.0) -> None:
-        self._delay = delay
-
-    async def run(self, spec, task, parent, *, channel=None):
-        await asyncio.sleep(self._delay)
-        return SubagentResult(
-            name=spec.name,
-            summary="slow result",
-            status=SubagentStatus.COMPLETED,
-            started_at=time.monotonic(),
-            finished_at=time.monotonic(),
-        )
+    return PersistentRuntimeV2.from_teammate(rt, bus)
 
 
 # -- 接口契约测试 --
 
 
 class TestRuntimeContract:
-    def test_runtime_mode_values(self):
-        assert RuntimeMode.EPHEMERAL == "ephemeral"
-        assert RuntimeMode.PERSISTENT == "persistent"
-
-    def test_runtime_status_is_str_enum(self):
-        assert RuntimeStatus.CREATED == "created"
-        assert RuntimeStatus.RUNNING == "running"
-        assert RuntimeStatus.SHUTDOWN == "shutdown"
+    def test_v2_runtime_status_values(self):
+        assert V2RuntimeStatus.CREATED == "created"
+        assert V2RuntimeStatus.READY == "ready"
+        assert V2RuntimeStatus.STOPPED == "stopped"
 
     @pytest.mark.parametrize("status,expected", [
         (RuntimeStatus.COMPLETED, True),
@@ -121,206 +83,41 @@ class TestRuntimeContract:
         r = RuntimeResult(runtime_id="x", status=status, summary="")
         assert r.is_terminal is expected
 
-    def test_ephemeral_satisfies_protocol(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        assert isinstance(rt, AgentRuntime)
-
     def test_persistent_satisfies_protocol(self, tmp_path):
         rt = _make_persistent(tmp_path)
         assert isinstance(rt, AgentRuntime)
 
-    def test_config_ephemeral_mode(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        cfg = rt.config
-        assert cfg.mode is RuntimeMode.EPHEMERAL
-        assert isinstance(cfg, RuntimeConfig)
 
-    def test_config_persistent_mode(self, tmp_path):
-        rt = _make_persistent(tmp_path)
-        cfg = rt.config
-        assert cfg.mode is RuntimeMode.PERSISTENT
-        assert isinstance(cfg, RuntimeConfig)
+# -- PersistentRuntimeV2 生命周期测试 --
 
 
-# -- EphemeralRuntime 生命周期测试 --
-
-
-class TestEphemeralRuntime:
-    async def test_start_and_wait_done(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        assert rt.status is RuntimeStatus.CREATED
-        assert not rt.alive
-
-        await rt.start("explore the code")
-        assert rt.alive
-        assert rt.status is RuntimeStatus.RUNNING
-
-        result = await rt.wait_done()
-        assert result.is_terminal
-        assert result.status is RuntimeStatus.COMPLETED
-        assert result.runtime_id == rt.runtime_id
-        assert not rt.alive
-
-    async def test_cancel(self, tmp_path):
-        llm = MockLlm([single_text_turn("first"), single_text_turn("second")])
-        rt = _make_ephemeral(tmp_path, llm=llm)
-        await rt.start("long task")
-        rt.cancel()
-        result = await rt.wait_done()
-        assert result.status in (RuntimeStatus.CANCELLED, RuntimeStatus.COMPLETED)
-
-    async def test_stop_cancels_running(self, tmp_path):
-        llm = MockLlm([single_text_turn("first"), single_text_turn("second")])
-        rt = _make_ephemeral(tmp_path, llm=llm)
-        await rt.start("task")
-        await rt.stop(timeout=5.0)
-        assert not rt.alive
-        assert rt.status in (
-            RuntimeStatus.CANCELLED,
-            RuntimeStatus.COMPLETED,
-            RuntimeStatus.FAILED,
-        )
-
-    async def test_double_start_raises(self, tmp_path):
-        llm = MockLlm([single_text_turn("first"), single_text_turn("second")])
-        rt = _make_ephemeral(tmp_path, llm=llm)
-        await rt.start("task1")
-        with pytest.raises(RuntimeError, match="already running"):
-            await rt.start("task2")
-        await rt.wait_done()
-
-    async def test_pause_not_supported(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        with pytest.raises(RuntimeError, match="pause"):
-            rt.pause()
-
-    async def test_resume_not_supported(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        with pytest.raises(RuntimeError, match="resume"):
-            rt.resume()
-
-    async def test_inject_instruction_not_supported(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        with pytest.raises(RuntimeError, match="instruction"):
-            rt.inject_instruction("do something")
-
-    async def test_wait_done_without_start(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        result = await rt.wait_done()
-        assert result.status is RuntimeStatus.CREATED
-        assert "not started" in result.summary
-
-    async def test_wait_done_with_timeout(self, tmp_path):
-        llm = MockLlm([single_text_turn("first"), single_text_turn("second")])
-        rt = _make_ephemeral(tmp_path, llm=llm)
-        await rt.start("task")
-        result = await rt.wait_done(timeout=10.0)
-        assert result.is_terminal
-
-    async def test_runtime_id_format(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        assert "rt-test" in rt.runtime_id
-        assert "::" in rt.runtime_id
-
-    async def test_config_reflects_spec(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        cfg = rt.config
-        assert cfg.name == "explorer"
-        assert cfg.timeout_secs > 0
-        assert cfg.budget_tokens > 0
-
-    async def test_status_transitions(self, tmp_path):
-        rt = _make_ephemeral(tmp_path)
-        assert rt.status is RuntimeStatus.CREATED
-        await rt.start("task")
-        assert rt.status is RuntimeStatus.RUNNING
-        await rt.wait_done()
-        assert rt.status is RuntimeStatus.COMPLETED
-
-    async def test_wait_done_timeout_keeps_task_alive(self, tmp_path):
-        """P2-01: wait_done 超时后底层 task 仍存活，不被取消。"""
-        from mcc_harness.runtime.base import WaitTimeoutError
-
-        runner = _SlowRunner(delay=5.0)
-        spec = SubagentSpec(name="slow", system="test", model="claude-haiku-4-5")
-        ctx = ToolContext(cwd=tmp_path, session_id="timeout-test", depth=0)
-        rt = EphemeralRuntime(runner, spec, ctx)
-
-        await rt.start("slow task")
-        assert rt.alive
-
-        with pytest.raises(WaitTimeoutError):
-            await rt.wait_done(timeout=0.1)
-
-        assert rt.alive
-        assert rt.status is RuntimeStatus.RUNNING
-
-        await rt.stop(timeout=10.0)
-        assert not rt.alive
-
-    async def test_wait_done_timeout_then_complete(self, tmp_path):
-        """P2-01: wait_done 超时后仍可再次等待完成。"""
-        from mcc_harness.runtime.base import WaitTimeoutError
-
-        runner = _SlowRunner(delay=0.3)
-        spec = SubagentSpec(name="slow2", system="test", model="claude-haiku-4-5")
-        ctx = ToolContext(cwd=tmp_path, session_id="timeout-test2", depth=0)
-        rt = EphemeralRuntime(runner, spec, ctx)
-
-        await rt.start("slow task")
-        assert rt.alive
-
-        with pytest.raises(WaitTimeoutError):
-            await rt.wait_done(timeout=0.05)
-
-        assert rt.alive
-
-        result = await rt.wait_done(timeout=5.0)
-        assert result.is_terminal
-        assert result.status is RuntimeStatus.COMPLETED
-        assert not rt.alive
-
-
-# -- PersistentRuntime 生命周期测试 --
-
-
-class TestPersistentRuntime:
+class TestPersistentRuntimeV2:
     async def test_start_and_status(self, tmp_path):
         rt = _make_persistent(tmp_path)
-        assert rt.status is RuntimeStatus.CREATED
+        assert rt.status is V2RuntimeStatus.CREATED
         assert not rt.alive
 
-        await rt.start("do work")
+        await rt.start()
         assert rt.alive
         await asyncio.sleep(0.3)
         assert rt.status in (
-            RuntimeStatus.RUNNING,
-            RuntimeStatus.IDLE,
-            RuntimeStatus.STARTING,
+            V2RuntimeStatus.READY,
+            V2RuntimeStatus.STARTING,
+            V2RuntimeStatus.PAUSED,
         )
         await rt.stop()
         assert not rt.alive
 
-    async def test_stop_returns_shutdown(self, tmp_path):
+    async def test_stop_transitions_to_stopped(self, tmp_path):
         rt = _make_persistent(tmp_path)
-        await rt.start("do work")
+        await rt.start()
         await asyncio.sleep(0.1)
         await rt.stop()
-        assert rt.status is RuntimeStatus.SHUTDOWN
-
-    async def test_wait_done_after_stop(self, tmp_path):
-        rt = _make_persistent(tmp_path)
-        await rt.start("do work")
-        await asyncio.sleep(0.1)
-        await rt.stop()
-        result = await rt.wait_done()
-        assert result.is_terminal
-        assert result.status is RuntimeStatus.SHUTDOWN
-        assert result.runtime_id == rt.runtime_id
+        assert rt.status is V2RuntimeStatus.STOPPED
 
     async def test_cancel_sends_signal(self, tmp_path):
         rt = _make_persistent(tmp_path)
-        await rt.start("do work")
+        await rt.start()
         await asyncio.sleep(0.1)
         rt.cancel()
         await asyncio.sleep(0.2)
@@ -333,11 +130,11 @@ class TestPersistentRuntime:
             single_text_turn("second"),
         ])
         rt = _make_persistent(tmp_path, llm=llm, name="pausable")
-        await rt.start("first task")
+        await rt.start()
         await asyncio.sleep(0.2)
-        rt.pause()
+        await rt.pause()
         await asyncio.sleep(0.1)
-        rt.resume()
+        await rt.resume()
         await asyncio.sleep(0.2)
         await rt.stop()
         assert not rt.alive
@@ -348,29 +145,12 @@ class TestPersistentRuntime:
             single_text_turn("second"),
         ])
         rt = _make_persistent(tmp_path, llm=llm, name="injectable")
-        await rt.start("initial task")
+        await rt.start()
         await asyncio.sleep(0.1)
         rt.inject_instruction("extra guidance")
         await asyncio.sleep(0.2)
         await rt.stop()
         assert not rt.alive
-
-    async def test_double_start_raises(self, tmp_path):
-        llm = MockLlm([
-            single_text_turn("first"),
-            single_text_turn("second"),
-        ])
-        rt = _make_persistent(tmp_path, llm=llm)
-        await rt.start("task1")
-        with pytest.raises(RuntimeError, match="already running"):
-            await rt.start("task2")
-        await rt.stop()
-
-    async def test_wait_done_without_start(self, tmp_path):
-        rt = _make_persistent(tmp_path)
-        result = await rt.wait_done()
-        assert result.status is RuntimeStatus.SHUTDOWN
-        assert "not started" in result.summary
 
     async def test_runtime_id_is_unique_uuid(self, tmp_path):
         rt = _make_persistent(tmp_path, name="my-worker")
@@ -378,18 +158,11 @@ class TestPersistentRuntime:
         rt2 = _make_persistent(tmp_path, name="my-worker")
         assert rt.runtime_id != rt2.runtime_id
 
-    async def test_config_reflects_spec(self, tmp_path):
-        rt = _make_persistent(tmp_path, name="cfg-test")
-        cfg = rt.config
-        assert cfg.name == "cfg-test"
-        assert cfg.mode is RuntimeMode.PERSISTENT
-        assert cfg.require_plan is False
-
     async def test_cancel_when_not_alive_is_noop(self, tmp_path):
         rt = _make_persistent(tmp_path)
         rt.cancel()
-        rt.pause()
-        rt.resume()
+        await rt.pause()
+        await rt.resume()
         rt.inject_instruction("test")
 
     async def test_work_result_via_bus(self, tmp_path):
@@ -408,54 +181,51 @@ class TestPersistentRuntime:
             plan_store=plan_store,
             base_dir=tmp_path,
         )
-        rt = PersistentRuntime(teammate, bus)
-        await rt.start("do the work")
+        rt = PersistentRuntimeV2.from_teammate(teammate, bus)
+        await rt.start()
+        await rt.submit_task("do the work")
         await asyncio.sleep(0.3)
         msgs = await bus.consume(LEAD_NAME)
         assert any(m.kind == "work_done" for m in msgs)
         await rt.stop()
 
     async def test_stop_passes_timeout_to_shutdown(self, tmp_path):
-        """P2-03: stop(timeout=X) 将 timeout 传给 TeammateRuntime.shutdown。"""
         rt = _make_persistent(tmp_path)
         captured: list[float] = []
-        original = rt._teammate.shutdown
+        original = rt.teammate.shutdown
 
         async def capture(*, timeout: float = 5.0) -> None:
             captured.append(timeout)
             await original(timeout=timeout)
 
-        rt._teammate.shutdown = capture
-        await rt.start("work")
+        rt.teammate.shutdown = capture
+        await rt.start()
         await asyncio.sleep(0.2)
         await rt.stop(timeout=3.0)
         assert captured == [3.0]
 
     async def test_stop_default_timeout_is_5(self, tmp_path):
-        """P2-03: stop() 不传 timeout 时默认 5.0。"""
         rt = _make_persistent(tmp_path)
         captured: list[float] = []
-        original = rt._teammate.shutdown
+        original = rt.teammate.shutdown
 
         async def capture(*, timeout: float = 5.0) -> None:
             captured.append(timeout)
             await original(timeout=timeout)
 
-        rt._teammate.shutdown = capture
-        await rt.start("work")
+        rt.teammate.shutdown = capture
+        await rt.start()
         await asyncio.sleep(0.2)
         await rt.stop()
         assert captured == [5.0]
 
     async def test_submit_task_and_wait_task(self, tmp_path):
-        """P1-02: submit_task + wait_task 完成单任务执行闭环。"""
         llm = MockLlm([
-            single_text_turn("initial done"),
             single_text_turn("task result"),
         ])
         rt = _make_persistent(tmp_path, llm=llm, name="submit-test")
-        await rt.start("initial work")
-        await asyncio.sleep(0.3)
+        await rt.start()
+        await asyncio.sleep(0.1)
 
         tid = await rt.submit_task("do something", task_id="t-001")
         assert tid == "t-001"
@@ -465,14 +235,13 @@ class TestPersistentRuntime:
         await rt.stop()
 
     async def test_submit_multiple_tasks_sequentially(self, tmp_path):
-        """P1-02: 同一 PersistentRuntime 连续提交多个任务不触发 already running。"""
         llm = MockLlm([
             single_text_turn("first done"),
             single_text_turn("second done"),
             single_text_turn("third done"),
         ])
         rt = _make_persistent(tmp_path, llm=llm, name="multi-submit")
-        await rt.start("initial")
+        await rt.start()
         await asyncio.sleep(0.3)
 
         tid1 = await rt.submit_task("task one", task_id="t1")
@@ -486,9 +255,8 @@ class TestPersistentRuntime:
         await rt.stop()
 
     async def test_wait_task_unknown_id_returns_failed(self, tmp_path):
-        """P1-02: wait_task 对未知 task_id 返回 FAILED 结果。"""
         rt = _make_persistent(tmp_path, name="unknown-task")
-        await rt.start("initial")
+        await rt.start()
         await asyncio.sleep(0.2)
         result = await rt.wait_task("nonexistent", timeout=1.0)
         assert result.status is RuntimeStatus.FAILED
@@ -534,27 +302,7 @@ class TestOldApiCompatibility:
         await rt.shutdown()
         assert not rt.alive
 
-    async def test_ephemeral_wraps_subagent_consistent(self, tmp_path):
-        registry = default_registry()
-        llm = MockLlm([single_text_turn("via runtime")])
-        runner = SubagentRunner(llm, registry)
-        spec = default_presets()["code_explorer"]
-        ctx = ToolContext(cwd=tmp_path, session_id="cons", depth=0)
-
-        direct = await runner.run(spec, "explore", ctx)
-
-        runner2 = SubagentRunner(
-            MockLlm([single_text_turn("via runtime")]), registry,
-        )
-        rt = EphemeralRuntime(runner2, spec, ctx)
-        await rt.start("explore")
-        wrapped = await rt.wait_done()
-
-        assert direct.status is SubagentStatus.COMPLETED
-        assert wrapped.status is RuntimeStatus.COMPLETED
-        assert direct.summary == wrapped.summary
-
-    async def test_persistent_wraps_teammate_consistent(self, tmp_path):
+    async def test_persistent_v2_wraps_teammate_consistent(self, tmp_path):
         bus = MessageBus(tmp_path)
         plan_store = PlanStore()
         registry = ToolRegistry()
@@ -570,9 +318,9 @@ class TestOldApiCompatibility:
             plan_store=plan_store,
             base_dir=tmp_path,
         )
-        rt = PersistentRuntime(teammate, bus)
+        rt = PersistentRuntimeV2.from_teammate(teammate, bus)
 
-        await rt.start("do work")
+        await rt.start()
         await asyncio.sleep(0.3)
         assert teammate.alive
         assert rt.alive
@@ -580,5 +328,34 @@ class TestOldApiCompatibility:
         await rt.stop()
         assert not teammate.alive
         assert not rt.alive
-        assert teammate.status == "shutdown"
-        assert rt.status is RuntimeStatus.SHUTDOWN
+        assert rt.status is V2RuntimeStatus.STOPPED
+
+    async def test_stop_timeout_raises_runtime_stop_timeout(self, tmp_path):
+        from mcc_harness import RuntimeStopTimeoutError
+
+        class HangingLlm:
+            async def complete(self, req):
+                await asyncio.sleep(100)
+                raise RuntimeError("unreachable")
+
+            async def stream(self, req):
+                await asyncio.sleep(100)
+                yield  # pragma: no cover
+
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        registry = ToolRegistry()
+        spec = TeammateSpec(
+            name="hang", role="coder", system="test", model="claude-haiku-4-5",
+        )
+        teammate = TeammateRuntime(
+            spec=spec, llm=HangingLlm(), registry=registry, bus=bus,
+            plan_store=plan_store, base_dir=tmp_path,
+        )
+        rt = PersistentRuntimeV2.from_teammate(teammate, bus)
+        await rt.start()
+        await rt.submit_task("hang work", task_id="t-hang")
+        await asyncio.sleep(0.3)
+        with pytest.raises(RuntimeStopTimeoutError):
+            await rt.stop(timeout=0.05)
+        assert not rt.alive

@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
+
+from mcc_core.runtime.errors import TaskTimeoutError
 
 from mcc_harness.budget import AgentBudget, BudgetPolicy
 from mcc_harness.context import AgentContext
@@ -33,6 +36,9 @@ from mcc_harness.runtime import (
     RuntimeStatus,
     WaitTimeoutError,
 )
+from mcc_harness.runtime.dispatcher import TaskDispatcher
+
+logger = logging.getLogger(__name__)
 
 
 class TeamRunStatus(StrEnum):
@@ -434,6 +440,7 @@ class TeamOrchestrator:
         planner: Planner | None = None,
         scheduler: TaskScheduler | None = None,
         coordinator: RuntimeCoordinator | None = None,
+        dispatcher: TaskDispatcher | None = None,
     ) -> None:
         self._registry = registry
         self._bus = bus
@@ -443,6 +450,7 @@ class TeamOrchestrator:
         self._planner = planner or SimplePlanner()
         self._scheduler = scheduler or CapabilityScheduler()
         self._coordinator = coordinator
+        self._dispatcher = dispatcher
         self._agent_runtime_map: dict[str, str] = {}
         self._teams: dict[str, Team] = {}
         self._runs: dict[str, TeamRun] = {}
@@ -463,6 +471,10 @@ class TeamOrchestrator:
     @property
     def task_store(self) -> Any | None:
         return self._task_store
+
+    @property
+    def dispatcher(self) -> TaskDispatcher | None:
+        return self._dispatcher
 
     @property
     def budget(self) -> AgentBudget | None:
@@ -715,7 +727,12 @@ class TeamOrchestrator:
                 else:
                     self._task_store.fail(task_id, agent_id, error=error)
             except Exception:
-                pass
+                logger.warning(
+                    "task_store update failed for task %s (agent %s)",
+                    task_id,
+                    agent_id,
+                    exc_info=True,
+                )
 
         self._check_run_completion(run)
         return run
@@ -742,8 +759,20 @@ class TeamOrchestrator:
         semaphore = asyncio.Semaphore(run.team.policy.max_concurrent_tasks)
         max_attempts = run.team.policy.max_attempts
 
+        subject_to_assignment: dict[str, Assignment] = {
+            a.task_spec.subject: a for a in run.assignments
+        }
+        completion_events: dict[str, asyncio.Event] = {
+            a.task_spec.subject: asyncio.Event()
+            for a in run.assignments
+        }
+
         tasks = [
-            self._execute_assignment(run_id, assignment, semaphore, max_attempts)
+            self._execute_assignment(
+                run_id, assignment, semaphore, max_attempts,
+                completion_events=completion_events,
+                subject_to_assignment=subject_to_assignment,
+            )
             for assignment in run.assignments
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -755,95 +784,147 @@ class TeamOrchestrator:
         assignment: Assignment,
         semaphore: asyncio.Semaphore,
         max_attempts: int = 1,
+        *,
+        completion_events: dict[str, asyncio.Event] | None = None,
+        subject_to_assignment: dict[str, Assignment] | None = None,
     ) -> None:
         """执行单个 Assignment：Runtime 执行 → 结果回流。
 
         支持失败重试：当 Runtime 执行失败且 attempt < max_attempts 时，
         通过 TaskStore.retry 重置任务状态后重试。
+        支持 DAG：等待 blocked_by 依赖的任务完成后再执行。
         """
-        async with semaphore:
-            for attempt in range(1, max_attempts + 1):
-                run = self._get_run(run_id)
-                if run.is_terminal:
-                    return
+        try:
+            if completion_events and assignment.task_spec.blocked_by:
+                for dep_subject in assignment.task_spec.blocked_by:
+                    dep_event = completion_events.get(dep_subject)
+                    if dep_event is not None:
+                        await dep_event.wait()
 
-                runtime = self._find_runtime(assignment.agent_id)
-                if runtime is None:
-                    with contextlib.suppress(RunStateError):
-                        await self.complete_task(
-                            run_id,
-                            assignment.agent_id,
-                            assignment.task_id,
-                            error=f"no runtime bound for agent {assignment.agent_id}",
-                        )
-                    return
+            async with semaphore:
+                for attempt in range(1, max_attempts + 1):
+                    run = self._get_run(run_id)
+                    if run.is_terminal:
+                        return
 
-                try:
-                    if hasattr(runtime, "submit_task"):
-                        submitted_id = await runtime.submit_task(
-                            assignment.task_spec.subject,
-                            task_id=assignment.task_id,
-                        )
-                        result = await runtime.wait_task(
-                            submitted_id,
-                            timeout=run.team.policy.task_lease_secs,
-                        )
-                    else:
-                        await runtime.start(
-                            task=assignment.task_spec.subject,
-                            task_id=assignment.task_id,
-                        )
-                        result = await runtime.wait_done(
-                            timeout=run.team.policy.task_lease_secs,
-                        )
-                    error = self._extract_error(result)
-                    if error is None:
+                    runtime = self._find_runtime(assignment.agent_id)
+                    if runtime is None:
                         with contextlib.suppress(RunStateError):
                             await self.complete_task(
                                 run_id,
                                 assignment.agent_id,
                                 assignment.task_id,
-                                summary=result.summary,
-                                cost_usd=result.cost_usd,
+                                error=f"no runtime bound for agent {assignment.agent_id}",
                             )
                         return
-                    if attempt < max_attempts:
-                        if self._task_store and assignment.task_id:
-                            with contextlib.suppress(Exception):
-                                self._task_store.retry(assignment.task_id)
-                        continue
-                    with contextlib.suppress(RunStateError):
-                        await self.complete_task(
-                            run_id,
-                            assignment.agent_id,
-                            assignment.task_id,
-                            summary=result.summary,
-                            error=error,
-                            cost_usd=result.cost_usd,
-                        )
-                except WaitTimeoutError:
-                    if attempt < max_attempts:
-                        if self._task_store and assignment.task_id:
-                            with contextlib.suppress(Exception):
-                                self._task_store.retry(assignment.task_id)
-                        continue
-                    with contextlib.suppress(RunStateError):
-                        await self.complete_task(
-                            run_id,
-                            assignment.agent_id,
-                            assignment.task_id,
-                            error=f"task timed out after {run.team.policy.task_lease_secs}s",
-                        )
-                except Exception as e:
-                    if attempt < max_attempts:
-                        continue
-                    with contextlib.suppress(RunStateError):
-                        await self.complete_task(
-                            run_id,
-                            assignment.agent_id,
-                            assignment.task_id,
-                            error=f"execution error: {e}",
-                        )
+
+                    try:
+                        if self._dispatcher is not None:
+                            result_summary, result_error, result_cost = (
+                                await self._dispatch_and_wait(
+                                    assignment,
+                                    runtime,
+                                    run_id,
+                                    run.team.policy.task_lease_secs,
+                                )
+                            )
+                        else:
+                            submitted_id = await runtime.submit_task(
+                                assignment.task_spec.subject,
+                                task_id=assignment.task_id,
+                            )
+                            result = await runtime.wait_task(
+                                submitted_id,
+                                timeout=run.team.policy.task_lease_secs,
+                            )
+                            result_summary = result.summary
+                            result_error = self._extract_error(result)
+                            result_cost = result.cost_usd
+                        if result_error is None:
+                            with contextlib.suppress(RunStateError):
+                                await self.complete_task(
+                                    run_id,
+                                    assignment.agent_id,
+                                    assignment.task_id,
+                                    summary=result_summary,
+                                    cost_usd=result_cost,
+                                )
+                            return
+                        if attempt < max_attempts:
+                            if self._task_store and assignment.task_id:
+                                with contextlib.suppress(Exception):
+                                    self._task_store.retry(assignment.task_id)
+                            continue
+                        with contextlib.suppress(RunStateError):
+                            await self.complete_task(
+                                run_id,
+                                assignment.agent_id,
+                                assignment.task_id,
+                                summary=result_summary,
+                                error=result_error,
+                                cost_usd=result_cost,
+                            )
+                    except (WaitTimeoutError, TaskTimeoutError):
+                        if attempt < max_attempts:
+                            if self._task_store and assignment.task_id:
+                                with contextlib.suppress(Exception):
+                                    self._task_store.retry(assignment.task_id)
+                            continue
+                        with contextlib.suppress(RunStateError):
+                            await self.complete_task(
+                                run_id,
+                                assignment.agent_id,
+                                assignment.task_id,
+                                error=f"task timed out after {run.team.policy.task_lease_secs}s",
+                            )
+                    except Exception as e:
+                        if attempt < max_attempts:
+                            continue
+                        with contextlib.suppress(RunStateError):
+                            await self.complete_task(
+                                run_id,
+                                assignment.agent_id,
+                                assignment.task_id,
+                                error=f"execution error: {e}",
+                            )
+        finally:
+            if completion_events:
+                event = completion_events.get(assignment.task_spec.subject)
+                if event is not None:
+                    event.set()
+
+    async def _dispatch_and_wait(
+        self,
+        assignment: Assignment,
+        runtime: Any,
+        run_id: str,
+        lease_secs: float,
+    ) -> tuple[str, str | None, float]:
+        """通过 TaskDispatcher 派发任务并等待结果。
+
+        返回 (summary, error, cost_usd)。error 为 None 表示成功。
+        """
+        from mcc_core.runtime import RuntimeEventType
+
+        runtime_id = self._agent_runtime_map.get(assignment.agent_id, "")
+        handle = await self._dispatcher.dispatch(
+            assignment.task_id,
+            assignment.agent_id,
+            runtime_id=runtime_id,
+            objective=assignment.task_spec.subject,
+            timeout_seconds=lease_secs,
+            run_id=run_id,
+        )
+        event = await self._dispatcher.wait_for_result(
+            handle,
+            timeout=lease_secs,
+        )
+        summary = str(event.payload.get("summary", ""))
+        cost = float(event.payload.get("cost_usd", 0.0))
+        if event.event_type is RuntimeEventType.TASK_COMPLETED:
+            return summary, None, cost
+        error_msg = str(event.payload.get("error", event.event_type.value))
+        return summary, error_msg, cost
 
     def _find_runtime(self, agent_id: str) -> Any | None:
         """通过 agent-runtime 映射查找 Runtime。"""

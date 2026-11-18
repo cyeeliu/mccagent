@@ -20,6 +20,8 @@ from mcc_harness import (
     remove_worktree,
 )
 from mcc_harness.plan import PlanError, PlanRequest, PlanStatus
+from mcc_harness.runtime.base import RuntimeStatus
+from mcc_harness.runtime.persistent import PersistentRuntimeV2
 from mcc_harness.teammate import (
     LEAD_NAME,
     CreateWorktreeTool,
@@ -80,9 +82,9 @@ class TestMessageBus:
 
     async def test_message_kinds_and_meta(self, tmp_path):
         bus = MessageBus(tmp_path)
-        await bus.send("lead", "worker", "do task", kind="assignment", meta={"task_id": "t1"})
+        await bus.send("lead", "worker", "do task", kind="task_submitted", meta={"task_id": "t1"})
         msgs = await bus.consume("worker")
-        assert msgs[0].kind == "assignment"
+        assert msgs[0].kind == "task_submitted"
         assert msgs[0].meta == {"task_id": "t1"}
 
     async def test_concurrent_send(self, tmp_path):
@@ -705,6 +707,36 @@ class TestTeammateRuntime:
         msgs = await bus.consume(LEAD_NAME)
         assert len(msgs) >= 2
         await rt.shutdown()
+
+    async def test_shutdown_timeout_raises_runtime_stop_timeout(self, tmp_path):
+        from mcc_harness import RuntimeStopTimeoutError
+
+        class HangingLlm:
+            async def complete(self, req):
+                await asyncio.sleep(100)
+                raise RuntimeError("unreachable")
+
+            async def stream(self, req):
+                await asyncio.sleep(100)
+                yield  # pragma: no cover
+
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        registry = ToolRegistry()
+        spec = TeammateSpec(
+            name="hang_test", role="coder", system="test", model="claude-haiku-4-5",
+        )
+        rt = TeammateRuntime(
+            spec=spec, llm=HangingLlm(), registry=registry, bus=bus,
+            plan_store=plan_store, base_dir=tmp_path,
+        )
+        await rt.start("hang task")
+        await asyncio.sleep(0.1)
+        with pytest.raises(RuntimeStopTimeoutError) as exc_info:
+            await rt.shutdown(timeout=0.05)
+        assert exc_info.value.details["runtime_id"] == rt.runtime_id
+        assert exc_info.value.details["timeout"] == 0.05
+        assert not rt.alive
 
 
 # -- format_team_events --
@@ -1449,7 +1481,7 @@ class TestP105InstructionInjectAndCancel:
         await rt.start("task A", task_id=task_a.id)
         await asyncio.sleep(0.1)
 
-        await bus.send(LEAD_NAME, "p105worker", "task B", kind="assignment")
+        await bus.send(LEAD_NAME, "p105worker", "task B", kind="task_submitted")
         rt.notify()
 
         await asyncio.sleep(1.0)
@@ -1715,7 +1747,7 @@ class TestTeammateManagerViaCoordinator:
         await asyncio.sleep(0.3)
         pr = coord.get(mgr._coordinator.get(mgr._runtime_ids["worker"]).runtime_id)
         assert pr is not None
-        assert pr.status.value in ("idle", "running", "starting")
+        assert pr.status.value in ("ready", "running", "starting", "paused")
         await mgr.shutdown_all()
 
     async def test_backward_compat_without_coordinator(self, tmp_path):
@@ -1862,4 +1894,237 @@ class TestTeammateManagerWithOrchestrator:
         await mgr.spawn("worker", "coder", "task2")
         rid2 = orch._agent_runtime_map["worker"]
         assert rid2 != rid1
+        await mgr.shutdown_all()
+
+
+# -- TeammateManager V2 (PersistentRuntimeV2) --
+
+
+def _make_manager_v2(tmp_path, llm=None, max_teammates=4):
+    registry = ToolRegistry()
+    bus = MessageBus(tmp_path)
+    plan_store = PlanStore()
+    return TeammateManager(
+        llm=llm or MockLlm([single_text_turn("done")]),
+        registry=registry,
+        bus=bus,
+        plan_store=plan_store,
+        base_dir=tmp_path,
+        max_teammates=max_teammates,
+    )
+
+
+class TestTeammateManagerV2:
+    """TeammateManager 使用 PersistentRuntimeV2。"""
+
+    async def test_spawn_creates_v2_runtime(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker1", "coder", "write hello.py")
+        rid = mgr._runtime_ids["worker1"]
+        pr = mgr._coordinator.get(rid)
+        assert isinstance(pr, PersistentRuntimeV2)
+        await mgr.shutdown_all()
+
+    async def test_list_active(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("w1", "coder", "task1")
+        await mgr.spawn("w2", "reviewer", "task2")
+        infos = mgr.list_active()
+        assert len(infos) == 2
+        names = {i.name for i in infos}
+        assert names == {"w1", "w2"}
+        await mgr.shutdown_all()
+
+    async def test_send_message(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "initial")
+        result = await mgr.send_message("worker", "new instruction")
+        assert "sent" in result.lower()
+        await mgr.shutdown_all()
+
+    async def test_send_instruction(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "initial")
+        result = await mgr.send_instruction("worker", "do X differently")
+        assert "instruction" in result.lower()
+        await mgr.shutdown_all()
+
+    async def test_assign_task(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "initial")
+        result = await mgr.assign_task("worker", "new task")
+        assert "assigned" in result.lower()
+        await mgr.shutdown_all()
+
+    async def test_cancel_teammate(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        result = await mgr.cancel_teammate("worker")
+        assert "cancel" in result.lower()
+        await mgr.shutdown_all()
+
+    async def test_pause_and_resume(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        pause_result = await mgr.pause_teammate("worker")
+        assert "pause" in pause_result.lower()
+        resume_result = await mgr.resume_teammate("worker")
+        assert "resume" in resume_result.lower()
+        await mgr.shutdown_all()
+
+    async def test_request_shutdown(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        result = await mgr.request_shutdown("worker")
+        assert "shut down" in result.lower()
+        assert mgr.list_active() == []
+
+    async def test_shutdown_all(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path, max_teammates=5)
+        await mgr.spawn("w1", "coder", "t1")
+        await mgr.spawn("w2", "coder", "t2")
+        await mgr.spawn("w3", "coder", "t3")
+        await mgr.shutdown_all()
+        assert mgr.list_active() == []
+
+    async def test_max_teammates_enforced(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path, max_teammates=2)
+        await mgr.spawn("w1", "coder", "t1")
+        await mgr.spawn("w2", "coder", "t2")
+        with pytest.raises(ValueError, match="max teammates"):
+            await mgr.spawn("w3", "coder", "t3")
+        await mgr.shutdown_all()
+
+    async def test_consume_lead_inbox(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "do something")
+        await asyncio.sleep(0.3)
+        inbox = await mgr.consume_lead_inbox()
+        assert len(inbox) >= 1
+        assert any(m.kind == "work_done" for m in inbox)
+        await mgr.shutdown_all()
+
+    async def test_v2_alive_and_info(self, tmp_path):
+        """V2 runtime 的 alive 属性和 info() 方法正常工作。"""
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        rid = mgr._runtime_ids["worker"]
+        pr = mgr._coordinator.get(rid)
+        assert pr.alive is True
+        info = pr.info()
+        assert info.name == "worker"
+        assert info.role == "coder"
+        await mgr.shutdown_all()
+        assert pr.alive is False
+
+    async def test_v2_notify_and_cancel(self, tmp_path):
+        """V2 runtime 的 notify() 和 cancel() 兼容方法正常工作。"""
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "task")
+        rid = mgr._runtime_ids["worker"]
+        pr = mgr._coordinator.get(rid)
+        pr.notify()
+        pr.cancel()
+        await mgr.shutdown_all()
+
+
+class TestPersistentRuntimeV2SubmitWaitTask:
+    """V2 PersistentRuntime 的 submit_task/wait_task 兼容接口。"""
+
+    async def test_submit_task_returns_task_id(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "initial")
+        rid = mgr._runtime_ids["worker"]
+        pr = mgr._coordinator.get(rid)
+        tid = await pr.submit_task("do something", task_id="t-001")
+        assert tid == "t-001"
+        await mgr.shutdown_all()
+
+    async def test_submit_task_auto_generates_id(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "initial")
+        rid = mgr._runtime_ids["worker"]
+        pr = mgr._coordinator.get(rid)
+        tid = await pr.submit_task("do something")
+        assert tid.startswith("task::")
+        await mgr.shutdown_all()
+
+    async def test_wait_task_completes(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "do something")
+        rid = mgr._runtime_ids["worker"]
+        pr = mgr._coordinator.get(rid)
+        await asyncio.sleep(0.3)
+        tid = await pr.submit_task("another task", task_id="t-002")
+        result = await pr.wait_task(tid, timeout=5.0)
+        assert result.status in (
+            RuntimeStatus.COMPLETED,
+            RuntimeStatus.FAILED,
+            RuntimeStatus.TIMEOUT,
+        )
+        await mgr.shutdown_all()
+
+    async def test_wait_task_unknown_id(self, tmp_path):
+        mgr = _make_manager_v2(tmp_path)
+        await mgr.spawn("worker", "coder", "initial")
+        rid = mgr._runtime_ids["worker"]
+        pr = mgr._coordinator.get(rid)
+        result = await pr.wait_task("nonexistent", timeout=1.0)
+        assert result.status == RuntimeStatus.FAILED
+        await mgr.shutdown_all()
+
+    async def test_wait_task_timeout_raises(self, tmp_path):
+        from mcc_harness.runtime.base import WaitTimeoutError
+
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        registry = ToolRegistry()
+        spec = TeammateSpec(
+            name="worker", role="coder", system="test", model="test",
+        )
+        rt = TeammateRuntime(
+            spec=spec, llm=MockLlm([]), registry=registry,
+            bus=bus, plan_store=plan_store,
+        )
+        pr = PersistentRuntimeV2.from_teammate(rt, bus)
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        pr._task_futures["t-slow"] = future
+        rt.set_task_future("t-slow", future)
+        with pytest.raises(WaitTimeoutError):
+            await pr.wait_task("t-slow", timeout=0.05)
+
+    async def test_orchestrator_works_with_v2_runtime(self, tmp_path):
+        """编排器通过 submit_task/wait_task 与 V2 runtime 协作。"""
+        from mcc_harness import AgentRegistry, TeamOrchestrator
+        from mcc_tools import TaskStore
+
+        bus = MessageBus(tmp_path)
+        plan_store = PlanStore()
+        agent_registry = AgentRegistry()
+        task_store = TaskStore(tmp_path)
+        coordinator = RuntimeCoordinator()
+        orchestrator = TeamOrchestrator(
+            registry=agent_registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
+        )
+        mgr = TeammateManager(
+            llm=MockLlm([single_text_turn("done")]),
+            registry=ToolRegistry(),
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            base_dir=tmp_path,
+            coordinator=coordinator,
+            agent_registry=agent_registry,
+            orchestrator=orchestrator,
+        )
+        await mgr.spawn("worker", "coder", "task")
+        rid = mgr._runtime_ids["worker"]
+        pr = coordinator.get(rid)
+        assert isinstance(pr, PersistentRuntimeV2)
+        assert hasattr(pr, "submit_task")
+        assert hasattr(pr, "wait_task")
         await mgr.shutdown_all()

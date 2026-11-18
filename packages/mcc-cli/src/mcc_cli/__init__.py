@@ -226,7 +226,7 @@ async def _run_tui_mode(
                 await event_queue.put(NoticeEvent(text="✓ 定时任务完成"))
             team_mgr = getattr(source, "team_manager", None)
             if team_mgr is not None:
-                inbox = await team_mgr.consume_lead_inbox()
+                inbox = await source.application.consume_lead_inbox()
                 if inbox:
                     from mcc_harness import format_team_events
 
