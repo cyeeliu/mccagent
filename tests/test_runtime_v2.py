@@ -419,21 +419,11 @@ class TestPersistentRuntimeV2:
     async def test_capabilities(self) -> None:
         from mcc_harness.runtime.persistent import PersistentRuntimeV2
 
-        class StubTeammate:
-            spec = type("S", (), {"name": "test"})()
+        class StubExecutor:
+            async def execute(self, task: Any, **kw: Any) -> Any: ...
+            async def close(self) -> None: ...
 
-            def runtime_status(self) -> Any: ...
-            def notify(self) -> None: ...
-            def alive(self) -> bool: ...
-            async def start(self, *a: Any, **k: Any) -> None: ...
-            async def shutdown(self, *a: Any, **k: Any) -> None: ...
-            def set_task_future(self, *a: Any) -> None: ...
-
-        class StubBus:
-            async def send(self, *a: Any, **k: Any) -> None: ...
-
-        teammate = StubTeammate()
-        rt = PersistentRuntimeV2.from_teammate(teammate, StubBus())
+        rt = PersistentRuntimeV2.from_executor(StubExecutor())
         assert rt.capabilities.max_concurrency == 1
         assert rt.capabilities.queue_capacity == 0
         assert rt.capabilities.supports_pause
@@ -443,23 +433,11 @@ class TestPersistentRuntimeV2:
     async def test_status_mapping(self) -> None:
         from mcc_harness.runtime.persistent import PersistentRuntimeV2
 
-        class StubTeammate:
-            spec = type("S", (), {"name": "test"})()
-            runtime_status = RuntimeStatus.CREATED
+        class StubExecutor:
+            async def execute(self, task: Any, **kw: Any) -> Any: ...
+            async def close(self) -> None: ...
 
-            def notify(self) -> None: ...
-            def alive(self) -> bool:
-                return False
-
-            async def start(self, *a: Any, **k: Any) -> None: ...
-            async def shutdown(self, *a: Any, **k: Any) -> None: ...
-            def set_task_future(self, *a: Any) -> None: ...
-
-        class StubBus:
-            async def send(self, *a: Any, **k: Any) -> None: ...
-
-        teammate = StubTeammate()
-        rt = PersistentRuntimeV2.from_teammate(teammate, StubBus())
+        rt = PersistentRuntimeV2.from_executor(StubExecutor())
         assert rt.status is RuntimeStatus.CREATED
 
 

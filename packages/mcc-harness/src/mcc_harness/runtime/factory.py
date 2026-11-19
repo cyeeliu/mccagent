@@ -66,12 +66,42 @@ class RuntimeFactory:
         lead_name: str = LEAD_NAME,
         runtime_id: str | None = None,
     ) -> Any:
-        """创建 V2 常驻运行时（新 Protocol）。"""
+        """创建 V2 常驻运行时（新 Protocol）。
+
+        通过 teammate.build_agent_executor() 构造 AgentLoopExecutor，
+        包装为 TeammateExecutionService 后用 from_executor 创建实例。
+        teammate 仅负责消息收发，不执行任务。
+        """
+        from ..teammate import (
+            TeammateDefinition,
+            TeammateExecutionService,
+            TeammateMessageAdapter,
+        )
         from .persistent import PersistentRuntimeV2
 
-        return PersistentRuntimeV2.from_teammate(
-            teammate,
+        inner_executor = teammate.build_agent_executor()
+        definition = TeammateDefinition.from_spec(teammate.spec)
+        message_adapter = TeammateMessageAdapter(
             bus,
+            name=teammate.spec.name,
+            lead_name=lead_name,
+        )
+        service = TeammateExecutionService(
+            inner_executor,
+            definition=definition,
+            message_adapter=message_adapter,
+            plan_store=teammate._plan_store,
+            task_store=teammate._task_store,
+            base_dir=teammate._base_dir,
+            worktree_enabled=teammate._worktree_enabled,
+            runtime_id=teammate.runtime_id,
+            agent_id=teammate.spec.name,
+        )
+        return PersistentRuntimeV2.from_executor(
+            service,
+            teammate=teammate,
+            bus=bus,
             lead_name=lead_name,
             runtime_id=runtime_id,
+            agent_id=teammate.spec.name,
         )

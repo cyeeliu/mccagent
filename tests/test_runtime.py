@@ -36,6 +36,44 @@ from mcc_tools import ToolRegistry, default_registry
 # -- helpers --
 
 
+def _build_persistent_from_teammate(
+    teammate: TeammateRuntime,
+    bus: MessageBus,
+) -> PersistentRuntimeV2:
+    """通过 from_executor + TeammateExecutionService 构造 PersistentRuntimeV2。
+
+    teammate 仅负责消息收发（_run_loop idling），任务执行由
+    TeammateExecutionService → AgentLoopExecutor 驱动。
+    """
+    from mcc_harness.teammate import (
+        TeammateDefinition,
+        TeammateExecutionService,
+        TeammateMessageAdapter,
+    )
+
+    inner_executor = teammate.build_agent_executor()
+    definition = TeammateDefinition.from_spec(teammate.spec)
+    message_adapter = TeammateMessageAdapter(bus, name=teammate.spec.name)
+    service = TeammateExecutionService(
+        inner_executor,
+        definition=definition,
+        message_adapter=message_adapter,
+        plan_store=teammate._plan_store,
+        task_store=teammate._task_store,
+        base_dir=teammate._base_dir,
+        worktree_enabled=teammate._worktree_enabled,
+        runtime_id=teammate.runtime_id,
+        agent_id=teammate.spec.name,
+    )
+    return PersistentRuntimeV2.from_executor(
+        service,
+        teammate=teammate,
+        bus=bus,
+        lead_name=LEAD_NAME,
+        agent_id=teammate.spec.name,
+    )
+
+
 def _make_persistent(
     tmp_path: Path,
     llm=None,
@@ -58,7 +96,7 @@ def _make_persistent(
         plan_store=plan_store,
         base_dir=tmp_path,
     )
-    return PersistentRuntimeV2.from_teammate(rt, bus)
+    return _build_persistent_from_teammate(rt, bus)
 
 
 # -- 接口契约测试 --
@@ -193,7 +231,7 @@ class TestPersistentRuntimeV2:
             plan_store=plan_store,
             base_dir=tmp_path,
         )
-        rt = PersistentRuntimeV2.from_teammate(teammate, bus)
+        rt = _build_persistent_from_teammate(teammate, bus)
         await rt.start()
         await rt.submit_task("do the work")
         await asyncio.sleep(0.3)
@@ -338,7 +376,7 @@ class TestOldApiCompatibility:
             plan_store=plan_store,
             base_dir=tmp_path,
         )
-        rt = PersistentRuntimeV2.from_teammate(teammate, bus)
+        rt = _build_persistent_from_teammate(teammate, bus)
 
         await rt.start()
         await asyncio.sleep(0.3)
@@ -379,7 +417,7 @@ class TestOldApiCompatibility:
             plan_store=plan_store,
             base_dir=tmp_path,
         )
-        rt = PersistentRuntimeV2.from_teammate(teammate, bus)
+        rt = _build_persistent_from_teammate(teammate, bus)
         await rt.start()
         await rt.submit_task("hang work", task_id="t-hang")
         await asyncio.sleep(0.3)

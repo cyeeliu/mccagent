@@ -687,6 +687,20 @@ class TeammateRuntime:
             hooks=self._hooks,
         )
 
+    def build_agent_executor(self, cwd: Path | None = None) -> Any:
+        """构造 AgentLoopExecutor，供新执行路径直接持有。
+
+        返回的 AgentLoopExecutor 包装 _build_agent() 生成的 AgentLoop，
+        可作为 TeammateExecutionService 的内部 executor。
+        """
+        from .execution.agent_loop_executor import AgentLoopExecutor
+
+        agent_loop = self._build_agent(cwd)
+        return AgentLoopExecutor(
+            agent_loop,
+            agent_id=self.spec.name,
+        )
+
     def _try_claim_task(self) -> bool:
         if not self._task_store:
             return False
@@ -1247,11 +1261,37 @@ class TeammateManager:
 
         from .runtime.persistent import PersistentRuntimeV2
 
-        pr = PersistentRuntimeV2.from_teammate(rt, self._bus, lead_name=LEAD_NAME)
+        inner_executor = rt.build_agent_executor()
+        definition = TeammateDefinition.from_spec(spec)
+        message_adapter = TeammateMessageAdapter(
+            self._bus,
+            name=name,
+            lead_name=LEAD_NAME,
+        )
+        service = TeammateExecutionService(
+            inner_executor,
+            definition=definition,
+            message_adapter=message_adapter,
+            plan_store=self._plan_store,
+            task_store=self._task_store,
+            base_dir=self._base_dir,
+            worktree_enabled=self._worktree_enabled,
+            runtime_id=rt.runtime_id,
+            agent_id=name,
+        )
+        pr = PersistentRuntimeV2.from_executor(
+            service,
+            teammate=rt,
+            bus=self._bus,
+            lead_name=LEAD_NAME,
+            agent_id=name,
+        )
         self._coordinator.register(pr)
         try:
-            await rt.start(prompt, task_id=task_id)
+            await rt.start("")
             await pr.start()
+            if prompt:
+                await pr.submit_task(prompt, task_id=task_id)
         except Exception:
             self._coordinator.unregister(pr.runtime_id)
             raise

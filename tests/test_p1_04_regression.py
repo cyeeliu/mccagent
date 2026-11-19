@@ -7,8 +7,7 @@
 - TeammateMessageAdapter 封装 MessageBus 收发；
 - TeammateExecutionService 通过注入的 AgentExecutor 执行 RuntimeTask，
   含 Plan/Worktree/Result 回写；
-- PersistentRuntimeV2.from_executor 直接持有 AgentExecutor，端到端 submit/wait；
-- 旧路径 from_teammate / _TeammateExecutorAdapter 向后兼容。
+- PersistentRuntimeV2.from_executor 直接持有 AgentExecutor，端到端 submit/wait。
 
 使用真实集成（MessageBus / PlanStore / TaskStore + Stub executor 桩避免 LLM 依赖），
 不注入 mock。
@@ -29,7 +28,6 @@ from mcc_harness.plan import PlanStore
 from mcc_harness.runtime.base import RuntimeStatus
 from mcc_harness.runtime.persistent import (
     PersistentRuntimeV2,
-    _TeammateExecutorAdapter,
 )
 from mcc_harness.teammate import (
     LEAD_NAME,
@@ -177,13 +175,6 @@ class TestArchitectureGuards:
     def test_persistent_runtime_has_from_executor(self) -> None:
         assert hasattr(PersistentRuntimeV2, "from_executor")
         assert callable(PersistentRuntimeV2.from_executor)
-
-    def test_from_teammate_preserved_for_backward_compat(self) -> None:
-        assert hasattr(PersistentRuntimeV2, "from_teammate")
-        assert callable(PersistentRuntimeV2.from_teammate)
-
-    def test_teammate_executor_adapter_preserved(self) -> None:
-        assert _TeammateExecutorAdapter is not None
 
     def test_from_executor_is_classmethod(self) -> None:
         import inspect
@@ -594,38 +585,3 @@ class TestPersistentRuntimeFromExecutor:
             await pr.stop(timeout=5.0)
 
 
-# -- 向后兼容：from_teammate / _TeammateExecutorAdapter --
-
-
-class TestBackwardCompatFromTeammate:
-    """旧路径 from_teammate / _TeammateExecutorAdapter 仍可用。"""
-
-    async def test_from_teammate_still_works(self, bus: MessageBus, plan_store: PlanStore) -> None:
-        spec = _make_spec()
-        rt = TeammateRuntime(
-            spec=spec,
-            llm=MockLlm([]),
-            registry=ToolRegistry(),
-            bus=bus,
-            plan_store=plan_store,
-        )
-        pr = PersistentRuntimeV2.from_teammate(rt, bus)
-        assert isinstance(pr, PersistentRuntimeV2)
-        assert pr._teammate is rt
-        assert pr.agent_id == "worker"
-
-    def test_teammate_executor_adapter_constructable(
-        self,
-        bus: MessageBus,
-        plan_store: PlanStore,
-    ) -> None:
-        spec = _make_spec()
-        rt = TeammateRuntime(
-            spec=spec,
-            llm=MockLlm([]),
-            registry=ToolRegistry(),
-            bus=bus,
-            plan_store=plan_store,
-        )
-        adapter = _TeammateExecutorAdapter(rt, bus, LEAD_NAME)
-        assert adapter is not None

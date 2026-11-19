@@ -3,7 +3,8 @@
 循环执行模型：start → ready → (submit → running → ready)* → stop → stopped。
 通过 BoundedTaskQueue + WorkerPool + AgentExecutor 执行任务，
 支持背压控制和并发上限。
-通过 from_teammate() classmethod 提供 TeammateRuntime 向后兼容。
+通过 from_executor() classmethod 直接持有 AgentExecutor 构造实例，
+可选传入 teammate/bus/lead_name 用于消息收发与生命周期管理。
 """
 
 from __future__ import annotations
@@ -81,57 +82,12 @@ def _ensure_mappings() -> None:
     _TASK_OUTCOME_TO_TASK_STATUS[TeammateStatus.CANCELLED] = TaskStatus.CANCELLED
 
 
-class _TeammateExecutorAdapter:
-    """将 TeammateRuntime 适配为 AgentExecutor 接口。
-
-    execute(task) 通过 bus 向 teammate 发送任务，等待 future 结果，
-    转换为 mcc_core.runtime.RuntimeResult 返回。
-    """
-
-    def __init__(self, teammate: Any, bus: Any, lead_name: str) -> None:
-        self._teammate = teammate
-        self._bus = bus
-        self._lead_name = lead_name
-
-    async def execute(
-        self,
-        task: RuntimeTask,
-        **kwargs: Any,
-    ) -> CoreRuntimeResult:
-        _ensure_mappings()
-        future: asyncio.Future[tuple[Any, str]] = asyncio.get_running_loop().create_future()
-        self._teammate.set_task_future(task.task_id, future)
-        await self._bus.send(
-            self._lead_name,
-            self._teammate.name,
-            task.objective,
-            kind="task_submitted",
-            task_id=task.task_id,
-        )
-        self._teammate.notify()
-        outcome, summary = await future
-        task_status = _TASK_OUTCOME_TO_TASK_STATUS.get(outcome, TaskStatus.FAILED)
-        now = datetime.now(UTC)
-        return CoreRuntimeResult(
-            task_id=task.task_id,
-            attempt_id=task.attempt_id,
-            runtime_id=self._teammate.runtime_id,
-            agent_id=task.agent_id,
-            status=task_status,
-            summary=summary,
-            started_at=now,
-            finished_at=now,
-        )
-
-    async def close(self) -> None:
-        pass
-
-
 class PersistentRuntimeV2:
     """PersistentRuntimeV2：实现 mcc_core.runtime.protocols.AgentRuntime。
 
     通过 BoundedTaskQueue + WorkerPool + AgentExecutor 执行任务。
-    通过 from_teammate() 提供 TeammateRuntime 向后兼容。
+    通过 from_executor() 直接持有 AgentExecutor 构造实例，
+    可选传入 teammate/bus/lead_name 用于消息收发与生命周期管理。
     """
 
     def __init__(
@@ -164,6 +120,7 @@ class PersistentRuntimeV2:
             executor,
             max_workers=max_concurrency,
             on_event=self._on_worker_event,
+            runtime_id=self._runtime_id,
         )
 
         self._status = CoreRuntimeStatus.CREATED
@@ -179,30 +136,6 @@ class PersistentRuntimeV2:
         self._message_adapter: Any = None
 
     @classmethod
-    def from_teammate(
-        cls,
-        teammate: Any,
-        bus: Any,
-        *,
-        lead_name: str | None = None,
-        runtime_id: str | None = None,
-    ) -> PersistentRuntimeV2:
-        from ..teammate import LEAD_NAME
-
-        ln = lead_name or LEAD_NAME
-        adapter = _TeammateExecutorAdapter(teammate, bus, ln)
-        instance = cls(
-            adapter,
-            max_concurrency=1,
-            runtime_id=runtime_id,
-            agent_id=teammate.spec.name,
-        )
-        instance._teammate = teammate
-        instance._bus = bus
-        instance._lead_name = ln
-        return instance
-
-    @classmethod
     def from_executor(
         cls,
         executor: Any,
@@ -210,14 +143,22 @@ class PersistentRuntimeV2:
         runtime_id: str | None = None,
         agent_id: str = "",
         message_adapter: Any | None = None,
+        teammate: Any | None = None,
+        bus: Any | None = None,
+        lead_name: str = "",
         max_concurrency: int = 1,
         queue_capacity: int = 0,
     ) -> PersistentRuntimeV2:
         """直接持有 AgentExecutor 构造 PersistentRuntimeV2。
 
-        新路径：不经过 _TeammateExecutorAdapter / 旧 TeammateRuntime，
-        PersistentRuntimeV2 直接通过 BoundedTaskQueue + WorkerPool 驱动 executor。
-        message_adapter 可选，用于 instruction/pause/resume 等消息收发。
+        PersistentRuntimeV2 通过 BoundedTaskQueue + WorkerPool 驱动 executor，
+        不经过旧 TeammateRuntime 执行引擎。
+
+        可选参数：
+        - message_adapter：用于 instruction/pause/resume 等消息收发。
+        - teammate/bus/lead_name：传入后设置内部状态，使
+          inject_instruction/pause/resume/cancel/notify/info 等方法可用，
+          teammate 的 _run_loop 负责消息处理（不执行任务）。
         """
         instance = cls(
             executor,
@@ -227,6 +168,10 @@ class PersistentRuntimeV2:
             agent_id=agent_id,
         )
         instance._message_adapter = message_adapter
+        if teammate is not None:
+            instance._teammate = teammate
+            instance._bus = bus
+            instance._lead_name = lead_name
         return instance
 
     @property
@@ -345,17 +290,19 @@ class PersistentRuntimeV2:
         self._status = CoreRuntimeStatus.STOPPING
         await self._emit(RuntimeEventType.RUNTIME_STOPPING)
 
-        await self._worker_pool.stop(timeout=timeout or 5.0)
+        stop_timeout = timeout or 5.0
+        timed_out = False
+
+        try:
+            await self._worker_pool.stop(timeout=stop_timeout)
+        except RuntimeStopTimeoutError:
+            timed_out = True
 
         if self._teammate is not None and self._teammate.alive:
             try:
-                await self._teammate.shutdown(timeout=timeout or 5.0)
+                await self._teammate.shutdown(timeout=stop_timeout)
             except RuntimeStopTimeoutError:
-                self._status = CoreRuntimeStatus.STOPPED
-                await self._emit(RuntimeEventType.RUNTIME_STOPPED)
-                for listener in self._event_listeners:
-                    await listener.put(None)
-                raise
+                timed_out = True
 
         if self._teammate is None and hasattr(self._executor, "close"):
             await self._executor.close()
@@ -364,6 +311,9 @@ class PersistentRuntimeV2:
         await self._emit(RuntimeEventType.RUNTIME_STOPPED)
         for listener in self._event_listeners:
             await listener.put(None)
+
+        if timed_out:
+            raise RuntimeStopTimeoutError(self._runtime_id, stop_timeout)
 
     async def health_check(self) -> Any:
         uptime = time.monotonic() - self._started_at if self._started_at else 0.0

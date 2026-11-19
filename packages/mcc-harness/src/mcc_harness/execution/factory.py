@@ -234,6 +234,11 @@ class DefaultAgentFactory:
 
         if kind is RuntimeKind.PERSISTENT:
             from mcc_harness.runtime.persistent import PersistentRuntimeV2
+            from mcc_harness.teammate import (
+                TeammateDefinition,
+                TeammateExecutionService,
+                TeammateMessageAdapter,
+            )
 
             teammate = getattr(session, "teammate", None)
             bus = getattr(session, "bus", None)
@@ -241,9 +246,29 @@ class DefaultAgentFactory:
                 raise ValueError(
                     "teammate and bus are required in session_context for PERSISTENT runtime",
                 )
-            return PersistentRuntimeV2.from_teammate(
-                teammate,
+            inner_executor = teammate.build_agent_executor()
+            definition = TeammateDefinition.from_spec(teammate.spec)
+            message_adapter = TeammateMessageAdapter(
                 bus,
+                name=teammate.spec.name,
+            )
+            service = TeammateExecutionService(
+                inner_executor,
+                definition=definition,
+                message_adapter=message_adapter,
+                plan_store=teammate._plan_store,
+                task_store=teammate._task_store,
+                base_dir=teammate._base_dir,
+                worktree_enabled=teammate._worktree_enabled,
+                runtime_id=teammate.runtime_id,
+                agent_id=teammate.spec.name,
+            )
+            return PersistentRuntimeV2.from_executor(
+                service,
+                teammate=teammate,
+                bus=bus,
+                lead_name=teammate._lead_name,
+                agent_id=teammate.spec.name,
             )
 
         raise NotImplementedError(

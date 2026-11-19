@@ -10,6 +10,8 @@ import asyncio
 import logging
 from typing import Any
 
+from mcc_core.runtime.errors import RuntimeStopTimeoutError
+
 from .bounded_task_queue import BoundedTaskQueue
 
 logger = logging.getLogger(__name__)
@@ -29,11 +31,13 @@ class WorkerPool:
         *,
         max_workers: int = 1,
         on_event: Any | None = None,
+        runtime_id: str = "",
     ) -> None:
         self._queue = queue
         self._executor = executor
         self._max_workers = max_workers
         self._on_event = on_event
+        self._runtime_id = runtime_id
         self._workers: list[asyncio.Task] = []
         self._started = False
         self._stop_event = asyncio.Event()
@@ -61,24 +65,32 @@ class WorkerPool:
             self._workers.append(task)
 
     async def stop(self, *, timeout: float = 5.0) -> None:
-        """停止所有 worker，等待当前任务完成。"""
+        """停止所有 worker，等待当前任务完成。
+
+        若 worker 在超时内未完成，取消所有 worker 并抛出
+        RuntimeStopTimeoutError，使调用方感知停止超时。
+        """
         if not self._started:
             return
         self._stop_event.set()
         # 为每个 worker 放入一个 sentinel，使其都能优雅退出而非依赖超时+cancel
         await self._queue.close(num_sentinels=self._max_workers)
+        timed_out = False
         try:
             await asyncio.wait_for(
                 asyncio.gather(*self._workers, return_exceptions=True),
                 timeout=timeout,
             )
         except TimeoutError:
+            timed_out = True
             for w in self._workers:
                 if not w.done():
                     w.cancel()
             await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
         self._started = False
+        if timed_out:
+            raise RuntimeStopTimeoutError(self._runtime_id, timeout)
 
     async def _worker_loop(self, worker_id: int) -> None:
         """单个 worker 循环：取任务 → 执行 → 设置结果。"""

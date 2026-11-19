@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from mcc_harness.execution import DefaultAgentFactory, SessionContext
 
@@ -32,6 +34,15 @@ class _StubTeammateSpec:
 
     def __init__(self, name: str = "teammate-1") -> None:
         self.name = name
+        self.role = "coder"
+        self.system = "test"
+        self.model = "test"
+        self.tools: list[str] = []
+        self.max_iterations = 20
+        self.max_tokens = 4096
+        self.budget_tokens = 150_000
+        self.require_plan = False
+        self.timeout_secs = 300.0
 
 
 class _StubTeammate:
@@ -39,6 +50,24 @@ class _StubTeammate:
 
     def __init__(self, name: str = "teammate-1") -> None:
         self.spec = _StubTeammateSpec(name)
+        self._plan_store = None
+        self._task_store = None
+        self._base_dir = None
+        self._worktree_enabled = False
+        self._lead_name = "lead"
+
+    @property
+    def runtime_id(self) -> str:
+        return f"teammate::{self.spec.name}"
+
+    def build_agent_executor(self, cwd: Any = None) -> Any:
+        """返回桩 executor，供 from_executor 路径使用。"""
+
+        class _StubExecutor:
+            async def execute(self, task: Any, **kw: Any) -> Any: ...
+            async def close(self) -> None: ...
+
+        return _StubExecutor()
 
 
 class TestDefaultAgentFactory:

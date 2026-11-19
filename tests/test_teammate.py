@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from typing import Any
 
 import pytest
 from mcc_core import ToolContext
@@ -2103,26 +2104,13 @@ class TestPersistentRuntimeV2SubmitWaitTask:
     async def test_wait_task_timeout_raises(self, tmp_path):
         from mcc_harness.runtime.base import WaitTimeoutError
 
-        bus = MessageBus(tmp_path)
-        plan_store = PlanStore()
-        registry = ToolRegistry()
-        spec = TeammateSpec(
-            name="worker",
-            role="coder",
-            system="test",
-            model="test",
-        )
-        rt = TeammateRuntime(
-            spec=spec,
-            llm=MockLlm([]),
-            registry=registry,
-            bus=bus,
-            plan_store=plan_store,
-        )
-        pr = PersistentRuntimeV2.from_teammate(rt, bus)
+        class StubExecutor:
+            async def execute(self, task: Any, **kw: Any) -> Any: ...
+            async def close(self) -> None: ...
+
+        pr = PersistentRuntimeV2.from_executor(StubExecutor())
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         pr._task_futures["t-slow"] = future
-        rt.set_task_future("t-slow", future)
         with pytest.raises(WaitTimeoutError):
             await pr.wait_task("t-slow", timeout=0.05)
 
