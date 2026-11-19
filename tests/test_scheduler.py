@@ -18,6 +18,7 @@ from mcc_harness import (
     PriorityOrder,
     RegistrationStatus,
     RetryHandler,
+    SchedulableTask,
     SchedulingError,
     SchedulingPolicy,
     SchedulingResult,
@@ -68,6 +69,31 @@ def make_spec(
         priority=priority,
         blocked_by=blocked_by,
     )
+
+
+def make_schedulable(
+    subject: str = "task",
+    task_id: str = "",
+    capabilities: frozenset[str] = frozenset(),
+    priority: int = 0,
+    blocked_by: tuple[str, ...] = (),
+) -> SchedulableTask:
+    tid = task_id or f"task_{abs(hash(subject)) % 0xFFFF:04x}"
+    return SchedulableTask(
+        task_id=tid,
+        spec=make_spec(subject, capabilities, priority, blocked_by),
+    )
+
+
+def to_schedulable(
+    specs: list[TaskSpec],
+    task_ids: list[str] | None = None,
+) -> list[SchedulableTask]:
+    ids = task_ids or [f"task_{i:04d}" for i in range(len(specs))]
+    return [
+        SchedulableTask(task_id=ids[i], spec=spec)
+        for i, spec in enumerate(specs)
+    ]
 
 
 # -- SchedulingPolicy 校验 --
@@ -246,7 +272,7 @@ class TestSchedulerBasic:
     async def test_schedule_basic_assignment(self, registry):
         register_agent(registry, "a1")
         scheduler = TaskSchedulerImpl()
-        result = await scheduler.schedule([make_spec("task1")], registry)
+        result = await scheduler.schedule([make_schedulable("task1")], registry)
         assert len(result) == 1
         assert result[0].agent_id == "a1"
         assert result[0].task_spec.subject == "task1"
@@ -256,7 +282,7 @@ class TestSchedulerBasic:
         register_agent(registry, "a2")
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule(
-            [make_spec("t1"), make_spec("t2")], registry,
+            [make_schedulable("t1"), make_schedulable("t2")], registry,
         )
         assert len(result) == 2
         agent_ids = {a.agent_id for a in result}
@@ -267,7 +293,7 @@ class TestSchedulerBasic:
         register_agent(registry, "a2")
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule(
-            [make_spec("t1")], registry,
+            [make_schedulable("t1")], registry,
             exclude_agents=frozenset({"a1"}),
         )
         assert len(result) == 1
@@ -275,7 +301,7 @@ class TestSchedulerBasic:
 
     async def test_schedule_no_agents_returns_empty(self, registry):
         scheduler = TaskSchedulerImpl()
-        result = await scheduler.schedule([make_spec("t1")], registry)
+        result = await scheduler.schedule([make_schedulable("t1")], registry)
         assert result == []
 
 
@@ -292,7 +318,7 @@ class TestDependencyDAG:
 
         scheduler = TaskSchedulerImpl(dependency_check=deps_check)
         result = await scheduler.schedule_round(
-            [make_spec("t1"), make_spec("t2")], registry,
+            [make_schedulable("t1"), make_schedulable("t2")], registry,
         )
         assert result.total_assigned == 0
         assert len(result.deferred) == 2
@@ -306,7 +332,7 @@ class TestDependencyDAG:
 
         scheduler = TaskSchedulerImpl(dependency_check=deps_check)
         result = await scheduler.schedule_round(
-            [make_spec("t1"), make_spec("t2")], registry,
+            [make_schedulable("t1"), make_schedulable("t2")], registry,
         )
         assert result.total_assigned == 2
         assert len(result.deferred) == 0
@@ -314,18 +340,22 @@ class TestDependencyDAG:
     async def test_mixed_deps(self, registry):
         register_agent(registry, "a1")
         register_agent(registry, "a2")
-        ready_map = {"task_0000": True, "task_0001": False}
+        ready_map = {"task_ready": True, "task_blocked": False}
 
         def deps_check(tid):
             return ready_map.get(tid, True)
 
         scheduler = TaskSchedulerImpl(dependency_check=deps_check)
         result = await scheduler.schedule_round(
-            [make_spec("ready"), make_spec("blocked")], registry,
+            [
+                make_schedulable("ready", task_id="task_ready"),
+                make_schedulable("blocked", task_id="task_blocked"),
+            ],
+            registry,
         )
         assert result.total_assigned == 1
         assert len(result.deferred) == 1
-        assert result.deferred[0] == "task_0001"
+        assert result.deferred[0] == "task_blocked"
 
     async def test_task_store_integration(self, registry, task_store):
         register_agent(registry, "a1")
@@ -338,9 +368,11 @@ class TestDependencyDAG:
             dependency_check=lambda tid: task_store.can_start(tid),
         )
         result = await scheduler.schedule_round(
-            [make_spec("child"), make_spec("parent")],
+            [
+                SchedulableTask(task_id=t2.id, spec=make_spec("child")),
+                SchedulableTask(task_id=t1.id, spec=make_spec("parent")),
+            ],
             registry,
-            task_ids=[t2.id, t1.id],
         )
         assert result.total_assigned == 1
         assert len(result.deferred) == 1
@@ -351,8 +383,7 @@ class TestDependencyDAG:
         task_store.complete(t1.id, parent_agent)
         scheduler.reset_loads()
         result2 = await scheduler.schedule_round(
-            [make_spec("child")], registry,
-            task_ids=[t2.id],
+            [SchedulableTask(task_id=t2.id, spec=make_spec("child"))], registry,
         )
         assert result2.total_assigned == 1
 
@@ -368,7 +399,7 @@ class TestCapabilityMatching:
         register_agent(registry, "a2", frozenset({"rust"}))
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule(
-            [make_spec("task", capabilities=frozenset({"python"}))], registry,
+            [make_schedulable("task", capabilities=frozenset({"python"}))], registry,
         )
         assert len(result) == 1
         assert result[0].agent_id == "a1"
@@ -377,7 +408,7 @@ class TestCapabilityMatching:
         register_agent(registry, "a1", frozenset({"rust"}))
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule_round(
-            [make_spec("task", capabilities=frozenset({"python"}))], registry,
+            [make_schedulable("task", capabilities=frozenset({"python"}))], registry,
         )
         assert result.total_assigned == 0
         assert len(result.rejected) == 1
@@ -387,7 +418,7 @@ class TestCapabilityMatching:
         register_agent(registry, "a2", frozenset({"python"}))
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule(
-            [make_spec("task", capabilities=frozenset({"python", "test"}))], registry,
+            [make_schedulable("task", capabilities=frozenset({"python", "test"}))], registry,
         )
         assert len(result) == 1
         assert result[0].agent_id == "a1"
@@ -396,7 +427,7 @@ class TestCapabilityMatching:
         register_agent(registry, "a1", frozenset({"python"}))
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule(
-            [make_spec("task", capabilities=frozenset())], registry,
+            [make_schedulable("task", capabilities=frozenset())], registry,
         )
         assert len(result) == 1
 
@@ -413,7 +444,7 @@ class TestConcurrencyLimit:
         policy = SchedulingPolicy(max_concurrent_per_agent=2)
         scheduler = TaskSchedulerImpl(policy)
         result = await scheduler.schedule(
-            [make_spec("t1"), make_spec("t2"), make_spec("t3")], registry,
+            [make_schedulable("t1"), make_schedulable("t2"), make_schedulable("t3")], registry,
         )
         agent_counts: dict[str, int] = {}
         for a in result:
@@ -426,7 +457,7 @@ class TestConcurrencyLimit:
         register_agent(registry, "a2")
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule(
-            [make_spec("t1"), make_spec("t2")], registry,
+            [make_schedulable("t1"), make_schedulable("t2")], registry,
         )
         assert len(result) == 2
         assert result[0].agent_id != result[1].agent_id
@@ -437,7 +468,7 @@ class TestConcurrencyLimit:
         policy = SchedulingPolicy(max_total_assignments=1)
         scheduler = TaskSchedulerImpl(policy)
         result = await scheduler.schedule_round(
-            [make_spec("t1"), make_spec("t2")], registry,
+            [make_schedulable("t1"), make_schedulable("t2")], registry,
         )
         assert result.total_assigned == 1
         assert len(result.deferred) == 1
@@ -456,12 +487,12 @@ class TestPrioritySort:
         scheduler = TaskSchedulerImpl(
             SchedulingPolicy(priority_order=PriorityOrder.DESC),
         )
-        specs = [
-            make_spec("low", priority=1),
-            make_spec("high", priority=10),
-            make_spec("mid", priority=5),
+        tasks = [
+            make_schedulable("low", priority=1),
+            make_schedulable("high", priority=10),
+            make_schedulable("mid", priority=5),
         ]
-        result = await scheduler.schedule(specs, registry)
+        result = await scheduler.schedule(tasks, registry)
         subjects = [a.task_spec.subject for a in result]
         assert subjects[0] == "high"
         assert subjects[1] == "mid"
@@ -474,12 +505,12 @@ class TestPrioritySort:
         scheduler = TaskSchedulerImpl(
             SchedulingPolicy(priority_order=PriorityOrder.ASC),
         )
-        specs = [
-            make_spec("low", priority=1),
-            make_spec("high", priority=10),
-            make_spec("mid", priority=5),
+        tasks = [
+            make_schedulable("low", priority=1),
+            make_schedulable("high", priority=10),
+            make_schedulable("mid", priority=5),
         ]
-        result = await scheduler.schedule(specs, registry)
+        result = await scheduler.schedule(tasks, registry)
         subjects = [a.task_spec.subject for a in result]
         assert subjects[0] == "low"
         assert subjects[1] == "mid"
@@ -497,11 +528,11 @@ class TestNoDuplicateAssignment:
         register_agent(registry, "a2")
         scheduler = TaskSchedulerImpl()
         result1 = await scheduler.schedule(
-            [make_spec("t1")], registry,
+            [make_schedulable("t1")], registry,
         )
         used = {a.agent_id for a in result1}
         result2 = await scheduler.schedule(
-            [make_spec("t2")], registry,
+            [make_schedulable("t2")], registry,
             exclude_agents=used,
         )
         all_agents = {a.agent_id for a in result1 + result2}
@@ -511,7 +542,7 @@ class TestNoDuplicateAssignment:
         register_agent(registry, "a1")
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule(
-            [make_spec("t1"), make_spec("t2")], registry,
+            [make_schedulable("t1"), make_schedulable("t2")], registry,
         )
         assert len(result) == 1
 
@@ -533,8 +564,7 @@ class TestClaimCallback:
 
         scheduler = TaskSchedulerImpl(claim_callback=claim_cb)
         result = await scheduler.schedule(
-            [make_spec("task1")], registry,
-            task_ids=[t1.id],
+            [SchedulableTask(task_id=t1.id, spec=make_spec("task1"))], registry,
         )
         assert len(result) == 1
         assert len(claimed) == 1
@@ -550,7 +580,7 @@ class TestClaimCallback:
 
         scheduler = TaskSchedulerImpl(claim_callback=bad_claim)
         result = await scheduler.schedule(
-            [make_spec("t1")], registry,
+            [make_schedulable("t1")], registry,
         )
         assert len(result) == 1
 
@@ -719,7 +749,7 @@ class TestProtocolConformance:
     async def test_schedule_returns_assignments(self, registry):
         register_agent(registry, "a1")
         scheduler = TaskSchedulerImpl()
-        result = await scheduler.schedule([make_spec("t1")], registry)
+        result = await scheduler.schedule([make_schedulable("t1")], registry)
         assert all(isinstance(a, Assignment) for a in result)
 
 
@@ -747,13 +777,17 @@ class TestEndToEnd:
             claim_callback=claim_cb,
             dependency_check=lambda tid: task_store.can_start(tid),
         )
-        specs = [
-            make_spec("py-task", capabilities=frozenset({"python"})),
-            make_spec("rs-task", capabilities=frozenset({"rust"})),
+        tasks = [
+            SchedulableTask(
+                task_id=t1.id,
+                spec=make_spec("py-task", capabilities=frozenset({"python"})),
+            ),
+            SchedulableTask(
+                task_id=t2.id,
+                spec=make_spec("rs-task", capabilities=frozenset({"rust"})),
+            ),
         ]
-        result = await scheduler.schedule_round(
-            specs, registry, task_ids=[t1.id, t2.id],
-        )
+        result = await scheduler.schedule_round(tasks, registry)
         assert result.total_assigned == 2
         assert len(claimed) == 2
         for tid, aid in claimed:
@@ -767,7 +801,7 @@ class TestEndToEnd:
 
         scheduler = TaskSchedulerImpl()
         result = await scheduler.schedule(
-            [make_spec("task")], registry, task_ids=[t1.id],
+            [SchedulableTask(task_id=t1.id, spec=make_spec("task"))], registry,
         )
         assert len(result) == 1
         task_store.claim(result[0].task_id, result[0].agent_id)
@@ -786,10 +820,13 @@ class TestEndToEnd:
             dependency_check=lambda tid: task_store.can_start(tid),
             claim_callback=lambda tid, aid: task_store.claim(tid, aid),
         )
-        specs = [make_spec("a"), make_spec("b"), make_spec("c")]
-        ids = [t1.id, t2.id, t3.id]
+        tasks = [
+            SchedulableTask(task_id=t1.id, spec=make_spec("a")),
+            SchedulableTask(task_id=t2.id, spec=make_spec("b")),
+            SchedulableTask(task_id=t3.id, spec=make_spec("c")),
+        ]
 
-        result1 = await scheduler.schedule_round(specs, registry, task_ids=ids)
+        result1 = await scheduler.schedule_round(tasks, registry)
         assert result1.total_assigned == 1
         assert result1.assignments[0].task_id == t1.id
         assert len(result1.deferred) == 2
@@ -797,8 +834,11 @@ class TestEndToEnd:
         task_store.complete(t1.id, "a1")
         scheduler.reset_loads()
         result2 = await scheduler.schedule_round(
-            [make_spec("b"), make_spec("c")], registry,
-            task_ids=[t2.id, t3.id],
+            [
+                SchedulableTask(task_id=t2.id, spec=make_spec("b")),
+                SchedulableTask(task_id=t3.id, spec=make_spec("c")),
+            ],
+            registry,
         )
         assert result2.total_assigned == 1
         assert result2.assignments[0].task_id == t2.id
@@ -807,7 +847,7 @@ class TestEndToEnd:
         task_store.complete(t2.id, "a1")
         scheduler.reset_loads()
         result3 = await scheduler.schedule_round(
-            [make_spec("c")], registry, task_ids=[t3.id],
+            [SchedulableTask(task_id=t3.id, spec=make_spec("c"))], registry,
         )
         assert result3.total_assigned == 1
         assert result3.assignments[0].task_id == t3.id
@@ -818,7 +858,7 @@ class TestEndToEnd:
         policy = SchedulingPolicy(max_concurrent_per_agent=2)
         scheduler = TaskSchedulerImpl(policy)
         result = await scheduler.schedule(
-            [make_spec(f"t{i}") for i in range(4)], registry,
+            [make_schedulable(f"t{i}") for i in range(4)], registry,
         )
         assert len(result) == 4
         counts: dict[str, int] = {}

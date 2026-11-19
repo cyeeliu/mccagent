@@ -893,10 +893,12 @@ class TestTeamSlashCommand:
             MessageBus,
             PlanStore,
             RuntimeCoordinator,
+            TaskDispatcher,
             TeammateManager,
             TeamOrchestrator,
         )
-        from mcc_tools import ToolRegistry
+        from mcc_harness.runtime import TaskStoreAdapter
+        from mcc_tools import TaskStore, ToolRegistry
 
         registry = SlashRegistry()
         registry.register("team", "team", _team)
@@ -905,9 +907,12 @@ class TestTeamSlashCommand:
         plan_store = PlanStore()
         coord = RuntimeCoordinator()
         agent_reg = AgentRegistry()
+        task_store = TaskStore(tmp_path / ".tasks")
+        dispatcher = TaskDispatcher(TaskStoreAdapter(task_store), coord)
         orch = TeamOrchestrator(
             registry=agent_reg, bus=bus, plan_store=plan_store,
-            coordinator=coord,
+            task_store=task_store, coordinator=coord,
+            dispatcher=dispatcher,
         )
         mgr = TeammateManager(
             llm=MockLlm([single_text_turn("done")]),
@@ -931,10 +936,12 @@ class TestTeamSlashCommand:
             MessageBus,
             PlanStore,
             RuntimeCoordinator,
+            TaskDispatcher,
             TeammateManager,
             TeamOrchestrator,
         )
-        from mcc_tools import ToolRegistry
+        from mcc_harness.runtime import TaskStoreAdapter
+        from mcc_tools import TaskStore, ToolRegistry
 
         registry = SlashRegistry()
         registry.register("team", "team", _team)
@@ -943,9 +950,12 @@ class TestTeamSlashCommand:
         plan_store = PlanStore()
         coord = RuntimeCoordinator()
         agent_reg = AgentRegistry()
+        task_store = TaskStore(tmp_path / ".tasks")
+        dispatcher = TaskDispatcher(TaskStoreAdapter(task_store), coord)
         orch = TeamOrchestrator(
             registry=agent_reg, bus=bus, plan_store=plan_store,
-            coordinator=coord,
+            task_store=task_store, coordinator=coord,
+            dispatcher=dispatcher,
         )
         llm = MockLlm([
             single_text_turn("initial done"),

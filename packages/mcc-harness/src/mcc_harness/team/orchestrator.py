@@ -32,8 +32,6 @@ from mcc_harness.registry import AgentDescriptor, AgentRegistry, RegistrationSta
 from mcc_harness.runtime import (
     RuntimeCoordinator,
     RuntimeMode,
-    RuntimeResult,
-    RuntimeStatus,
     WaitTimeoutError,
 )
 from mcc_harness.runtime.dispatcher import TaskDispatcher
@@ -52,6 +50,19 @@ class TeamRunStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     SHUTDOWN = "shutdown"
+
+
+class DependencyPolicy(StrEnum):
+    """DAG 依赖策略：控制依赖任务在何种条件下才执行。
+
+    - ALL_SUCCESS：所有依赖必须成功才执行（默认，Coding Agent DAG）。
+    - ALL_TERMINAL：所有依赖到达任意终态即执行（容错编排）。
+    - ANY_SUCCESS：至少一个依赖成功即执行（可选依赖）。
+    """
+
+    ALL_SUCCESS = "all_success"
+    ALL_TERMINAL = "all_terminal"
+    ANY_SUCCESS = "any_success"
 
 
 _TERMINAL_RUN_STATUSES = frozenset({
@@ -93,6 +104,7 @@ class TeamPolicy:
     require_plan: bool = False
     max_attempts: int = 1
     budget_policy: BudgetPolicy | None = None
+    dependency_policy: DependencyPolicy = DependencyPolicy.ALL_SUCCESS
 
     def __post_init__(self) -> None:
         if self.max_agents < 1:
@@ -150,6 +162,19 @@ class Assignment:
     task_id: str
     agent_id: str
     task_spec: TaskSpec
+
+
+@dataclass(frozen=True)
+class SchedulableTask:
+    """可调度任务：将 TaskStore 中的 task_id 与 TaskSpec 绑定。
+
+    Scheduler 接收 SchedulableTask 列表而非裸 TaskSpec 列表，
+    使 Assignment.task_id 直接来源于 SchedulableTask.task_id，
+    消除数组索引关联带来的错位风险。
+    """
+
+    task_id: str
+    spec: TaskSpec
 
 
 @dataclass(frozen=True)
@@ -298,11 +323,13 @@ class TaskScheduler(Protocol):
     """任务调度器：将任务规格分配给可用 Agent。
 
     依赖 AgentRegistry 进行能力发现，返回 Assignment 列表。
+    接收 SchedulableTask 列表，每个元素已绑定 task_id，
+    Scheduler 须将 SchedulableTask.task_id 原样填入 Assignment.task_id。
     """
 
     async def schedule(
         self,
-        tasks: list[TaskSpec],
+        tasks: list[SchedulableTask],
         registry: AgentRegistry,
         *,
         exclude_agents: frozenset[str] = frozenset(),
@@ -348,28 +375,29 @@ class SimplePlanner:
 class CapabilityScheduler:
     """默认 TaskScheduler：按能力匹配分配任务。
 
-    策略：对每个 TaskSpec，在 Registry 中按 required_capabilities
+    策略：对每个 SchedulableTask，在 Registry 中按 required_capabilities
     查找可用 Agent，取第一个分配。无能力要求时分配给任意可用 Agent。
+    Assignment.task_id 直接取自 SchedulableTask.task_id。
     """
 
     async def schedule(
         self,
-        tasks: list[TaskSpec],
+        tasks: list[SchedulableTask],
         registry: AgentRegistry,
         *,
         exclude_agents: frozenset[str] = frozenset(),
     ) -> list[Assignment]:
         assignments: list[Assignment] = []
         used: set[str] = set(exclude_agents)
-        for spec in tasks:
-            agent_id = self._find_agent(spec, registry, frozenset(used))
+        for schedulable in tasks:
+            agent_id = self._find_agent(schedulable.spec, registry, frozenset(used))
             if agent_id is not None:
                 used.add(agent_id)
                 assignments.append(
                     Assignment(
-                        task_id="",
+                        task_id=schedulable.task_id,
                         agent_id=agent_id,
-                        task_spec=spec,
+                        task_spec=schedulable.spec,
                     )
                 )
         return assignments
@@ -435,12 +463,12 @@ class TeamOrchestrator:
         registry: AgentRegistry,
         bus: MessageBus,
         plan_store: PlanStore,
+        dispatcher: TaskDispatcher,
         task_store: Any | None = None,
         budget: AgentBudget | None = None,
         planner: Planner | None = None,
         scheduler: TaskScheduler | None = None,
         coordinator: RuntimeCoordinator | None = None,
-        dispatcher: TaskDispatcher | None = None,
     ) -> None:
         self._registry = registry
         self._bus = bus
@@ -473,7 +501,7 @@ class TeamOrchestrator:
         return self._task_store
 
     @property
-    def dispatcher(self) -> TaskDispatcher | None:
+    def dispatcher(self) -> TaskDispatcher:
         return self._dispatcher
 
     @property
@@ -533,7 +561,7 @@ class TeamOrchestrator:
     ) -> TeamRun:
         """启动一次 TeamRun：规划任务、注册 Agent、调度分配。
 
-        流程：Planner.plan → TaskStore.create → Scheduler.schedule → MessageBus 通知。
+        流程：Planner.plan → start_from_plan。
         TeamRun 进入 RUNNING 状态。若 Planner 返回空任务列表，直接进入 COMPLETED。
         """
         if not objective.strip():
@@ -556,6 +584,41 @@ class TeamOrchestrator:
             run.error = f"planner failed: {e}"
             raise OrchestratorError(f"planner failed: {e}") from e
 
+        return await self._start_from_plan(run, specs)
+
+    async def start_from_plan(
+        self,
+        team: Team,
+        objective: str,
+        specs: list[TaskSpec],
+        *,
+        run_id: str | None = None,
+    ) -> TeamRun:
+        """用预规划的任务列表启动 TeamRun，不调用 Planner。
+
+        允许调用方先执行 Planner.plan 并基于结果做准备（如创建 worker），
+        再将 specs 传入此方法，确保规划只执行一次。
+        """
+        if not objective.strip():
+            raise OrchestratorError("objective cannot be empty")
+
+        self._run_counter += 1
+        rid = run_id or f"run_{self._run_counter:04d}"
+        if rid in self._runs:
+            raise RunStateError(f"run already exists: {rid}")
+
+        run = TeamRun(run_id=rid, team=team, objective=objective)
+        run.started_at = time.time()
+        self._runs[rid] = run
+
+        return await self._start_from_plan(run, specs)
+
+    async def _start_from_plan(
+        self,
+        run: TeamRun,
+        specs: list[TaskSpec],
+    ) -> TeamRun:
+        """从已创建的 run 和 specs 执行任务创建与调度。"""
         if not specs:
             run.status = TeamRunStatus.COMPLETED
             run.finished_at = time.time()
@@ -566,19 +629,17 @@ class TeamOrchestrator:
         task_ids = await self._create_tasks(specs)
         run.task_ids = set(task_ids)
 
-        assignments = await self._scheduler.schedule(specs, self._registry)
-        for i, assignment in enumerate(assignments):
-            task_id = task_ids[i] if i < len(task_ids) else ""
-            assignment = Assignment(
-                task_id=task_id,
-                agent_id=assignment.agent_id,
-                task_spec=assignment.task_spec,
-            )
+        schedulable_tasks = [
+            SchedulableTask(task_id=tid, spec=spec)
+            for tid, spec in zip(task_ids, specs, strict=True)
+        ]
+        assignments = await self._scheduler.schedule(schedulable_tasks, self._registry)
+        for assignment in assignments:
             run.assignments.append(assignment)
             run.agent_ids.add(assignment.agent_id)
-            if task_id and self._task_store is not None:
+            if assignment.task_id and self._task_store is not None:
                 with contextlib.suppress(Exception):
-                    self._task_store.claim(task_id, assignment.agent_id)
+                    self._task_store.claim(assignment.task_id, assignment.agent_id)
 
         return run
 
@@ -752,12 +813,26 @@ class TeamOrchestrator:
             raise RunStateError(
                 f"cannot execute run in {run.status.value} state"
             )
+
+        # 为未被 Scheduler 分配的任务记录失败，使其参与终态判定
+        assigned_task_ids = {a.task_id for a in run.assignments if a.task_id}
+        unassigned_task_ids = run.task_ids - assigned_task_ids
+        for tid in unassigned_task_ids:
+            with contextlib.suppress(RunStateError):
+                await self.complete_task(
+                    run_id,
+                    "unassigned",
+                    tid,
+                    error="no agent available for task",
+                )
+
         if not run.assignments:
             return run
 
         run.status = TeamRunStatus.RUNNING
         semaphore = asyncio.Semaphore(run.team.policy.max_concurrent_tasks)
         max_attempts = run.team.policy.max_attempts
+        dependency_policy = run.team.policy.dependency_policy
 
         subject_to_assignment: dict[str, Assignment] = {
             a.task_spec.subject: a for a in run.assignments
@@ -766,12 +841,15 @@ class TeamOrchestrator:
             a.task_spec.subject: asyncio.Event()
             for a in run.assignments
         }
+        subject_outcomes: dict[str, str] = {}
 
         tasks = [
             self._execute_assignment(
                 run_id, assignment, semaphore, max_attempts,
                 completion_events=completion_events,
                 subject_to_assignment=subject_to_assignment,
+                subject_outcomes=subject_outcomes,
+                dependency_policy=dependency_policy,
             )
             for assignment in run.assignments
         ]
@@ -787,19 +865,44 @@ class TeamOrchestrator:
         *,
         completion_events: dict[str, asyncio.Event] | None = None,
         subject_to_assignment: dict[str, Assignment] | None = None,
+        subject_outcomes: dict[str, str] | None = None,
+        dependency_policy: DependencyPolicy = DependencyPolicy.ALL_SUCCESS,
     ) -> None:
         """执行单个 Assignment：Runtime 执行 → 结果回流。
 
         支持失败重试：当 Runtime 执行失败且 attempt < max_attempts 时，
         通过 TaskStore.retry 重置任务状态后重试。
         支持 DAG：等待 blocked_by 依赖的任务完成后再执行。
+        依赖策略：按 dependency_policy 检查依赖终态，不满足时跳过本任务。
         """
+        outcome = "failed"
         try:
             if completion_events and assignment.task_spec.blocked_by:
                 for dep_subject in assignment.task_spec.blocked_by:
                     dep_event = completion_events.get(dep_subject)
                     if dep_event is not None:
                         await dep_event.wait()
+
+            if (
+                assignment.task_spec.blocked_by
+                and subject_outcomes is not None
+                and not self._dependencies_satisfied(
+                    assignment.task_spec.blocked_by,
+                    subject_outcomes,
+                    dependency_policy,
+                )
+            ):
+                outcome = "skipped"
+                run = self._get_run(run_id)
+                if not run.is_terminal:
+                    with contextlib.suppress(RunStateError):
+                        await self.complete_task(
+                            run_id,
+                            assignment.agent_id,
+                            assignment.task_id,
+                            error="skipped: dependency not satisfied",
+                        )
+                return
 
             async with semaphore:
                 for attempt in range(1, max_attempts + 1):
@@ -819,27 +922,14 @@ class TeamOrchestrator:
                         return
 
                     try:
-                        if self._dispatcher is not None:
-                            result_summary, result_error, result_cost = (
-                                await self._dispatch_and_wait(
-                                    assignment,
-                                    runtime,
-                                    run_id,
-                                    run.team.policy.task_lease_secs,
-                                )
+                        result_summary, result_error, result_cost = (
+                            await self._dispatch_and_wait(
+                                assignment,
+                                runtime,
+                                run_id,
+                                run.team.policy.task_lease_secs,
                             )
-                        else:
-                            submitted_id = await runtime.submit_task(
-                                assignment.task_spec.subject,
-                                task_id=assignment.task_id,
-                            )
-                            result = await runtime.wait_task(
-                                submitted_id,
-                                timeout=run.team.policy.task_lease_secs,
-                            )
-                            result_summary = result.summary
-                            result_error = self._extract_error(result)
-                            result_cost = result.cost_usd
+                        )
                         if result_error is None:
                             with contextlib.suppress(RunStateError):
                                 await self.complete_task(
@@ -849,6 +939,7 @@ class TeamOrchestrator:
                                     summary=result_summary,
                                     cost_usd=result_cost,
                                 )
+                            outcome = "succeeded"
                             return
                         if attempt < max_attempts:
                             if self._task_store and assignment.task_id:
@@ -888,10 +979,36 @@ class TeamOrchestrator:
                                 error=f"execution error: {e}",
                             )
         finally:
+            if subject_outcomes is not None:
+                subject_outcomes[assignment.task_spec.subject] = outcome
             if completion_events:
                 event = completion_events.get(assignment.task_spec.subject)
                 if event is not None:
                     event.set()
+
+    def _dependencies_satisfied(
+        self,
+        blocked_by: tuple[str, ...],
+        subject_outcomes: dict[str, str],
+        policy: DependencyPolicy,
+    ) -> bool:
+        """按 DependencyPolicy 检查依赖终态是否满足执行条件。
+
+        依赖 outcome 取值：succeeded / failed / skipped / unassigned。
+        - ALL_SUCCESS：所有依赖必须 succeeded。
+        - ALL_TERMINAL：所有依赖到达任意终态（非 unassigned）。
+        - ANY_SUCCESS：至少一个依赖 succeeded。
+        """
+        dep_outcomes = [
+            subject_outcomes.get(dep, "unassigned") for dep in blocked_by
+        ]
+        if policy is DependencyPolicy.ALL_SUCCESS:
+            return all(o == "succeeded" for o in dep_outcomes)
+        if policy is DependencyPolicy.ALL_TERMINAL:
+            return all(o != "unassigned" for o in dep_outcomes)
+        if policy is DependencyPolicy.ANY_SUCCESS:
+            return any(o == "succeeded" for o in dep_outcomes)
+        return True
 
     async def _dispatch_and_wait(
         self,
@@ -935,17 +1052,6 @@ class TeamOrchestrator:
             return None
         return self._coordinator.get(runtime_id)
 
-    @staticmethod
-    def _extract_error(result: RuntimeResult) -> str | None:
-        """从 RuntimeResult 提取错误信息。
-
-        COMPLETED 和 SHUTDOWN 视为成功，无错误。
-        其他终态返回 error 字段或状态值。
-        """
-        if result.status in (RuntimeStatus.COMPLETED, RuntimeStatus.SHUTDOWN):
-            return None
-        return result.error or result.status.value
-
     def _check_run_completion(self, run: TeamRun) -> None:
         """检查是否所有任务已完成，更新 TeamRun 终态。"""
         total = len(run.task_ids)
@@ -981,13 +1087,46 @@ class TeamOrchestrator:
             snapshots = [s for s in snapshots if s.team_id == team_id]
         return snapshots
 
+    def _aggregate_results(self, run: TeamRun) -> tuple[AgentResult, ...]:
+        """从 TaskStore 终态聚合 AgentResult，TaskStore 为唯一事实来源。
+
+        无 TaskStore 时 fallback 到 run.results 内存副本。
+        summary / cost_usd 不在 TaskStore 中，从 run.results 缓存补充。
+        """
+        if self._task_store is None:
+            return tuple(run.results)
+
+        cache: dict[str, AgentResult] = {r.task_id: r for r in run.results}
+        results: list[AgentResult] = []
+        for tid in run.task_ids:
+            try:
+                task = self._task_store.load(tid)
+            except Exception:
+                cached = cache.get(tid)
+                if cached is not None:
+                    results.append(cached)
+                continue
+            cached = cache.get(tid)
+            results.append(
+                AgentResult(
+                    agent_id=task.owner_agent_id or task.owner or "",
+                    task_id=task.id,
+                    status=task.status,
+                    summary=cached.summary if cached else "",
+                    error=task.error,
+                    cost_usd=cached.cost_usd if cached else 0.0,
+                )
+            )
+        return tuple(results)
+
     def progress(self, run_id: str) -> TeamProgress:
         """查询 TeamRun 整体进度。"""
         run = self._get_run(run_id)
         total = len(run.task_ids)
-        completed = sum(1 for r in run.results if r.status == "completed")
+        results = self._aggregate_results(run)
+        completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
-            1 for r in run.results
+            1 for r in results
             if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
         )
         active = len(run.agent_ids)
@@ -1006,9 +1145,12 @@ class TeamOrchestrator:
         )
 
     async def collect_results(self, run_id: str) -> TeamRunResult:
-        """收集 TeamRun 汇总结果。"""
+        """收集 TeamRun 汇总结果。
+
+        结果从 TaskStore 终态聚合，TaskStore 为唯一事实来源。
+        """
         run = self._get_run(run_id)
-        results = tuple(run.results)
+        results = self._aggregate_results(run)
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
             1 for r in results

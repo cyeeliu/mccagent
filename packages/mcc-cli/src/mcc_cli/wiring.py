@@ -364,7 +364,11 @@ def _wire_team(
         async_task_store = TaskStoreAdapter(task_store)
     else:
         async_task_store = InMemoryTaskStore()
-    dispatcher = TaskDispatcher(async_task_store, coordinator) if coordinator else None
+    if coordinator is None:
+        from mcc_harness import RuntimeCoordinator
+
+        coordinator = RuntimeCoordinator()
+    dispatcher = TaskDispatcher(async_task_store, coordinator)
 
     orchestrator = TeamOrchestrator(
         registry=agent_registry,

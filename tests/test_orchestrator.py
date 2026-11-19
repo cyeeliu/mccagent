@@ -13,12 +13,14 @@ import unittest.mock
 from pathlib import Path
 
 import pytest
-from mcc_core.runtime import RuntimeCapabilities
+from mcc_core.runtime import RuntimeCapabilities, RuntimeEvent, RuntimeEventType, TaskHandle
+from mcc_core.runtime.errors import TaskTimeoutError
 from mcc_harness import (
     AgentDescriptor,
     AgentRegistry,
     Assignment,
     CapabilityScheduler,
+    DependencyPolicy,
     MessageBus,
     OrchestratorError,
     Planner,
@@ -31,6 +33,7 @@ from mcc_harness import (
     RuntimeMode,
     RuntimeResult,
     RuntimeStatus,
+    SchedulableTask,
     SimplePlanner,
     TaskScheduler,
     TaskSpec,
@@ -74,15 +77,22 @@ def task_store(tmp_base: Path) -> TaskStore:
 
 
 @pytest.fixture
+def fake_dispatcher() -> FakeDispatcher:
+    return FakeDispatcher()
+
+
+@pytest.fixture
 def orchestrator(
     registry: AgentRegistry,
     bus: MessageBus,
     plan_store: PlanStore,
+    fake_dispatcher: FakeDispatcher,
 ) -> TeamOrchestrator:
     return TeamOrchestrator(
         registry=registry,
         bus=bus,
         plan_store=plan_store,
+        dispatcher=fake_dispatcher,
     )
 
 
@@ -92,12 +102,14 @@ def orchestrator_with_tasks(
     bus: MessageBus,
     plan_store: PlanStore,
     task_store: TaskStore,
+    fake_dispatcher: FakeDispatcher,
 ) -> TeamOrchestrator:
     return TeamOrchestrator(
         registry=registry,
         bus=bus,
         plan_store=plan_store,
         task_store=task_store,
+        dispatcher=fake_dispatcher,
     )
 
 
@@ -119,6 +131,122 @@ def register_agents(orchestrator: TeamOrchestrator, count: int = 2) -> list[str]
             capabilities=frozenset({"code_generation"}),
         )
     return ids
+
+
+class FakeDispatcher:
+    """测试用 TaskDispatcher 桩：不依赖 TaskStore / Coordinator。
+
+    通过 runtime_id 查找预设结果，支持按 runtime_id 配置成功 / 失败 / 超时 /
+    序列结果（重试场景）。wait_for_result 根据 handle.runtime_id 返回对应事件。
+    """
+
+    def __init__(
+        self,
+        results: dict[str, RuntimeEvent] | None = None,
+        sequential: dict[str, list[RuntimeEvent]] | None = None,
+        timeout_runtimes: set[str] | None = None,
+        *,
+        delay: float = 0.0,
+    ) -> None:
+        self._results = results or {}
+        self._sequential = sequential or {}
+        self._timeout_runtimes = timeout_runtimes or set()
+        self._delay = delay
+        self._call_counts: dict[str, int] = {}
+        self.dispatch_count = 0
+        self.wait_count = 0
+        self.dispatched_tasks: list[str] = []
+
+    def set_success(self, runtime_id: str, summary: str = "done") -> None:
+        self._results[runtime_id] = RuntimeEvent(
+            event_id=f"evt-{runtime_id}",
+            event_type=RuntimeEventType.TASK_COMPLETED,
+            runtime_id=runtime_id,
+            payload={"summary": summary},
+        )
+
+    def set_failure(self, runtime_id: str, error: str = "error") -> None:
+        self._results[runtime_id] = RuntimeEvent(
+            event_id=f"evt-{runtime_id}",
+            event_type=RuntimeEventType.TASK_FAILED,
+            runtime_id=runtime_id,
+            payload={"error": error},
+        )
+
+    def set_sequential(self, runtime_id: str, events: list[RuntimeEvent]) -> None:
+        self._sequential[runtime_id] = events
+
+    def set_timeout(self, runtime_id: str) -> None:
+        self._timeout_runtimes.add(runtime_id)
+
+    async def dispatch(
+        self,
+        task_id: str,
+        agent_id: str,
+        *,
+        runtime_id: str,
+        objective: str | None = None,
+        input_data: dict[str, object] | None = None,
+        timeout_seconds: float | None = None,
+        run_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> TaskHandle:
+        self.dispatch_count += 1
+        self.dispatched_tasks.append(task_id)
+        return TaskHandle(
+            task_id=task_id,
+            attempt_id=f"att-{task_id}",
+            runtime_id=runtime_id,
+        )
+
+    async def wait_for_result(
+        self,
+        handle: TaskHandle,
+        *,
+        timeout: float | None = None,
+    ) -> RuntimeEvent:
+        self.wait_count += 1
+        if self._delay > 0:
+            await asyncio.sleep(self._delay)
+        if handle.runtime_id in self._timeout_runtimes:
+            raise TaskTimeoutError(handle.task_id, handle.attempt_id)
+        count = self._call_counts.get(handle.task_id, 0) + 1
+        self._call_counts[handle.task_id] = count
+        seq = self._sequential.get(handle.runtime_id)
+        if seq is not None:
+            return seq[min(count - 1, len(seq) - 1)]
+        result = self._results.get(handle.runtime_id)
+        if result is not None:
+            return result
+        return RuntimeEvent(
+            event_id=f"evt-{handle.task_id}",
+            event_type=RuntimeEventType.TASK_COMPLETED,
+            runtime_id=handle.runtime_id,
+            task_id=handle.task_id,
+            attempt_id=handle.attempt_id,
+            payload={"summary": "done"},
+        )
+
+    def call_count(self, task_id: str) -> int:
+        return self._call_counts.get(task_id, 0)
+
+
+def _completed_event(runtime_id: str, summary: str = "done") -> RuntimeEvent:
+    return RuntimeEvent(
+        event_id=f"evt-{runtime_id}",
+        event_type=RuntimeEventType.TASK_COMPLETED,
+        runtime_id=runtime_id,
+        payload={"summary": summary},
+    )
+
+
+def _failed_event(runtime_id: str, error: str = "error") -> RuntimeEvent:
+    return RuntimeEvent(
+        event_id=f"evt-{runtime_id}",
+        event_type=RuntimeEventType.TASK_FAILED,
+        runtime_id=runtime_id,
+        payload={"error": error},
+    )
 
 
 # -- TeamPolicy 校验 --
@@ -540,15 +668,16 @@ class TestEndToEnd:
 
     async def test_full_flow_success(self, orchestrator_with_tasks):
         orch = orchestrator_with_tasks
-        agent_ids = register_agents(orch, count=3)
+        register_agents(orch, count=3)
         team = make_team(orch)
         run = await orch.start(team, "实现模块A\n实现模块B\n实现模块C")
         assert run.status == TeamRunStatus.RUNNING
         assert len(run.task_ids) == 3
         assert len(run.agent_ids) >= 1
+        task_agent_map = {a.task_id: a.agent_id for a in run.assignments}
         task_list = sorted(run.task_ids)
         for i, tid in enumerate(task_list):
-            aid = agent_ids[i % len(agent_ids)]
+            aid = task_agent_map[tid]
             await orch.complete_task(
                 run.run_id, aid, tid, summary=f"模块{i+1}完成",
             )
@@ -561,15 +690,16 @@ class TestEndToEnd:
 
     async def test_full_flow_partial_failure(self, orchestrator_with_tasks):
         orch = orchestrator_with_tasks
-        agent_ids = register_agents(orch, count=2)
+        register_agents(orch, count=2)
         team = make_team(orch)
         run = await orch.start(team, "任务一\n任务二")
+        task_agent_map = {a.task_id: a.agent_id for a in run.assignments}
         task_list = sorted(run.task_ids)
         await orch.complete_task(
-            run.run_id, agent_ids[0], task_list[0], summary="ok",
+            run.run_id, task_agent_map[task_list[0]], task_list[0], summary="ok",
         )
         await orch.complete_task(
-            run.run_id, agent_ids[1], task_list[1], error="执行失败",
+            run.run_id, task_agent_map[task_list[1]], task_list[1], error="执行失败",
         )
         assert run.status == TeamRunStatus.FAILED
         prog = orch.progress(run.run_id)
@@ -634,10 +764,16 @@ class TestCustomScheduler:
             async def schedule(self, tasks, registry, *, exclude_agents=frozenset()):
                 agents = registry.list(status=RegistrationStatus.AVAILABLE)
                 assignments = []
-                for i, spec in enumerate(tasks):
+                for i, schedulable in enumerate(tasks):
                     if agents:
                         aid = agents[i % len(agents)].agent_id
-                        assignments.append(Assignment(task_id="", agent_id=aid, task_spec=spec))
+                        assignments.append(
+                            Assignment(
+                                task_id=schedulable.task_id,
+                                agent_id=aid,
+                                task_spec=schedulable.spec,
+                            )
+                        )
                 return assignments
 
         register_agents(orchestrator, count=3)
@@ -686,24 +822,29 @@ class TestCapabilityScheduler:
             capabilities=frozenset({"code_review"}),
         ))
         scheduler = CapabilityScheduler()
-        specs = [TaskSpec(subject="write", required_capabilities=frozenset({"code_generation"}))]
-        assignments = await scheduler.schedule(specs, registry)
+        tasks = [SchedulableTask(
+            task_id="t1",
+            spec=TaskSpec(subject="write", required_capabilities=frozenset({"code_generation"})),
+        )]
+        assignments = await scheduler.schedule(tasks, registry)
         assert len(assignments) == 1
         assert assignments[0].agent_id == "a1"
+        assert assignments[0].task_id == "t1"
 
     async def test_schedule_no_capability_any_agent(self, registry):
         registry.register(AgentDescriptor(
             agent_id="a1", agent_name="worker", capabilities=frozenset(),
         ))
         scheduler = CapabilityScheduler()
-        specs = [TaskSpec(subject="generic")]
-        assignments = await scheduler.schedule(specs, registry)
+        tasks = [SchedulableTask(task_id="t1", spec=TaskSpec(subject="generic"))]
+        assignments = await scheduler.schedule(tasks, registry)
         assert len(assignments) == 1
+        assert assignments[0].task_id == "t1"
 
     async def test_schedule_no_agents_empty(self, registry):
         scheduler = CapabilityScheduler()
-        specs = [TaskSpec(subject="orphan")]
-        assignments = await scheduler.schedule(specs, registry)
+        tasks = [SchedulableTask(task_id="t1", spec=TaskSpec(subject="orphan"))]
+        assignments = await scheduler.schedule(tasks, registry)
         assert assignments == []
 
     async def test_schedule_exclude_agents(self, registry):
@@ -714,9 +855,117 @@ class TestCapabilityScheduler:
             agent_id="a2", agent_name="w2", capabilities=frozenset({"code"}),
         ))
         scheduler = CapabilityScheduler()
-        specs = [TaskSpec(subject="task", required_capabilities=frozenset({"code"}))]
-        assignments = await scheduler.schedule(specs, registry, exclude_agents=frozenset({"a1"}))
+        tasks = [SchedulableTask(
+            task_id="t1",
+            spec=TaskSpec(subject="task", required_capabilities=frozenset({"code"})),
+        )]
+        assignments = await scheduler.schedule(tasks, registry, exclude_agents=frozenset({"a1"}))
         assert assignments[0].agent_id == "a2"
+        assert assignments[0].task_id == "t1"
+
+
+class TestSchedulableTaskAssociation:
+    """P1-07: Task ID 与 Assignment 关联不应依赖数组索引。"""
+
+    async def test_skipped_task_does_not_shift_task_id(
+        self, orchestrator_with_tasks,
+    ):
+        """第一个 Task 无 Agent 匹配、第二个有匹配时，
+        Assignment 的 task_id 必须对应第二个 Task。"""
+        orch = orchestrator_with_tasks
+        orch.register_agent(
+            agent_id="reviewer-1",
+            agent_name="reviewer",
+            capabilities=frozenset({"code_review"}),
+        )
+        team = make_team(orch)
+
+        class CapabilityPlanner:
+            async def plan(self, objective, *, context=None):
+                return [
+                    TaskSpec(
+                        subject="write code",
+                        description="generate code",
+                        required_capabilities=frozenset({"code_generation"}),
+                    ),
+                    TaskSpec(
+                        subject="review code",
+                        description="review code",
+                        required_capabilities=frozenset({"code_review"}),
+                    ),
+                ]
+
+        orch._planner = CapabilityPlanner()
+        run = await orch.start(team, "write and review")
+
+        assert len(run.assignments) == 1
+        assignment = run.assignments[0]
+        assert assignment.task_spec.subject == "review code"
+        task = orch.task_store.load(assignment.task_id)
+        assert task.subject == "review code"
+
+    async def test_scheduler_reorder_preserves_task_id(
+        self, orchestrator_with_tasks,
+    ):
+        """Scheduler 任意重排输入时，Assignment 的 task_id 仍正确关联。"""
+        orch = orchestrator_with_tasks
+        register_agents(orch, count=3)
+        team = make_team(orch)
+
+        class ReorderingScheduler:
+            async def schedule(self, tasks, registry, *, exclude_agents=frozenset()):
+                agents = registry.list(status=RegistrationStatus.AVAILABLE)
+                assignments = []
+                for i, schedulable in enumerate(reversed(tasks)):
+                    if agents:
+                        aid = agents[i % len(agents)].agent_id
+                        assignments.append(
+                            Assignment(
+                                task_id=schedulable.task_id,
+                                agent_id=aid,
+                                task_spec=schedulable.spec,
+                            )
+                        )
+                return assignments
+
+        orch._scheduler = ReorderingScheduler()
+        run = await orch.start(team, "task A\ntask B\ntask C")
+
+        assert len(run.assignments) == 3
+        for assignment in run.assignments:
+            task = orch.task_store.load(assignment.task_id)
+            assert task.subject == assignment.task_spec.subject
+
+    async def test_capability_scheduler_preserves_task_id_on_skip(
+        self, registry,
+    ):
+        """CapabilityScheduler 跳过无匹配任务时，
+        已分配任务的 task_id 不受影响。"""
+        registry.register(AgentDescriptor(
+            agent_id="a1", agent_name="coder",
+            capabilities=frozenset({"code_generation"}),
+        ))
+        scheduler = CapabilityScheduler()
+        tasks = [
+            SchedulableTask(
+                task_id="t_orphan",
+                spec=TaskSpec(
+                    subject="orphan",
+                    required_capabilities=frozenset({"code_review"}),
+                ),
+            ),
+            SchedulableTask(
+                task_id="t_real",
+                spec=TaskSpec(
+                    subject="real",
+                    required_capabilities=frozenset({"code_generation"}),
+                ),
+            ),
+        ]
+        assignments = await scheduler.schedule(tasks, registry)
+        assert len(assignments) == 1
+        assert assignments[0].task_id == "t_real"
+        assert assignments[0].task_spec.subject == "real"
 
 
 # -- Protocol 检查 --
@@ -891,12 +1140,14 @@ def orchestrator_with_coordinator(
     plan_store: PlanStore,
     task_store: TaskStore,
     coordinator: RuntimeCoordinator,
+    fake_dispatcher: FakeDispatcher,
 ) -> TeamOrchestrator:
     return TeamOrchestrator(
         registry=registry,
         bus=bus,
         plan_store=plan_store,
         task_store=task_store,
+        dispatcher=fake_dispatcher,
         coordinator=coordinator,
     )
 
@@ -908,19 +1159,16 @@ class TestOrchestratorExecutionLoop:
         self,
         orchestrator_with_coordinator: TeamOrchestrator,
         coordinator: RuntimeCoordinator,
+        fake_dispatcher: FakeDispatcher,
     ):
         orch = orchestrator_with_coordinator
         agent_ids = register_agents(orch, 2)
         team = make_team(orch)
 
-        rt1 = StubRuntime("rt-1", RuntimeResult(
-            runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok-1",
-        ))
-        rt2 = StubRuntime("rt-2", RuntimeResult(
-            runtime_id="rt-2", status=RuntimeStatus.COMPLETED, summary="ok-2",
-        ))
-        coordinator.register(rt1)
-        coordinator.register(rt2)
+        fake_dispatcher.set_success("rt-1", "ok-1")
+        fake_dispatcher.set_success("rt-2", "ok-2")
+        coordinator.register(StubRuntime("rt-1"))
+        coordinator.register(StubRuntime("rt-2"))
         orch.bind_runtime(agent_ids[0], "rt-1")
         orch.bind_runtime(agent_ids[1], "rt-2")
 
@@ -952,20 +1200,16 @@ class TestOrchestratorExecutionLoop:
         self,
         orchestrator_with_coordinator: TeamOrchestrator,
         coordinator: RuntimeCoordinator,
+        fake_dispatcher: FakeDispatcher,
     ):
         orch = orchestrator_with_coordinator
         agent_ids = register_agents(orch, 2)
         team = make_team(orch)
 
-        rt1 = StubRuntime("rt-1", RuntimeResult(
-            runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok",
-        ))
-        rt2 = StubRuntime("rt-2", RuntimeResult(
-            runtime_id="rt-2", status=RuntimeStatus.FAILED, summary="",
-            error="boom",
-        ))
-        coordinator.register(rt1)
-        coordinator.register(rt2)
+        fake_dispatcher.set_success("rt-1", "ok")
+        fake_dispatcher.set_failure("rt-2", "boom")
+        coordinator.register(StubRuntime("rt-1"))
+        coordinator.register(StubRuntime("rt-2"))
         orch.bind_runtime(agent_ids[0], "rt-1")
         orch.bind_runtime(agent_ids[1], "rt-2")
 
@@ -986,38 +1230,27 @@ class TestOrchestratorExecutionLoop:
         coordinator: RuntimeCoordinator,
     ):
         policy = TeamPolicy(max_concurrent_tasks=1)
+        execution_log: list[tuple[str, float]] = []
+
+        class TimedDispatcher(FakeDispatcher):
+            async def wait_for_result(
+                self, handle: TaskHandle, *, timeout: float | None = None,
+            ) -> RuntimeEvent:
+                execution_log.append((handle.runtime_id, asyncio.get_event_loop().time()))
+                await asyncio.sleep(0.05)
+                return await super().wait_for_result(handle, timeout=timeout)
+
+        dispatcher = TimedDispatcher()
         orch = TeamOrchestrator(
             registry=registry, bus=bus, plan_store=plan_store,
             task_store=task_store, coordinator=coordinator,
+            dispatcher=dispatcher,
         )
         agent_ids = register_agents(orch, 2)
         team = orch.create_team("team-1", "alpha", "lead-1", policy=policy)
 
-        execution_log: list[tuple[str, float]] = []
-
-        class TimedStubRuntime(StubRuntime):
-            async def start(self, task: str = "", *, task_id: str | None = None) -> None:
-                await super().start(task, task_id=task_id)
-                execution_log.append((self._runtime_id, asyncio.get_event_loop().time()))
-
-            async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
-                await asyncio.sleep(0.05)
-                self._status = self._result.status
-                return self._result
-
-            async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
-                await self.start(task, task_id=task_id)
-                return task_id or f"task::{task}"
-
-            async def wait_task(
-                self, task_id: str, *, timeout: float | None = None,
-            ) -> RuntimeResult:
-                return await self.wait_done(timeout=timeout)
-
-        rt1 = TimedStubRuntime("rt-1")
-        rt2 = TimedStubRuntime("rt-2")
-        coordinator.register(rt1)
-        coordinator.register(rt2)
+        coordinator.register(StubRuntime("rt-1"))
+        coordinator.register(StubRuntime("rt-2"))
         orch.bind_runtime(agent_ids[0], "rt-1")
         orch.bind_runtime(agent_ids[1], "rt-2")
 
@@ -1038,40 +1271,24 @@ class TestOrchestratorExecutionLoop:
         coordinator: RuntimeCoordinator,
     ):
         policy = TeamPolicy(task_lease_secs=10.0)
-        policy_with_meta = dataclasses.replace(policy)
+        dispatcher = FakeDispatcher(
+            sequential={
+                "rt-1": [
+                    _failed_event("rt-1", "fail-1"),
+                    _failed_event("rt-1", "fail-2"),
+                    _completed_event("rt-1", "ok"),
+                ],
+            },
+        )
         orch = TeamOrchestrator(
             registry=registry, bus=bus, plan_store=plan_store,
             task_store=task_store, coordinator=coordinator,
+            dispatcher=dispatcher,
         )
         agent_ids = register_agents(orch, 1)
-        team = orch.create_team("team-1", "alpha", "lead-1", policy=policy_with_meta)
+        team = orch.create_team("team-1", "alpha", "lead-1", policy=policy)
 
-        call_count = 0
-
-        class RetryStubRuntime(StubRuntime):
-            async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
-                nonlocal call_count
-                call_count += 1
-                if call_count < 3:
-                    return RuntimeResult(
-                        runtime_id=self._runtime_id,
-                        status=RuntimeStatus.FAILED,
-                        summary="",
-                        error=f"fail-{call_count}",
-                    )
-                return RuntimeResult(
-                    runtime_id=self._runtime_id,
-                    status=RuntimeStatus.COMPLETED,
-                    summary="ok",
-                )
-
-            async def wait_task(
-                self, task_id: str, *, timeout: float | None = None,
-            ) -> RuntimeResult:
-                return await self.wait_done(timeout=timeout)
-
-        rt = RetryStubRuntime("rt-1")
-        coordinator.register(rt)
+        coordinator.register(StubRuntime("rt-1"))
         orch.bind_runtime(agent_ids[0], "rt-1")
 
         run = await orch.start(team, "build feature A")
@@ -1083,20 +1300,21 @@ class TestOrchestratorExecutionLoop:
         with unittest.mock.patch.object(orch, "_execute_assignment", patched_execute):
             run = await orch.execute_run(run.run_id)
 
-        assert call_count == 3
+        assert dispatcher.wait_count == 3
         assert run.status == TeamRunStatus.COMPLETED
 
     async def test_execute_run_timeout(
         self,
         orchestrator_with_coordinator: TeamOrchestrator,
         coordinator: RuntimeCoordinator,
+        fake_dispatcher: FakeDispatcher,
     ):
         orch = orchestrator_with_coordinator
         agent_ids = register_agents(orch, 1)
         team = make_team(orch)
 
-        rt = StubRuntime("rt-1", raise_timeout=True)
-        coordinator.register(rt)
+        fake_dispatcher.set_timeout("rt-1")
+        coordinator.register(StubRuntime("rt-1"))
         orch.bind_runtime(agent_ids[0], "rt-1")
 
         run = await orch.start(team, "build feature A")
@@ -1189,33 +1407,6 @@ class TestOrchestratorExecutionLoop:
         assert orchestrator_with_tasks.coordinator is None
         assert orchestrator_with_tasks._find_runtime("any") is None
 
-    @pytest.mark.parametrize("status,has_error", [
-        (RuntimeStatus.COMPLETED, False),
-        (RuntimeStatus.SHUTDOWN, False),
-        (RuntimeStatus.FAILED, True),
-        (RuntimeStatus.CANCELLED, True),
-        (RuntimeStatus.TIMEOUT, True),
-        (RuntimeStatus.BUDGET_EXCEEDED, True),
-    ])
-    def test_extract_error(self, status: RuntimeStatus, has_error: bool):
-        result = RuntimeResult(
-            runtime_id="rt", status=status, summary="",
-            error="err" if has_error else None,
-        )
-        error = TeamOrchestrator._extract_error(result)
-        if has_error:
-            assert error is not None
-        else:
-            assert error is None
-
-    def test_extract_error_falls_back_to_status(self):
-        result = RuntimeResult(
-            runtime_id="rt", status=RuntimeStatus.CANCELLED, summary="",
-            error=None,
-        )
-        error = TeamOrchestrator._extract_error(result)
-        assert error == RuntimeStatus.CANCELLED.value
-
     async def test_execute_run_empty_assignments(
         self,
         registry: AgentRegistry,
@@ -1231,6 +1422,7 @@ class TestOrchestratorExecutionLoop:
         orch = TeamOrchestrator(
             registry=registry, bus=bus, plan_store=plan_store,
             task_store=task_store, coordinator=coordinator,
+            dispatcher=FakeDispatcher(),
             planner=EmptyPlanner(),
         )
         team = orch.create_team("team-1", "alpha", "lead-1")
@@ -1256,86 +1448,28 @@ class TestOrchestratorExecutionLoop:
             await orch.execute_run(run.run_id)
 
 
-# -- P1-02: PersistentRuntime submit_task/wait_task 执行路径 --
+# -- P1-08: DAG 依赖策略——依赖失败不再无条件唤醒后续任务 --
 
 
-class StubPersistentRuntime:
-    """模拟常驻运行时：有 submit_task/wait_task，不走 start/wait_done。
+class _DagPlanner(SimplePlanner):
+    """产生 DAG 任务的测试 Planner。"""
 
-    P1-02 核心验证：execute_run 对常驻 Runtime 用 submit_task + wait_task，
-    不调 start（避免 already running）也不调 wait_done（避免等整个循环）。
+    def __init__(self, specs: list[TaskSpec]) -> None:
+        self._specs = specs
+
+    async def plan(self, objective: str, *, context=None) -> list[TaskSpec]:
+        return list(self._specs)
+
+
+class TestOrchestratorDagDependencyPolicy:
+    """P1-08: DAG 依赖完成事件不代表依赖成功。
+
+    旧实现 finally 中无条件 event.set()，导致上游失败时下游仍执行。
+    新实现按 DependencyPolicy 检查依赖终态，ALL_SUCCESS 默认下上游
+    失败则下游跳过。
     """
 
-    def __init__(
-        self,
-        runtime_id: str,
-        result: RuntimeResult | None = None,
-    ) -> None:
-        self._runtime_id = runtime_id
-        self._status = RuntimeStatus.IDLE
-        self._result = result or RuntimeResult(
-            runtime_id=runtime_id,
-            status=RuntimeStatus.COMPLETED,
-            summary="done",
-        )
-        self.submit_count = 0
-        self.wait_task_count = 0
-        self.start_count = 0
-        self.wait_done_count = 0
-        self.submitted_tasks: list[str] = []
-
-    @property
-    def runtime_id(self) -> str:
-        return self._runtime_id
-
-    @property
-    def status(self) -> RuntimeStatus:
-        return self._status
-
-    @property
-    def alive(self) -> bool:
-        return True
-
-    @property
-    def capabilities(self) -> RuntimeCapabilities:
-        return RuntimeCapabilities(supports_cancel=True, supports_health_check=False)
-
-    async def start(self, task: str = "", *, task_id: str | None = None) -> None:
-        self.start_count += 1
-
-    async def wait_done(self, *, timeout: float | None = None) -> RuntimeResult:
-        self.wait_done_count += 1
-        return self._result
-
-    async def stop(self, *, timeout: float = 5.0) -> None:
-        self._status = RuntimeStatus.SHUTDOWN
-
-    def cancel(self) -> None:
-        self._status = RuntimeStatus.CANCELLED
-
-    def pause(self) -> None:
-        pass
-
-    def resume(self) -> None:
-        pass
-
-    async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
-        self.submit_count += 1
-        tid = task_id or f"task-{self.submit_count}"
-        self.submitted_tasks.append(tid)
-        return tid
-
-    async def wait_task(
-        self, task_id: str, *, timeout: float | None = None,
-    ) -> RuntimeResult:
-        self.wait_task_count += 1
-        return self._result
-
-
-class TestOrchestratorPersistentExecution:
-    """P1-02: execute_run 对 PersistentRuntime 走 submit_task + wait_task 路径。"""
-
-    async def test_persistent_runtime_uses_submit_wait_task(
+    async def test_dependency_failure_skips_dependent(
         self,
         registry: AgentRegistry,
         bus: MessageBus,
@@ -1343,63 +1477,69 @@ class TestOrchestratorPersistentExecution:
         task_store: TaskStore,
         coordinator: RuntimeCoordinator,
     ):
-        """execute_run 对有 submit_task 的 Runtime 调 submit_task + wait_task。"""
+        """ALL_SUCCESS（默认）：base 失败 → dependent 不执行。"""
+        dispatcher = FakeDispatcher()
+        dispatcher.set_failure("rt-1", "base-boom")
+        dispatcher.set_success("rt-2", "dep-ok")
         orch = TeamOrchestrator(
             registry=registry, bus=bus, plan_store=plan_store,
             task_store=task_store, coordinator=coordinator,
-        )
-        agent_ids = register_agents(orch, 1)
-        team = make_team(orch)
-
-        rt = StubPersistentRuntime("rt-1", RuntimeResult(
-            runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok",
-        ))
-        coordinator.register(rt)
-        orch.bind_runtime(agent_ids[0], "rt-1")
-
-        run = await orch.start(team, "build feature A")
-        run = await orch.execute_run(run.run_id)
-
-        assert rt.submit_count == 1
-        assert rt.wait_task_count == 1
-        assert rt.start_count == 0
-        assert rt.wait_done_count == 0
-        assert run.status == TeamRunStatus.COMPLETED
-        assert run.results[0].status == "completed"
-        assert run.results[0].summary == "ok"
-
-    async def test_persistent_runtime_multiple_tasks_no_already_running(
-        self,
-        registry: AgentRegistry,
-        bus: MessageBus,
-        plan_store: PlanStore,
-        task_store: TaskStore,
-        coordinator: RuntimeCoordinator,
-    ):
-        """同一 PersistentRuntime 处理多个任务不触发 already running 错误。"""
-        orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            dispatcher=dispatcher,
+            planner=_DagPlanner([
+                TaskSpec(subject="base", description="base task"),
+                TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
+            ]),
         )
         agent_ids = register_agents(orch, 2)
         team = make_team(orch)
-
-        rt = StubPersistentRuntime("rt-1", RuntimeResult(
-            runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok",
-        ))
-        coordinator.register(rt)
+        coordinator.register(StubRuntime("rt-1"))
+        coordinator.register(StubRuntime("rt-2"))
         orch.bind_runtime(agent_ids[0], "rt-1")
-        orch.bind_runtime(agent_ids[1], "rt-1")
+        orch.bind_runtime(agent_ids[1], "rt-2")
 
-        run = await orch.start(team, "build feature A\nbuild feature B")
+        run = await orch.start(team, "base\ndependent")
         run = await orch.execute_run(run.run_id)
 
-        assert rt.submit_count == 2
-        assert rt.wait_task_count == 2
-        assert rt.start_count == 0
+        assert dispatcher.dispatch_count == 1, "dependent 不应被派发"
+        assert run.status == TeamRunStatus.FAILED
+        dependent_result = next(r for r in run.results if r.task_id != "")
+        assert dependent_result.status == "failed"
+
+    async def test_dependency_success_executes_dependent(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        """ALL_SUCCESS（默认）：base 成功 → dependent 执行。"""
+        dispatcher = FakeDispatcher()
+        dispatcher.set_success("rt-1", "base-ok")
+        dispatcher.set_success("rt-2", "dep-ok")
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+            dispatcher=dispatcher,
+            planner=_DagPlanner([
+                TaskSpec(subject="base", description="base task"),
+                TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
+            ]),
+        )
+        agent_ids = register_agents(orch, 2)
+        team = make_team(orch)
+        coordinator.register(StubRuntime("rt-1"))
+        coordinator.register(StubRuntime("rt-2"))
+        orch.bind_runtime(agent_ids[0], "rt-1")
+        orch.bind_runtime(agent_ids[1], "rt-2")
+
+        run = await orch.start(team, "base\ndependent")
+        run = await orch.execute_run(run.run_id)
+
+        assert dispatcher.dispatch_count == 2
         assert run.status == TeamRunStatus.COMPLETED
 
-    async def test_persistent_runtime_failure_mapped(
+    async def test_missing_dependency_skips_dependent(
         self,
         registry: AgentRegistry,
         bus: MessageBus,
@@ -1407,30 +1547,33 @@ class TestOrchestratorPersistentExecution:
         task_store: TaskStore,
         coordinator: RuntimeCoordinator,
     ):
-        """PersistentRuntime 任务失败正确映射到 AgentResult。"""
+        """依赖 subject 无 Assignment（被 Scheduler 过滤）→ dependent 跳过。"""
+        dispatcher = FakeDispatcher()
+        dispatcher.set_success("rt-1", "dep-ok")
         orch = TeamOrchestrator(
             registry=registry, bus=bus, plan_store=plan_store,
             task_store=task_store, coordinator=coordinator,
+            dispatcher=dispatcher,
+            planner=_DagPlanner([
+                TaskSpec(
+                    subject="base", description="base",
+                    required_capabilities=frozenset({"nonexistent"}),
+                ),
+                TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
+            ]),
         )
         agent_ids = register_agents(orch, 1)
         team = make_team(orch)
-
-        rt = StubPersistentRuntime("rt-1", RuntimeResult(
-            runtime_id="rt-1", status=RuntimeStatus.FAILED, summary="",
-            error="boom",
-        ))
-        coordinator.register(rt)
+        coordinator.register(StubRuntime("rt-1"))
         orch.bind_runtime(agent_ids[0], "rt-1")
 
-        run = await orch.start(team, "build feature A")
+        run = await orch.start(team, "base\ndependent")
         run = await orch.execute_run(run.run_id)
 
-        assert rt.submit_count == 1
-        assert rt.wait_task_count == 1
+        assert dispatcher.dispatch_count == 0, "无 Agent 匹配 base，dependent 也应跳过"
         assert run.status == TeamRunStatus.FAILED
-        assert run.results[0].status == "failed"
 
-    async def test_persistent_runtime_timeout_raises_wait_timeout(
+    async def test_all_terminal_policy_executes_on_failure(
         self,
         registry: AgentRegistry,
         bus: MessageBus,
@@ -1438,30 +1581,276 @@ class TestOrchestratorPersistentExecution:
         task_store: TaskStore,
         coordinator: RuntimeCoordinator,
     ):
-        """PersistentRuntime wait_task 超时映射到任务失败。"""
-
-        class TimeoutPersistentRuntime(StubPersistentRuntime):
-            async def wait_task(
-                self, task_id: str, *, timeout: float | None = None,
-            ) -> RuntimeResult:
-                self.wait_task_count += 1
-                raise WaitTimeoutError("rt-stub", 1.0)
-
+        """ALL_TERMINAL：base 失败（到达终态）→ dependent 仍执行。"""
+        dispatcher = FakeDispatcher()
+        dispatcher.set_failure("rt-1", "base-boom")
+        dispatcher.set_success("rt-2", "dep-ok")
+        policy = TeamPolicy(dependency_policy=DependencyPolicy.ALL_TERMINAL)
         orch = TeamOrchestrator(
             registry=registry, bus=bus, plan_store=plan_store,
             task_store=task_store, coordinator=coordinator,
+            dispatcher=dispatcher,
+            planner=_DagPlanner([
+                TaskSpec(subject="base", description="base task"),
+                TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
+            ]),
         )
-        agent_ids = register_agents(orch, 1)
-        team = make_team(orch)
-
-        rt = TimeoutPersistentRuntime("rt-1")
-        coordinator.register(rt)
+        agent_ids = register_agents(orch, 2)
+        team = orch.create_team("team-1", "alpha", "lead-1", policy=policy)
+        coordinator.register(StubRuntime("rt-1"))
+        coordinator.register(StubRuntime("rt-2"))
         orch.bind_runtime(agent_ids[0], "rt-1")
+        orch.bind_runtime(agent_ids[1], "rt-2")
 
-        run = await orch.start(team, "build feature A")
+        run = await orch.start(team, "base\ndependent")
         run = await orch.execute_run(run.run_id)
 
-        assert rt.submit_count == 1
-        assert rt.wait_task_count == 1
-        assert run.status == TeamRunStatus.FAILED
-        assert "timed out" in (run.results[0].error or "")
+        assert dispatcher.dispatch_count == 2, "ALL_TERMINAL 下 dependent 应执行"
+
+    async def test_any_success_policy_executes_with_partial_success(
+        self,
+        registry: AgentRegistry,
+        bus: MessageBus,
+        plan_store: PlanStore,
+        task_store: TaskStore,
+        coordinator: RuntimeCoordinator,
+    ):
+        """ANY_SUCCESS：一个依赖成功、一个失败 → dependent 执行。"""
+        dispatcher = FakeDispatcher()
+        dispatcher.set_success("rt-1", "dep-a-ok")
+        dispatcher.set_failure("rt-2", "dep-b-boom")
+        dispatcher.set_success("rt-3", "final-ok")
+        policy = TeamPolicy(dependency_policy=DependencyPolicy.ANY_SUCCESS)
+        orch = TeamOrchestrator(
+            registry=registry, bus=bus, plan_store=plan_store,
+            task_store=task_store, coordinator=coordinator,
+            dispatcher=dispatcher,
+            planner=_DagPlanner([
+                TaskSpec(subject="dep-a", description="dep a"),
+                TaskSpec(subject="dep-b", description="dep b"),
+                TaskSpec(
+                    subject="final", description="final",
+                    blocked_by=("dep-a", "dep-b"),
+                ),
+            ]),
+        )
+        agent_ids = register_agents(orch, 3)
+        team = orch.create_team("team-1", "alpha", "lead-1", policy=policy)
+        for i, rt_id in enumerate(("rt-1", "rt-2", "rt-3")):
+            coordinator.register(StubRuntime(rt_id))
+            orch.bind_runtime(agent_ids[i], rt_id)
+
+        run = await orch.start(team, "dep-a\ndep-b\nfinal")
+        run = await orch.execute_run(run.run_id)
+
+        assert dispatcher.dispatch_count == 3, "ANY_SUCCESS 下 final 应执行"
+
+
+# -- P1-09: 架构守卫——禁止 TeamOrchestrator 保留旧 submit_task/wait_task 路径 --
+
+
+class TestOrchestratorNoLegacyRuntimePath:
+    """P1-09 静态守卫：TeamOrchestrator 必须只走 TaskDispatcher 闭环。
+
+    旧路径直接调用 Runtime.submit_task / Runtime.wait_task，已被
+    TaskDispatcher.dispatch + wait_for_result 取代。此处通过读取源码
+    文本断言旧调用已彻底移除，防止回归。
+    """
+
+    @pytest.fixture
+    def orchestrator_source(self) -> str:
+        import inspect
+
+        return inspect.getsource(TeamOrchestrator)
+
+    def test_no_submit_task_call(self, orchestrator_source: str):
+        assert ".submit_task(" not in orchestrator_source, (
+            "TeamOrchestrator 仍直接调用 Runtime.submit_task，"
+            "应改用 TaskDispatcher.dispatch"
+        )
+
+    def test_no_wait_task_call(self, orchestrator_source: str):
+        assert ".wait_task(" not in orchestrator_source, (
+            "TeamOrchestrator 仍直接调用 Runtime.wait_task，"
+            "应改用 TaskDispatcher.wait_for_result"
+        )
+
+    def test_no_extract_error_method(self, orchestrator_source: str):
+        assert "_extract_error" not in orchestrator_source, (
+            "TeamOrchestrator 仍保留 _extract_error 辅助方法，"
+            "该方法是旧路径专属逻辑，应已删除"
+        )
+
+
+class TestOrchestratorStartFromPlan:
+    """P1-10：start_from_plan 接收预规划 specs，避免重复调用 Planner。
+
+    start_from_plan 是唯一接收已规划任务列表的入口；
+    start 内部调用 Planner.plan 后委托给 start_from_plan。
+    Application.run_team 应先 plan 再 start_from_plan，确保 plan 只执行一次。
+    """
+
+    async def test_start_from_plan_creates_run(
+        self,
+        orchestrator: TeamOrchestrator,
+    ):
+        """start_from_plan 用传入 specs 创建 run，不调用 Planner。"""
+        register_agents(orchestrator, count=2)
+        team = make_team(orchestrator)
+        specs = [
+            TaskSpec(subject="task-a", description="do A"),
+            TaskSpec(subject="task-b", description="do B"),
+        ]
+        run = await orchestrator.start_from_plan(team, "objective", specs)
+        assert len(run.task_ids) == 2
+        assert run.status == TeamRunStatus.RUNNING
+
+    async def test_start_from_plan_empty_specs_completes(
+        self,
+        orchestrator: TeamOrchestrator,
+    ):
+        """空 specs 直接进入 COMPLETED。"""
+        register_agents(orchestrator, count=1)
+        team = make_team(orchestrator)
+        run = await orchestrator.start_from_plan(team, "objective", [])
+        assert run.status == TeamRunStatus.COMPLETED
+
+    async def test_start_from_plan_does_not_call_planner(
+        self,
+        orchestrator: TeamOrchestrator,
+    ):
+        """start_from_plan 不调用 Planner.plan。"""
+
+        class CountingPlanner:
+            def __init__(self) -> None:
+                self.plan_count = 0
+
+            async def plan(self, objective, *, context=None):
+                self.plan_count += 1
+                return [TaskSpec(subject="should-not-appear")]
+
+        planner = CountingPlanner()
+        orchestrator._planner = planner
+        register_agents(orchestrator, count=1)
+        team = make_team(orchestrator)
+        specs = [TaskSpec(subject="explicit-spec")]
+        run = await orchestrator.start_from_plan(team, "objective", specs)
+        assert planner.plan_count == 0, "start_from_plan 不应调用 Planner.plan"
+        assert len(run.task_ids) == 1
+
+    async def test_start_delegates_to_start_from_plan(
+        self,
+        orchestrator: TeamOrchestrator,
+    ):
+        """start 内部调用 Planner.plan 一次后委托给 start_from_plan。"""
+
+        class CountingPlanner:
+            def __init__(self) -> None:
+                self.plan_count = 0
+
+            async def plan(self, objective, *, context=None):
+                self.plan_count += 1
+                return [
+                    TaskSpec(subject="task-1"),
+                    TaskSpec(subject="task-2"),
+                ]
+
+        planner = CountingPlanner()
+        orchestrator._planner = planner
+        register_agents(orchestrator, count=2)
+        team = make_team(orchestrator)
+        run = await orchestrator.start(team, "build")
+        assert planner.plan_count == 1, "start 应只调用 Planner.plan 一次"
+        assert len(run.task_ids) == 2
+
+
+class TestOrchestratorCollectFromTaskStore:
+    """P1-11：collect_results 从 TaskStore 终态聚合，不以 run.results 为事实来源。
+
+    TaskStore 是任务终态的唯一事实来源。collect_results 和 progress 应从
+    TaskStore 读取任务状态，而非从 TeamRun.results 内存副本读取。
+    """
+
+    async def test_collect_results_status_from_task_store(
+        self,
+        orchestrator_with_tasks: TeamOrchestrator,
+    ):
+        """collect_results 的 status 来自 TaskStore，非 run.results 内存副本。"""
+        orch = orchestrator_with_tasks
+        register_agents(orch, count=2)
+        team = make_team(orch)
+        run = await orch.start(team, "任务一\n任务二")
+        # 用 Assignment 中的 agent_id 完成任务
+        for a in run.assignments:
+            if a.task_id == sorted(run.task_ids)[0]:
+                await orch.complete_task(
+                    run.run_id, a.agent_id, a.task_id, summary="ok",
+                )
+            else:
+                await orch.complete_task(
+                    run.run_id, a.agent_id, a.task_id, error="失败",
+                )
+        task_list = sorted(run.task_ids)
+
+        # 直接篡改 run.results 内存副本，模拟状态分叉
+        run.results[0] = dataclasses.replace(
+            run.results[0], status="completed", error=None,
+        )
+        run.results[1] = dataclasses.replace(
+            run.results[1], status="completed", error=None,
+        )
+
+        result = await orch.collect_results(run.run_id)
+        statuses = {r.task_id: r.status for r in result.results}
+        task1 = orch.task_store.load(task_list[0])
+        task2 = orch.task_store.load(task_list[1])
+        assert statuses[task_list[0]] == task1.status
+        assert statuses[task_list[1]] == task2.status
+        assert task2.status == "failed", "TaskStore 应为 failed"
+
+    async def test_progress_from_task_store(
+        self,
+        orchestrator_with_tasks: TeamOrchestrator,
+    ):
+        """progress 的 completed/failed 计数来自 TaskStore。"""
+        orch = orchestrator_with_tasks
+        register_agents(orch, count=2)
+        team = make_team(orch)
+        run = await orch.start(team, "任务一\n任务二")
+        for a in run.assignments:
+            if a.task_id == sorted(run.task_ids)[0]:
+                await orch.complete_task(
+                    run.run_id, a.agent_id, a.task_id, summary="ok",
+                )
+            else:
+                await orch.complete_task(
+                    run.run_id, a.agent_id, a.task_id, error="失败",
+                )
+
+        # 篡改内存副本
+        run.results.clear()
+
+        prog = orch.progress(run.run_id)
+        assert prog.completed_tasks == 1
+        assert prog.failed_tasks == 1
+
+    async def test_collect_results_preserves_summary_from_cache(
+        self,
+        orchestrator_with_tasks: TeamOrchestrator,
+    ):
+        """collect_results 保留 run.results 中的 summary/cost_usd 补充数据。"""
+        orch = orchestrator_with_tasks
+        register_agents(orch, count=1)
+        team = make_team(orch)
+        run = await orch.start(team, "任务一")
+        a = run.assignments[0]
+        await orch.complete_task(
+            run.run_id, a.agent_id, a.task_id,
+            summary="详细摘要", cost_usd=0.42,
+        )
+
+        result = await orch.collect_results(run.run_id)
+        r = result.results[0]
+        assert r.summary == "详细摘要"
+        assert r.cost_usd == 0.42
+

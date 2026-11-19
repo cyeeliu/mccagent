@@ -1811,18 +1811,24 @@ class TestTeammateManagerViaCoordinator:
 
 def _make_manager_with_orchestrator(tmp_path, llm=None, max_teammates=4):
     """创建 TeammateManager + AgentRegistry + TeamOrchestrator 完整组合。"""
-    from mcc_harness import AgentRegistry, TeamOrchestrator
+    from mcc_harness import AgentRegistry, TaskDispatcher, TeamOrchestrator
+    from mcc_harness.runtime import TaskStoreAdapter
+    from mcc_tools import TaskStore
 
     registry = ToolRegistry()
     bus = MessageBus(tmp_path)
     plan_store = PlanStore()
     coordinator = RuntimeCoordinator()
     agent_registry = AgentRegistry()
+    task_store = TaskStore(tmp_path / ".tasks")
+    dispatcher = TaskDispatcher(TaskStoreAdapter(task_store), coordinator)
     orchestrator = TeamOrchestrator(
         registry=agent_registry,
         bus=bus,
         plan_store=plan_store,
+        task_store=task_store,
         coordinator=coordinator,
+        dispatcher=dispatcher,
     )
     mgr = TeammateManager(
         llm=llm or MockLlm([single_text_turn("done")]),
@@ -2094,8 +2100,9 @@ class TestPersistentRuntimeV2SubmitWaitTask:
             await pr.wait_task("t-slow", timeout=0.05)
 
     async def test_orchestrator_works_with_v2_runtime(self, tmp_path):
-        """编排器通过 submit_task/wait_task 与 V2 runtime 协作。"""
-        from mcc_harness import AgentRegistry, TeamOrchestrator
+        """编排器通过 TaskDispatcher 与 V2 runtime 协作。"""
+        from mcc_harness import AgentRegistry, TaskDispatcher, TeamOrchestrator
+        from mcc_harness.runtime import TaskStoreAdapter
         from mcc_tools import TaskStore
 
         bus = MessageBus(tmp_path)
@@ -2103,12 +2110,14 @@ class TestPersistentRuntimeV2SubmitWaitTask:
         agent_registry = AgentRegistry()
         task_store = TaskStore(tmp_path)
         coordinator = RuntimeCoordinator()
+        dispatcher = TaskDispatcher(TaskStoreAdapter(task_store), coordinator)
         orchestrator = TeamOrchestrator(
             registry=agent_registry,
             bus=bus,
             plan_store=plan_store,
             task_store=task_store,
             coordinator=coordinator,
+            dispatcher=dispatcher,
         )
         mgr = TeammateManager(
             llm=MockLlm([single_text_turn("done")]),

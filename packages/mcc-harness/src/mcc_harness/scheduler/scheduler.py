@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable
 
 from mcc_harness.registry import AgentRegistration, AgentRegistry, RegistrationStatus
-from mcc_harness.team.orchestrator import Assignment, TaskSpec
+from mcc_harness.team.orchestrator import Assignment, SchedulableTask, TaskSpec
 
 from .base import (
     AgentCandidate,
@@ -59,11 +59,10 @@ class TaskSchedulerImpl:
 
     async def schedule(
         self,
-        tasks: list[TaskSpec],
+        tasks: list[SchedulableTask],
         registry: AgentRegistry,
         *,
         exclude_agents: frozenset[str] = frozenset(),
-        task_ids: list[str] | None = None,
     ) -> list[Assignment]:
         """TaskScheduler Protocol 兼容接口。
 
@@ -74,31 +73,27 @@ class TaskSchedulerImpl:
             tasks,
             registry,
             exclude_agents=exclude_agents,
-            task_ids=task_ids,
         )
         return list(result.assignments)
 
     async def schedule_round(
         self,
-        tasks: list[TaskSpec],
+        tasks: list[SchedulableTask],
         registry: AgentRegistry,
         *,
         exclude_agents: frozenset[str] = frozenset(),
-        task_ids: list[str] | None = None,
     ) -> SchedulingResult:
         """完整调度轮次，返回结构化结果。
 
         Args:
-            tasks: 待调度的任务规格列表
+            tasks: 待调度的可调度任务列表（已绑定 task_id）
             registry: Agent 注册表
             exclude_agents: 排除的 Agent ID 集合
-            task_ids: 对应的 TaskStore 任务 ID（None 时用占位 ID）
 
         Returns:
             SchedulingResult: 包含分配、推迟、拒绝和重试信息
         """
-        ids = task_ids or [f"task_{i:04d}" for i in range(len(tasks))]
-        candidates = self._build_candidates(tasks, ids)
+        candidates = self._build_candidates(tasks)
         candidates = self._sort_by_priority(candidates)
 
         assignments: list[Assignment] = []
@@ -178,13 +173,12 @@ class TaskSchedulerImpl:
 
     def _build_candidates(
         self,
-        tasks: list[TaskSpec],
-        task_ids: list[str],
+        tasks: list[SchedulableTask],
     ) -> list[TaskCandidate]:
-        """将 TaskSpec 列表包装为 TaskCandidate 列表。"""
+        """将 SchedulableTask 列表包装为 TaskCandidate 列表。"""
         candidates: list[TaskCandidate] = []
-        for i, spec in enumerate(tasks):
-            tid = task_ids[i] if i < len(task_ids) else f"task_{i:04d}"
+        for schedulable in tasks:
+            tid = schedulable.task_id
             deps_satisfied = True
             if self._dependency_check is not None:
                 with contextlib.suppress(Exception):
@@ -192,7 +186,7 @@ class TaskSchedulerImpl:
             candidates.append(
                 TaskCandidate(
                     task_id=tid,
-                    spec=spec,
+                    spec=schedulable.spec,
                     dependencies_satisfied=deps_satisfied,
                 )
             )

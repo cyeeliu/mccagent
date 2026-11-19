@@ -371,7 +371,7 @@ class AgentApplication:
                     prompt="",
                 )
 
-        run = await self._orchestrator.start(team, objective)
+        run = await self._orchestrator.start_from_plan(team, objective, specs)
         if not run.assignments:
             return f"TeamRun {run.run_id} 已启动但无任务分配（planner 返回空）"
 

@@ -452,12 +452,15 @@ def _make_team_e2e(tmp_path, policy=None):
     plan_store = PlanStore()
     task_store = TaskStore(tmp_path / ".tasks")
     coordinator = RuntimeCoordinator()
+    adapter = TaskStoreAdapter(task_store)
+    dispatcher = TaskDispatcher(adapter, coordinator)
     orch = TeamOrchestrator(
         registry=registry,
         bus=bus,
         plan_store=plan_store,
         task_store=task_store,
         coordinator=coordinator,
+        dispatcher=dispatcher,
     )
     return orch, coordinator, task_store
 
@@ -503,15 +506,13 @@ async def test_team_e2e_concurrency_limit(tmp_path):
     exec_log: list[tuple[str, float]] = []
 
     class TimedStub(_StubRuntime):
-        async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
-            await super().submit_task(task, task_id=task_id)
-            exec_log.append((self._runtime_id, asyncio.get_event_loop().time()))
-            return task_id or f"task::{task}"
+        def __init__(self, runtime_id: str) -> None:
+            super().__init__(runtime_id, delay=0.05)
 
-        async def wait_task(self, task_id: str, *, timeout: float | None = None) -> RuntimeResult:
-            await asyncio.sleep(0.05)
-            self._status = self._result.status
-            return self._result
+        async def submit(self, task: Any) -> Any:
+            handle = await super().submit(task)
+            exec_log.append((self._runtime_id, asyncio.get_event_loop().time()))
+            return handle
 
     rt1 = TimedStub("rt-1")
     rt2 = TimedStub("rt-2")
@@ -539,11 +540,13 @@ async def test_team_e2e_dag_dependency_order(tmp_path):
     completion_order: list[str] = []
 
     class OrderedStub(_StubRuntime):
-        async def wait_task(self, task_id: str, *, timeout: float | None = None) -> RuntimeResult:
-            await asyncio.sleep(0.02)
+        def __init__(self, runtime_id: str) -> None:
+            super().__init__(runtime_id, delay=0.02)
+
+        async def submit(self, task: Any) -> Any:
+            handle = await super().submit(task)
             completion_order.append(self._runtime_id)
-            self._status = self._result.status
-            return self._result
+            return handle
 
     rt1 = OrderedStub("rt-1")
     rt2 = OrderedStub("rt-2")
@@ -650,21 +653,23 @@ async def test_team_e2e_retry_creates_new_attempt(tmp_path):
     call_count = 0
 
     class RetryStub(_StubRuntime):
-        async def wait_task(self, task_id: str, *, timeout: float | None = None) -> RuntimeResult:
+        async def submit(self, task: Any) -> Any:
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                return RuntimeResult(
+                self._result = RuntimeResult(
                     runtime_id=self._runtime_id,
                     status=RuntimeStatus.FAILED,
                     summary="",
                     error=f"fail-{call_count}",
                 )
-            return RuntimeResult(
-                runtime_id=self._runtime_id,
-                status=RuntimeStatus.COMPLETED,
-                summary="ok",
-            )
+            else:
+                self._result = RuntimeResult(
+                    runtime_id=self._runtime_id,
+                    status=RuntimeStatus.COMPLETED,
+                    summary="ok",
+                )
+            return await super().submit(task)
 
     rt = RetryStub("rt-1")
     coordinator.register(rt)
