@@ -103,14 +103,10 @@ class ResultCollectorImpl:
         """按 agent_id 查询结果。"""
         if run_id is not None:
             bucket = self._store.get(run_id, {})
-            return tuple(
-                r for r in bucket.values() if r.agent_id == agent_id
-            )
+            return tuple(r for r in bucket.values() if r.agent_id == agent_id)
         results: list[AgentResult] = []
         for bucket in self._store.values():
-            results.extend(
-                r for r in bucket.values() if r.agent_id == agent_id
-            )
+            results.extend(r for r in bucket.values() if r.agent_id == agent_id)
         return tuple(results)
 
     def get_by_status(
@@ -121,14 +117,10 @@ class ResultCollectorImpl:
         """按状态过滤结果。"""
         if run_id is not None:
             bucket = self._store.get(run_id, {})
-            return tuple(
-                r for r in bucket.values() if r.status == status
-            )
+            return tuple(r for r in bucket.values() if r.status == status)
         results: list[AgentResult] = []
         for bucket in self._store.values():
-            results.extend(
-                r for r in bucket.values() if r.status == status
-            )
+            results.extend(r for r in bucket.values() if r.status == status)
         return tuple(results)
 
     def get_artifacts(
@@ -168,9 +160,7 @@ class ResultCollectorImpl:
     @property
     def run_ids(self) -> tuple[str, ...]:
         """有结果记录的 run_id 列表。"""
-        return tuple(
-            rid for rid, bucket in self._store.items() if bucket
-        )
+        return tuple(rid for rid, bucket in self._store.items() if bucket)
 
     @property
     def total_results(self) -> int:

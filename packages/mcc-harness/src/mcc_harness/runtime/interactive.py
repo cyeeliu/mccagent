@@ -158,7 +158,8 @@ class InteractiveRuntimeV2:
             if self._task_store is not None:
                 with contextlib.suppress(Exception):
                     await self._task_store.fail_attempt(
-                        task.attempt_id, error=str(exc),
+                        task.attempt_id,
+                        error=str(exc),
                     )
             await self._emit_event(
                 "task_failed",
@@ -185,11 +186,15 @@ class InteractiveRuntimeV2:
         else:
             error_msg = str(result.error) if result.error else (result.summary or "failed")
             await self._task_store.fail_attempt(
-                task.attempt_id, error=error_msg,
+                task.attempt_id,
+                error=error_msg,
             )
 
     async def cancel_task(
-        self, task_id: str, attempt_id: str, reason: str | None = None,
+        self,
+        task_id: str,
+        attempt_id: str,
+        reason: str | None = None,
     ) -> None:
         if self._cancel_event is not None:
             self._cancel_event.set()
@@ -333,9 +338,7 @@ class InteractiveRuntimeV2:
     async def run_turn(self, prompt: str) -> AsyncIterator[AgentEvent]:
         """CLI TUI 兼容接口：执行一个交互轮次，产出 AgentEvent 事件流。"""
         if self._closed:
-            raise RuntimeError(
-                f"interactive runtime {self._runtime_id} is closed"
-            )
+            raise RuntimeError(f"interactive runtime {self._runtime_id} is closed")
         async with self._turn_lock:
             self._cancel_event = asyncio.Event()
             queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()

@@ -118,6 +118,7 @@ def test_tool_call_end_invalidates_cache(console):
 
     app = App(session_short_id="test")
     from mcc_core import ToolCallStart
+
     app.apply_event(ToolCallStart(id="call-1", name="bash", args_preview="ls"))
     build_renderable(app, console)
     assert len(app.render_cache) == 1

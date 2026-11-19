@@ -49,64 +49,76 @@ from mcc_core.runtime.task import RuntimeTask
 
 
 class TestRuntimeStatus:
-    @pytest.mark.parametrize("status,expected", [
-        (RuntimeStatus.CREATED, False),
-        (RuntimeStatus.STARTING, False),
-        (RuntimeStatus.READY, False),
-        (RuntimeStatus.PAUSING, False),
-        (RuntimeStatus.PAUSED, False),
-        (RuntimeStatus.STOPPING, False),
-        (RuntimeStatus.STOPPED, True),
-        (RuntimeStatus.FAILED, True),
-    ])
+    @pytest.mark.parametrize(
+        "status,expected",
+        [
+            (RuntimeStatus.CREATED, False),
+            (RuntimeStatus.STARTING, False),
+            (RuntimeStatus.READY, False),
+            (RuntimeStatus.PAUSING, False),
+            (RuntimeStatus.PAUSED, False),
+            (RuntimeStatus.STOPPING, False),
+            (RuntimeStatus.STOPPED, True),
+            (RuntimeStatus.FAILED, True),
+        ],
+    )
     def test_terminal(self, status, expected):
         assert is_runtime_terminal(status) is expected
 
-    @pytest.mark.parametrize("source,target,expected", [
-        (RuntimeStatus.CREATED, RuntimeStatus.STARTING, True),
-        (RuntimeStatus.CREATED, RuntimeStatus.READY, False),
-        (RuntimeStatus.STARTING, RuntimeStatus.READY, True),
-        (RuntimeStatus.STARTING, RuntimeStatus.FAILED, True),
-        (RuntimeStatus.READY, RuntimeStatus.PAUSING, True),
-        (RuntimeStatus.READY, RuntimeStatus.STOPPING, True),
-        (RuntimeStatus.PAUSING, RuntimeStatus.PAUSED, True),
-        (RuntimeStatus.PAUSED, RuntimeStatus.READY, True),
-        (RuntimeStatus.STOPPING, RuntimeStatus.STOPPED, True),
-        (RuntimeStatus.STOPPED, RuntimeStatus.READY, False),
-        (RuntimeStatus.FAILED, RuntimeStatus.READY, False),
-    ])
+    @pytest.mark.parametrize(
+        "source,target,expected",
+        [
+            (RuntimeStatus.CREATED, RuntimeStatus.STARTING, True),
+            (RuntimeStatus.CREATED, RuntimeStatus.READY, False),
+            (RuntimeStatus.STARTING, RuntimeStatus.READY, True),
+            (RuntimeStatus.STARTING, RuntimeStatus.FAILED, True),
+            (RuntimeStatus.READY, RuntimeStatus.PAUSING, True),
+            (RuntimeStatus.READY, RuntimeStatus.STOPPING, True),
+            (RuntimeStatus.PAUSING, RuntimeStatus.PAUSED, True),
+            (RuntimeStatus.PAUSED, RuntimeStatus.READY, True),
+            (RuntimeStatus.STOPPING, RuntimeStatus.STOPPED, True),
+            (RuntimeStatus.STOPPED, RuntimeStatus.READY, False),
+            (RuntimeStatus.FAILED, RuntimeStatus.READY, False),
+        ],
+    )
     def test_transition(self, source, target, expected):
         assert is_valid_runtime_transition(source, target) is expected
 
 
 class TestTaskStatus:
-    @pytest.mark.parametrize("status,expected", [
-        (TaskStatus.PENDING, False),
-        (TaskStatus.QUEUED, False),
-        (TaskStatus.DISPATCHED, False),
-        (TaskStatus.ACCEPTED, False),
-        (TaskStatus.RUNNING, False),
-        (TaskStatus.SUCCEEDED, True),
-        (TaskStatus.FAILED, True),
-        (TaskStatus.CANCELLED, True),
-        (TaskStatus.TIMED_OUT, True),
-    ])
+    @pytest.mark.parametrize(
+        "status,expected",
+        [
+            (TaskStatus.PENDING, False),
+            (TaskStatus.QUEUED, False),
+            (TaskStatus.DISPATCHED, False),
+            (TaskStatus.ACCEPTED, False),
+            (TaskStatus.RUNNING, False),
+            (TaskStatus.SUCCEEDED, True),
+            (TaskStatus.FAILED, True),
+            (TaskStatus.CANCELLED, True),
+            (TaskStatus.TIMED_OUT, True),
+        ],
+    )
     def test_terminal(self, status, expected):
         assert is_task_terminal(status) is expected
 
-    @pytest.mark.parametrize("source,target,expected", [
-        (TaskStatus.PENDING, TaskStatus.QUEUED, True),
-        (TaskStatus.QUEUED, TaskStatus.DISPATCHED, True),
-        (TaskStatus.DISPATCHED, TaskStatus.ACCEPTED, True),
-        (TaskStatus.ACCEPTED, TaskStatus.RUNNING, True),
-        (TaskStatus.RUNNING, TaskStatus.SUCCEEDED, True),
-        (TaskStatus.RUNNING, TaskStatus.FAILED, True),
-        (TaskStatus.RUNNING, TaskStatus.CANCELLED, True),
-        (TaskStatus.RUNNING, TaskStatus.TIMED_OUT, True),
-        (TaskStatus.SUCCEEDED, TaskStatus.RUNNING, False),
-        (TaskStatus.FAILED, TaskStatus.RUNNING, False),
-        (TaskStatus.PENDING, TaskStatus.RUNNING, False),
-    ])
+    @pytest.mark.parametrize(
+        "source,target,expected",
+        [
+            (TaskStatus.PENDING, TaskStatus.QUEUED, True),
+            (TaskStatus.QUEUED, TaskStatus.DISPATCHED, True),
+            (TaskStatus.DISPATCHED, TaskStatus.ACCEPTED, True),
+            (TaskStatus.ACCEPTED, TaskStatus.RUNNING, True),
+            (TaskStatus.RUNNING, TaskStatus.SUCCEEDED, True),
+            (TaskStatus.RUNNING, TaskStatus.FAILED, True),
+            (TaskStatus.RUNNING, TaskStatus.CANCELLED, True),
+            (TaskStatus.RUNNING, TaskStatus.TIMED_OUT, True),
+            (TaskStatus.SUCCEEDED, TaskStatus.RUNNING, False),
+            (TaskStatus.FAILED, TaskStatus.RUNNING, False),
+            (TaskStatus.PENDING, TaskStatus.RUNNING, False),
+        ],
+    )
     def test_transition(self, source, target, expected):
         assert is_valid_task_transition(source, target) is expected
 
@@ -143,12 +155,15 @@ class TestRuntimeTask:
         after = datetime.now(UTC)
         assert before <= task.created_at <= after
 
-    @pytest.mark.parametrize("field,value", [
-        ("task_id", ""),
-        ("attempt_id", ""),
-        ("agent_id", ""),
-        ("objective", ""),
-    ])
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("task_id", ""),
+            ("attempt_id", ""),
+            ("agent_id", ""),
+            ("objective", ""),
+        ],
+    )
     def test_empty_field_rejected(self, field, value):
         with pytest.raises(TaskValidationError):
             self._make_task(**{field: value})
@@ -307,11 +322,13 @@ class TestRuntimeEvent:
 class TestRuntimeHealth:
     def test_healthy(self):
         from mcc_core.runtime.health import HealthState
+
         health = RuntimeHealth(runtime_id="r1", state=HealthState.HEALTHY)
         assert health.is_healthy is True
 
     def test_unhealthy(self):
         from mcc_core.runtime.health import HealthState
+
         health = RuntimeHealth(
             runtime_id="r1",
             state=HealthState.UNHEALTHY,

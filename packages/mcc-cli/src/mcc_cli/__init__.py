@@ -79,6 +79,7 @@ def _build_source(
         llm_base_url=llm_base_url,
     )
 
+
 def _history_events(history: list, cost_usd: float = 0.0) -> list:
     """向后兼容包装：实际逻辑在 mcc_cli.events.history_events。"""
     return history_events(history, cost_usd=cost_usd)
@@ -91,22 +92,18 @@ def _dump_metrics_snapshot(sink, work_dir: Path | None) -> None:
     try:
         out = target_dir / ".mcc" / "last_metrics.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
+        out.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         return
     llm_calls = sum(
-        c["value"] for c in snapshot["counters"]
-        if c["name"] == "agent_llm_calls_total"
+        c["value"] for c in snapshot["counters"] if c["name"] == "agent_llm_calls_total"
     )
     latency = next(
-        (h for h in snapshot["histograms"]
-         if h["name"] == "agent_llm_latency_ms"),
+        (h for h in snapshot["histograms"] if h["name"] == "agent_llm_latency_ms"),
         None,
     )
     cache = next(
-        (h for h in snapshot["histograms"]
-         if h["name"] == "agent_cache_hit_rate"),
+        (h for h in snapshot["histograms"] if h["name"] == "agent_cache_hit_rate"),
         None,
     )
     parts = [f"llm_calls={int(llm_calls)}"]
@@ -132,11 +129,7 @@ async def _run_tui_mode(
     permission_queue: asyncio.Queue = asyncio.Queue()
     cancel_queue: asyncio.Queue = asyncio.Queue()
     selection_queue: asyncio.Queue = asyncio.Queue()
-    session_short_id = (
-        session_id
-        or getattr(source, "session_short_id", "")
-        or uuid.uuid4().hex[:8]
-    )
+    session_short_id = session_id or getattr(source, "session_short_id", "") or uuid.uuid4().hex[:8]
 
     agent = getattr(source, "agent", None)
     if agent is not None:
@@ -165,26 +158,18 @@ async def _run_tui_mode(
             item = await input_queue.get()
             is_cron = isinstance(item, CronTurn)
             if is_cron:
-                await event_queue.put(
-                    NoticeEvent(text=f"⏰ 定时任务触发（{len(item.jobs)} 个）")
-                )
+                await event_queue.put(NoticeEvent(text=f"⏰ 定时任务触发（{len(item.jobs)} 个）"))
             prompt = item.prompt if is_cron else item
 
             async def run_turn(turn_prompt, turn_cron, turn_item):
                 async for ev in source.run(turn_prompt):
                     if turn_cron and isinstance(ev, PermissionRequestEvent):
                         if turn_item.permission_mode == "auto_allow":
-                            permission_queue.put_nowait(
-                                PermissionDecision(ev.id, "allow")
-                            )
-                            await event_queue.put(
-                                NoticeEvent(text=f"⏰ 自动批准: {ev.tool_name}")
-                            )
+                            permission_queue.put_nowait(PermissionDecision(ev.id, "allow"))
+                            await event_queue.put(NoticeEvent(text=f"⏰ 自动批准: {ev.tool_name}"))
                             continue
                         if turn_item.permission_mode == "auto_deny":
-                            permission_queue.put_nowait(
-                                PermissionDecision(ev.id, "deny")
-                            )
+                            permission_queue.put_nowait(PermissionDecision(ev.id, "deny"))
                             continue
                     await event_queue.put(ev)
 
@@ -362,9 +347,7 @@ def _run_onboarding_wizard() -> bool:
             type=click.Choice(["anthropic", "gateway"], case_sensitive=False),
         )
         if kind.lower() == "gateway":
-            base_url = click.prompt(
-                "Base URL", default="http://localhost:8000/v1"
-            )
+            base_url = click.prompt("Base URL", default="http://localhost:8000/v1")
             update_home_setting(["llm", "base_url"], base_url)
         api_key = click.prompt(
             "API key（自托管网关可留空）",
@@ -393,7 +376,7 @@ def _print_onboarding() -> None:
         "  export OPENAI_API_KEY=sk-...          # OpenAI 兼容端点\n"
         "\n"
         "自托管网关（vLLM / SGLang / Ollama 等）无需外部 key：\n"
-        "  mcc --llm-base-url http://gateway:8000/v1 -p \"hi\"\n"
+        '  mcc --llm-base-url http://gateway:8000/v1 -p "hi"\n'
         "\n"
         "也可写入项目根目录 .env 文件（参考 .env.example）。\n"
         "无 key 体验完整链路：mcc --mock\n"
@@ -410,9 +393,7 @@ def _run_completion_cmd(shell: str) -> None:
     from click.shell_completion import get_completion_class
 
     if shell not in _COMPLETION_SHELLS:
-        click.echo(
-            f"Unsupported shell: {shell} ({'/'.join(_COMPLETION_SHELLS)})", err=True
-        )
+        click.echo(f"Unsupported shell: {shell} ({'/'.join(_COMPLETION_SHELLS)})", err=True)
         sys.exit(2)
     comp_cls = get_completion_class(shell)
     assert comp_cls is not None
@@ -426,9 +407,7 @@ def _latest_pypi_version(package: str = "mcc-cli") -> str | None:
     import httpx
 
     try:
-        resp = httpx.get(
-            f"https://pypi.org/pypi/{package}/json", timeout=5.0
-        )
+        resp = httpx.get(f"https://pypi.org/pypi/{package}/json", timeout=5.0)
         resp.raise_for_status()
         return resp.json()["info"]["version"]
     except Exception:
@@ -486,9 +465,13 @@ def _run_resume_cmd(
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    if not (mock or mock_script or llm_base_url
-            or os.environ.get("ANTHROPIC_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")):
+    if not (
+        mock
+        or mock_script
+        or llm_base_url
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+    ):
         from mcc_config import read_home_settings
 
         home_llm = read_home_settings().get("llm") or {}
@@ -496,9 +479,11 @@ def _run_resume_cmd(
             _print_onboarding()
             sys.exit(2)
 
-    click.echo(f"Resuming session {meta.id} ({meta.turns} turn(s), "
-               f"${meta.cost_usd:.4f})" + (f" — {meta.title}" if meta.title else ""),
-               err=True)
+    click.echo(
+        f"Resuming session {meta.id} ({meta.turns} turn(s), "
+        f"${meta.cost_usd:.4f})" + (f" — {meta.title}" if meta.title else ""),
+        err=True,
+    )
     source = _build_source(
         work_dir,
         model,
@@ -563,9 +548,7 @@ def _run_resume_cmd(
 @click.argument(
     "cmd",
     required=False,
-    type=click.Choice(
-        ["tui", "config", "version", "resume", "sessions", "completion", "update"]
-    ),
+    type=click.Choice(["tui", "config", "version", "resume", "sessions", "completion", "update"]),
 )
 @click.argument("args", nargs=-1)
 def main(
@@ -613,12 +596,15 @@ def main(
         return
 
     if cmd == "resume":
-        _run_resume_cmd(args, work_dir, model, mock, mock_script, llm_base_url,
-                         no_compact, no_skills)
+        _run_resume_cmd(
+            args, work_dir, model, mock, mock_script, llm_base_url, no_compact, no_skills
+        )
         return
 
     has_llm = bool(
-        mock or mock_script or llm_base_url
+        mock
+        or mock_script
+        or llm_base_url
         or os.environ.get("ANTHROPIC_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
     )
@@ -630,17 +616,29 @@ def main(
             has_llm = True
 
     if has_llm:
-        source = _build_source(work_dir, model, mock, mock_script,
-                               llm_base_url=llm_base_url,
-                               no_compact=no_compact, no_skills=no_skills)
+        source = _build_source(
+            work_dir,
+            model,
+            mock,
+            mock_script,
+            llm_base_url=llm_base_url,
+            no_compact=no_compact,
+            no_skills=no_skills,
+        )
     elif prompt is not None:
         _print_onboarding()
         sys.exit(2)
     elif not no_wizard and _run_onboarding_wizard():
         # TUI 首启：向导写入 home settings 后直接正常构建启动
-        source = _build_source(work_dir, model, mock, mock_script,
-                               llm_base_url=llm_base_url,
-                               no_compact=no_compact, no_skills=no_skills)
+        source = _build_source(
+            work_dir,
+            model,
+            mock,
+            mock_script,
+            llm_base_url=llm_base_url,
+            no_compact=no_compact,
+            no_skills=no_skills,
+        )
     else:
         _print_onboarding()
         source = EchoEventSource()

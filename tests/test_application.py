@@ -68,7 +68,9 @@ class TestAgentApplicationConvenience:
     def test_get_runtime_by_agent(self):
         app = AgentApplication()
         rt = InteractiveRuntimeV2(
-            FakeAgent(), runtime_id="r1", agent_id="agent-x",
+            FakeAgent(),
+            runtime_id="r1",
+            agent_id="agent-x",
         )
         app.register_runtime(rt)
         assert app.get_runtime_by_agent("agent-x") is rt
@@ -328,18 +330,27 @@ class TestAgentApplicationTeamIntegration:
         task_store = TaskStore(tmp_path / ".tasks")
         dispatcher = TaskDispatcher(TaskStoreAdapter(task_store), coord)
         orch = TeamOrchestrator(
-            registry=agent_reg, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coord,
+            registry=agent_reg,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coord,
             dispatcher=dispatcher,
         )
         mgr = TeammateManager(
-            llm=MockLlm([
-                single_text_turn("initial done"),
-                single_text_turn("task completed"),
-            ]),
-            registry=ToolRegistry(), bus=bus, plan_store=plan_store,
-            base_dir=tmp_path, coordinator=coord,
-            agent_registry=agent_reg, orchestrator=orch,
+            llm=MockLlm(
+                [
+                    single_text_turn("initial done"),
+                    single_text_turn("task completed"),
+                ]
+            ),
+            registry=ToolRegistry(),
+            bus=bus,
+            plan_store=plan_store,
+            base_dir=tmp_path,
+            coordinator=coord,
+            agent_registry=agent_reg,
+            orchestrator=orch,
         )
         app = AgentApplication(
             coordinator=coord,

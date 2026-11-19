@@ -62,15 +62,17 @@ class RuntimeStatus(StrEnum):
     SHUTDOWN = "shutdown"
 
 
-_TERMINAL_STATUSES = frozenset({
-    RuntimeStatus.COMPLETED,
-    RuntimeStatus.FAILED,
-    RuntimeStatus.CANCELLED,
-    RuntimeStatus.TIMEOUT,
-    RuntimeStatus.BUDGET_EXCEEDED,
-    RuntimeStatus.SHUTDOWN,
-    "stopped",
-})
+_TERMINAL_STATUSES = frozenset(
+    {
+        RuntimeStatus.COMPLETED,
+        RuntimeStatus.FAILED,
+        RuntimeStatus.CANCELLED,
+        RuntimeStatus.TIMEOUT,
+        RuntimeStatus.BUDGET_EXCEEDED,
+        RuntimeStatus.SHUTDOWN,
+        "stopped",
+    }
+)
 
 
 @dataclass
@@ -132,7 +134,6 @@ class RuntimeResult:
     @property
     def is_terminal(self) -> bool:
         return self.status in _TERMINAL_STATUSES
-
 
 
 def _terminal_result(

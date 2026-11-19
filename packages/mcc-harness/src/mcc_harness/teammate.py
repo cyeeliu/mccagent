@@ -72,22 +72,32 @@ _TEAMMATE_STATUS_MAP: dict[TeammateStatus, RuntimeStatus] = {
 
 
 _SUBSTATE_TRANSITIONS: dict[TeammateStatus, frozenset[TeammateStatus]] = {
-    TeammateStatus.ASSIGNED: frozenset({
-        TeammateStatus.PLANNING,
-        TeammateStatus.RUNNING,
-    }),
-    TeammateStatus.PLANNING: frozenset({
-        TeammateStatus.WAITING_APPROVAL,
-    }),
-    TeammateStatus.WAITING_APPROVAL: frozenset({
-        TeammateStatus.RUNNING,
-    }),
-    TeammateStatus.RUNNING: frozenset({
-        TeammateStatus.REPORTING,
-    }),
-    TeammateStatus.RESTARTING: frozenset({
-        TeammateStatus.IDLE,
-    }),
+    TeammateStatus.ASSIGNED: frozenset(
+        {
+            TeammateStatus.PLANNING,
+            TeammateStatus.RUNNING,
+        }
+    ),
+    TeammateStatus.PLANNING: frozenset(
+        {
+            TeammateStatus.WAITING_APPROVAL,
+        }
+    ),
+    TeammateStatus.WAITING_APPROVAL: frozenset(
+        {
+            TeammateStatus.RUNNING,
+        }
+    ),
+    TeammateStatus.RUNNING: frozenset(
+        {
+            TeammateStatus.REPORTING,
+        }
+    ),
+    TeammateStatus.RESTARTING: frozenset(
+        {
+            TeammateStatus.IDLE,
+        }
+    ),
 }
 
 
@@ -139,8 +149,7 @@ def _teammate_transitions(
             if ts in _SUBSTATE_TRANSITIONS.get(current, frozenset()):
                 allowed.add(ts)
         elif target_rt in _PERSISTENT_TRANSITIONS.get(current_rt, frozenset()) and (
-            ts == _CANONICAL_TARGET.get(target_rt)
-            and (current, ts) not in _FORBIDDEN_CROSS
+            ts == _CANONICAL_TARGET.get(target_rt) and (current, ts) not in _FORBIDDEN_CROSS
         ):
             allowed.add(ts)
 
@@ -298,7 +307,8 @@ class TeammateRuntime:
         return self._task
 
     def get_task_future(
-        self, task_id: str,
+        self,
+        task_id: str,
     ) -> asyncio.Future[tuple[TeammateStatus, str]] | None:
         return self._task_futures.get(task_id)
 
@@ -314,8 +324,7 @@ class TeammateRuntime:
         allowed = _teammate_transitions(current)
         if target not in allowed:
             raise TeammateStateError(
-                f"teammate {self.name} cannot transition from "
-                f"{current.value} to {target.value}"
+                f"teammate {self.name} cannot transition from {current.value} to {target.value}"
             )
         self._status = target
         self._last_transition = TransitionRecord(
@@ -339,7 +348,9 @@ class TeammateRuntime:
         )
 
     def _set_task_future(
-        self, outcome: TeammateStatus, summary: str,
+        self,
+        outcome: TeammateStatus,
+        summary: str,
     ) -> None:
         """设置当前任务的 future 结果，供 PersistentRuntimeV2.wait_task 等待。"""
         task_id = self._current.task_id
@@ -364,9 +375,7 @@ class TeammateRuntime:
     async def _run_loop(self) -> None:
         try:
             if self._current.assignment:
-                self._transition(
-                    TeammateStatus.ASSIGNED, reason="initial assignment"
-                )
+                self._transition(TeammateStatus.ASSIGNED, reason="initial assignment")
             else:
                 self._transition(TeammateStatus.IDLE, reason="no initial work")
 
@@ -382,17 +391,13 @@ class TeammateRuntime:
 
                 if self._current.assignment:
                     if self._status == TeammateStatus.IDLE:
-                        self._transition(
-                            TeammateStatus.ASSIGNED, reason="assignment ready"
-                        )
+                        self._transition(TeammateStatus.ASSIGNED, reason="assignment ready")
                     await self._do_work()
                     self._current.clear()
                     if self._dequeue_assignment():
                         continue
                     if self._status != TeammateStatus.IDLE:
-                        self._transition(
-                            TeammateStatus.IDLE, reason="work done"
-                        )
+                        self._transition(TeammateStatus.IDLE, reason="work done")
                     continue
 
                 if self._try_claim_task():
@@ -403,7 +408,8 @@ class TeammateRuntime:
                 await self._wake.wait()
         except Exception as e:
             await self._bus.send(
-                self.name, self._lead_name,
+                self.name,
+                self._lead_name,
                 f"teammate crashed: {type(e).__name__}: {e}",
                 kind="error",
             )
@@ -430,10 +436,12 @@ class TeammateRuntime:
             if msg.kind == "shutdown":
                 self._shutdown_evt.set()
             elif msg.kind in ("task_submitted", "message"):
-                self._assignment_queue.append({
-                    "content": msg.content,
-                    "task_id": msg.task_id,
-                })
+                self._assignment_queue.append(
+                    {
+                        "content": msg.content,
+                        "task_id": msg.task_id,
+                    }
+                )
                 if not self._current.assignment:
                     self._dequeue_assignment()
             elif msg.kind == "instruction":
@@ -474,7 +482,9 @@ class TeammateRuntime:
             summary = f"worktree creation failed: {e}"
             self._transition(TeammateStatus.FAILED, reason="worktree creation failed")
             await self._bus.send(
-                self.name, self._lead_name, summary,
+                self.name,
+                self._lead_name,
+                summary,
                 kind="work_failed",
                 meta={"task_id": self._current.task_id} if self._current.task_id else {},
             )
@@ -486,9 +496,7 @@ class TeammateRuntime:
                         owner=self.name,
                     )
             self._set_task_future(TeammateStatus.FAILED, summary)
-            self._transition(
-                TeammateStatus.IDLE, reason="recover from failed"
-            )
+            self._transition(TeammateStatus.IDLE, reason="recover from failed")
             self._current.clear()
             return
 
@@ -497,6 +505,7 @@ class TeammateRuntime:
         outcome: TeammateStatus
         try:
             from .agent import AgentEvent as _Ev
+
             queue: asyncio.Queue[_Ev] = asyncio.Queue()
             run = await asyncio.wait_for(
                 agent.run_streaming(
@@ -508,10 +517,7 @@ class TeammateRuntime:
                 ),
                 timeout=self.spec.timeout_secs,
             )
-            if (
-                self._current.cancel_token is not None
-                and self._current.cancel_token.is_set()
-            ):
+            if self._current.cancel_token is not None and self._current.cancel_token.is_set():
                 summary = run.final_text or "(cancelled)"
                 outcome = TeammateStatus.CANCELLED
             else:
@@ -534,7 +540,9 @@ class TeammateRuntime:
         }[outcome]
 
         await self._bus.send(
-            self.name, self._lead_name, summary,
+            self.name,
+            self._lead_name,
+            summary,
             kind=kind,
             meta={"task_id": self._current.task_id} if self._current.task_id else {},
         )
@@ -543,11 +551,13 @@ class TeammateRuntime:
             with contextlib.suppress(Exception):
                 if outcome == TeammateStatus.REPORTING:
                     self._task_store.complete(
-                        self._current.task_id, owner=self.name,
+                        self._current.task_id,
+                        owner=self.name,
                     )
                 elif outcome == TeammateStatus.TIMEOUT:
                     self._task_store.timeout(
-                        self._current.task_id, owner=self.name,
+                        self._current.task_id,
+                        owner=self.name,
                     )
                 elif outcome == TeammateStatus.CANCELLED:
                     self._task_store.cancel(
@@ -565,9 +575,7 @@ class TeammateRuntime:
         await self._cleanup_worktree()
 
         self._set_task_future(outcome, summary)
-        self._transition(
-            TeammateStatus.IDLE, reason=f"recover from {outcome.value}"
-        )
+        self._transition(TeammateStatus.IDLE, reason=f"recover from {outcome.value}")
         self._current.clear()
 
     async def _submit_and_wait_plan(self) -> bool:
@@ -578,18 +586,18 @@ class TeammateRuntime:
             work_version=self._current.work_version,
         )
         await self._bus.send(
-            self.name, self._lead_name,
+            self.name,
+            self._lead_name,
             f"Plan submitted for review:\n{self._current.assignment}",
             kind="plan_submitted",
             meta={"request_id": plan_req.request_id},
         )
-        self._transition(
-            TeammateStatus.WAITING_APPROVAL, reason="plan submitted"
-        )
+        self._transition(TeammateStatus.WAITING_APPROVAL, reason="plan submitted")
         reviewed = await self._plan_store.wait_for_review(plan_req.request_id)
         if reviewed.status == "rejected":
             await self._bus.send(
-                self.name, self._lead_name,
+                self.name,
+                self._lead_name,
                 f"Plan rejected: {reviewed.feedback}",
                 kind="plan_rejected",
             )
@@ -621,9 +629,7 @@ class TeammateRuntime:
     def _build_agent(self, cwd: Path | None = None) -> AgentLoop:
         teammate_registry = self._registry.subset(self.spec.tools)
 
-        teammate_registry.register(
-            SendToLeadTool(self._bus, self.name, self._lead_name)
-        )
+        teammate_registry.register(SendToLeadTool(self._bus, self.name, self._lead_name))
         if self.spec.require_plan:
             teammate_registry.register(
                 SubmitPlanTool(self._plan_store, self._bus, self.name, self._lead_name)
@@ -734,7 +740,8 @@ class TeammateRuntime:
             raise
         except TimeoutError:
             raise WaitTimeoutError(
-                self.runtime_id, timeout or 0.0,
+                self.runtime_id,
+                timeout or 0.0,
             ) from None
         except asyncio.CancelledError:
             pass
@@ -980,7 +987,8 @@ class TeammateManager:
     async def shutdown_all(self) -> None:
         """关闭所有活跃 teammate。"""
         names = [
-            n for n, rid in self._runtime_ids.items()
+            n
+            for n, rid in self._runtime_ids.items()
             if (pr := self._coordinator.get(rid)) is not None and pr.alive
         ]
         for name in names:
@@ -1007,8 +1015,13 @@ def _teammate_system(role: str) -> str:
 
 def _default_teammate_tools() -> list[str]:
     return [
-        "read_file", "list_dir", "write_file", "edit_file",
-        "run_bash", "grep", "glob",
+        "read_file",
+        "list_dir",
+        "write_file",
+        "edit_file",
+        "run_bash",
+        "grep",
+        "glob",
     ]
 
 
@@ -1101,19 +1114,16 @@ class SubmitPlanTool:
             return ToolOutput.err("'plan' is required")
         req = await self._plan_store.create(sender=self._sender, plan=plan)
         await self._bus.send(
-            self._sender, self._lead,
+            self._sender,
+            self._lead,
             f"Plan submitted for review:\n{plan}",
             kind="plan_submitted",
             meta={"request_id": req.request_id},
         )
         reviewed = await self._plan_store.wait_for_review(req.request_id)
         if reviewed.status == "approved":
-            return ToolOutput.ok(
-                f"Plan approved. {reviewed.feedback}".strip()
-            )
-        return ToolOutput.err(
-            f"Plan rejected. {reviewed.feedback}".strip()
-        )
+            return ToolOutput.ok(f"Plan approved. {reviewed.feedback}".strip())
+        return ToolOutput.err(f"Plan rejected. {reviewed.feedback}".strip())
 
 
 # -- Lead 专属工具 --
@@ -1490,7 +1500,8 @@ class ReviewPlanTool:
         except Exception as e:
             return ToolOutput.err(str(e))
         await self._bus.send(
-            LEAD_NAME, req.sender,
+            LEAD_NAME,
+            req.sender,
             feedback or ("Plan approved." if approve else "Revise and resubmit."),
             kind="plan_approval_response",
             meta={"request_id": rid, "approve": approve},

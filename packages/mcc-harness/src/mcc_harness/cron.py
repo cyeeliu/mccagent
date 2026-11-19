@@ -113,9 +113,7 @@ def validate_cron(cron_expr: str) -> str | None:
         ("month", 1, 12),
         ("day-of-week", 0, 6),
     ]
-    for field_value, (name, minimum, maximum) in zip(
-        fields, field_rules, strict=True
-    ):
+    for field_value, (name, minimum, maximum) in zip(fields, field_rules, strict=True):
         error = _validate_field(field_value, minimum, maximum)
         if error:
             return f"{name}: {error}"
@@ -390,7 +388,7 @@ def format_cron_delivery(jobs: list[CronJob]) -> str:
     """将 due cron jobs 格式化为注入消息。"""
     lines = ["<cron_delivery>"]
     for job in jobs:
-        lines.append(f"  <job id=\"{job.id}\" cron=\"{job.cron}\">")
+        lines.append(f'  <job id="{job.id}" cron="{job.cron}">')
         lines.append(f"    {job.prompt}")
         lines.append("  </job>")
     lines.append("</cron_delivery>")
@@ -455,9 +453,7 @@ class ScheduleCronTool(Tool):
         recurring = input.get("recurring", True)
         durable = input.get("durable", True)
         permission_mode = input.get("permission_mode", "interactive")
-        result = await self._scheduler.schedule(
-            cron, prompt, recurring, durable, permission_mode
-        )
+        result = await self._scheduler.schedule(cron, prompt, recurring, durable, permission_mode)
         if isinstance(result, str):
             return ToolOutput.err(f"Error: {result}")
         return ToolOutput.ok(f"Scheduled {result.id}: {cron} -> {prompt}")

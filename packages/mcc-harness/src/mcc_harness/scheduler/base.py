@@ -154,9 +154,7 @@ class AgentCandidate:
 
     def can_serve(self, required_capabilities: frozenset[str]) -> bool:
         """是否具备指定能力且有并发余量。"""
-        return self.has_capacity and required_capabilities.issubset(
-            self.capabilities
-        )
+        return self.has_capacity and required_capabilities.issubset(self.capabilities)
 
 
 @dataclass(frozen=True)

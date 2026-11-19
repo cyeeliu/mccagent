@@ -87,13 +87,16 @@ def _file_to_module(filepath: Path) -> str:
 class TestNoReverseDependencies:
     """mcc-core 是最底层包，不得 import mcc-harness/mcc-cli/mcc-tools/mcc-eval。"""
 
-    @pytest.mark.parametrize("forbidden", [
-        "mcc_harness",
-        "mcc_cli",
-        "mcc_tools",
-        "mcc_eval",
-        "mcc_tui",
-    ])
+    @pytest.mark.parametrize(
+        "forbidden",
+        [
+            "mcc_harness",
+            "mcc_cli",
+            "mcc_tools",
+            "mcc_eval",
+            "mcc_tui",
+        ],
+    )
     def test_core_does_not_import(self, forbidden):
         violations: list[str] = []
         for f in _package_files("mcc-core"):
@@ -101,9 +104,7 @@ class TestNoReverseDependencies:
             for m in mods:
                 if m == forbidden or m.startswith(forbidden + "."):
                     violations.append(f"{_file_to_module(f)} imports {m}")
-        assert not violations, (
-            f"mcc-core reverse-depends on {forbidden}:\n" + "\n".join(violations)
-        )
+        assert not violations, f"mcc-core reverse-depends on {forbidden}:\n" + "\n".join(violations)
 
 
 # -- CLI 不直接构造 AgentLoop --
@@ -118,9 +119,8 @@ class TestCliLayerConstraints:
         for f in _package_files("mcc-cli"):
             if _contains_constructor(f, class_name):
                 violations.append(str(f.relative_to(REPO_ROOT)))
-        assert not violations, (
-            f"mcc-cli directly constructs {class_name}:\n"
-            + "\n".join(violations)
+        assert not violations, f"mcc-cli directly constructs {class_name}:\n" + "\n".join(
+            violations
         )
 
 
@@ -145,9 +145,7 @@ class TestOrchestratorConstraints:
     def test_no_agent_loop_import(self, orchestrator_file):
         mods = _collect_imports(orchestrator_file)
         agent_loop_imports = [m for m in mods if "AgentLoop" in m]
-        assert not agent_loop_imports, (
-            f"TeamOrchestrator imports AgentLoop: {agent_loop_imports}"
-        )
+        assert not agent_loop_imports, f"TeamOrchestrator imports AgentLoop: {agent_loop_imports}"
 
 
 # -- Runtime 不直接构造 AgentLoop --
@@ -182,9 +180,7 @@ class TestLayering:
             for m in mods:
                 if m == "mcc_cli" or m.startswith("mcc_cli."):
                     violations.append(f"{_file_to_module(f)} imports {m}")
-        assert not violations, (
-            "mcc-harness depends on mcc-cli:\n" + "\n".join(violations)
-        )
+        assert not violations, "mcc-harness depends on mcc-cli:\n" + "\n".join(violations)
 
     def test_core_does_not_import_harness(self):
         violations: list[str] = []
@@ -193,6 +189,4 @@ class TestLayering:
             for m in mods:
                 if m == "mcc_harness" or m.startswith("mcc_harness."):
                     violations.append(f"{_file_to_module(f)} imports {m}")
-        assert not violations, (
-            "mcc-core depends on mcc-harness:\n" + "\n".join(violations)
-        )
+        assert not violations, "mcc-core depends on mcc-harness:\n" + "\n".join(violations)

@@ -71,8 +71,7 @@ class AgentRegistry:
             if existing is not None:
                 if existing.descriptor != descriptor:
                     raise AgentAlreadyRegisteredError(
-                        f"agent {descriptor.agent_id} already registered "
-                        f"with different descriptor"
+                        f"agent {descriptor.agent_id} already registered with different descriptor"
                     )
                 return existing
             registration = AgentRegistration(

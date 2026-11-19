@@ -53,9 +53,7 @@ class SlashRegistry:
     def __init__(self) -> None:
         self._commands: dict[str, tuple[str, SlashHandler]] = {}
 
-    def register(
-        self, name: str, description: str, handler: SlashHandler
-    ) -> None:
+    def register(self, name: str, description: str, handler: SlashHandler) -> None:
         self._commands[name] = (description, handler)
 
     def parse(self, prompt: str) -> tuple[str, str] | None:
@@ -69,9 +67,7 @@ class SlashRegistry:
         return head, rest.strip()
 
     def list_commands(self) -> list[tuple[str, str]]:
-        return [
-            (name, desc) for name, (desc, _h) in sorted(self._commands.items())
-        ]
+        return [(name, desc) for name, (desc, _h) in sorted(self._commands.items())]
 
     async def dispatch(self, prompt: str, source: Any) -> SlashResult | None:
         """命中注册命令则执行并返回结果；未命中返回 None。"""
@@ -96,12 +92,16 @@ _CONFIG_KEYS: dict[str, tuple[list[str], Callable[[str], Any], str]] = {
     "llm.base_url": (["llm", "base_url"], str, "下个会话生效"),
     "llm.api_key": (["llm", "api_key"], str, "下个会话生效"),
     "budget.max_usd_per_session": (
-        ["budget", "max_usd_per_session"], float, "即刻生效",
+        ["budget", "max_usd_per_session"],
+        float,
+        "即刻生效",
     ),
     "permissions.mode": (["permissions", "mode"], str, "下个会话生效"),
     "sandbox.mode": (["sandbox", "mode"], str, "下个会话生效"),
     "reliability.turn_timeout_secs": (
-        ["reliability", "turn_timeout_secs"], float, "即刻生效",
+        ["reliability", "turn_timeout_secs"],
+        float,
+        "即刻生效",
     ),
 }
 
@@ -231,9 +231,7 @@ def _config(source: Any, args: str) -> SlashResult:
         if key in _MODEL_KEYS:
             validated = _validate_model_id(str(value))
             if validated is None:
-                return SlashResult(
-                    text=f"无效模型 ID: {raw_value!r}（须非空且无空白）"
-                )
+                return SlashResult(text=f"无效模型 ID: {raw_value!r}（须非空且无空白）")
             value = validated
         update_home_setting(keys, value)
         _apply_runtime(config, key, value)
@@ -372,8 +370,7 @@ def _resume(source: Any, args: str) -> SlashResult:
 
     replay = history_events(history, cost_usd=meta.cost_usd)
     return SlashResult(
-        text=f"已恢复会话 {meta.id}（{meta.turns} turn(s), "
-        f"${meta.cost_usd:.4f}）{title}",
+        text=f"已恢复会话 {meta.id}（{meta.turns} turn(s), ${meta.cost_usd:.4f}）{title}",
         replay=replay,
         session_update=meta.id,
     )
@@ -407,9 +404,7 @@ async def _team(source: Any, args: str) -> SlashResult:
     try:
         return SlashResult(text=await app.run_team(objective))
     except Exception as e:
-        return SlashResult(
-            text=f"团队执行失败: {type(e).__name__}: {e}"
-        )
+        return SlashResult(text=f"团队执行失败: {type(e).__name__}: {e}")
 
 
 def build_default_registry() -> SlashRegistry:

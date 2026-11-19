@@ -102,9 +102,7 @@ class SimpleJsonSchema:
     def __init__(self, schema: dict[str, Any]) -> None:
         self.schema = schema
 
-    def validate(
-        self, value: Any, schema: dict[str, Any] | None = None
-    ) -> tuple[bool, str | None]:
+    def validate(self, value: Any, schema: dict[str, Any] | None = None) -> tuple[bool, str | None]:
         schema = self.schema if schema is None else schema
         if not isinstance(schema, dict):
             return True, None
@@ -137,8 +135,7 @@ class SimpleJsonSchema:
     def _check_type(value: Any, expected: str) -> bool:
         return {
             "string": lambda v: isinstance(v, str),
-            "number": lambda v: isinstance(v, (int, float))
-            and not isinstance(v, bool),
+            "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
             "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
             "boolean": lambda v: isinstance(v, bool),
             "object": lambda v: isinstance(v, dict),
@@ -186,9 +183,7 @@ class WorkflowJournal:
         self.cache: dict[str, Any] = {}
         if resume:
             if not self.path.exists():
-                raise WorkflowInputError(
-                    f"resume journal not found for {run_id}"
-                )
+                raise WorkflowInputError(f"resume journal not found for {run_id}")
             for line_number, line in enumerate(
                 self.path.read_text(encoding="utf-8").splitlines(), start=1
             ):
@@ -211,9 +206,7 @@ class WorkflowJournal:
         else:
             self._f = self.path.open("w", encoding="utf-8")
 
-    def key(
-        self, kind: str, label: str, prompt: str, schema: dict[str, Any] | None
-    ) -> str:
+    def key(self, kind: str, label: str, prompt: str, schema: dict[str, Any] | None) -> str:
         basis = f"{kind}|{label}|{prompt}|{json.dumps(schema, sort_keys=True)}"
         return f"{kind}-{_stable_int(basis) % 10**10:010d}"
 
@@ -241,9 +234,7 @@ class Budget:
 
     def add(self, n: int) -> None:
         if self.total is not None and self._spent + n > self.total:
-            raise WorkflowInputError(
-                f"token budget exceeded ({self._spent + n} > {self.total})"
-            )
+            raise WorkflowInputError(f"token budget exceeded ({self._spent + n} > {self.total})")
         self._spent += n
 
     def spent(self) -> int:
@@ -280,9 +271,7 @@ class WorkflowTask:
     run_id: str
     meta: dict[str, Any]
     status: str = "running"
-    usage: dict[str, int] = field(
-        default_factory=lambda: {"agents": 0, "tokens": 0}
-    )
+    usage: dict[str, int] = field(default_factory=lambda: {"agents": 0, "tokens": 0})
     progress: list[dict[str, Any]] = field(default_factory=list)
 
     def progress_event(self, ptype: str, **data: Any) -> None:
@@ -381,15 +370,11 @@ class SubagentWorkflowRunner:
             tokens += retry.usage.input_tokens + retry.usage.output_tokens
             ok, value, err = self._parse_and_validate(retry.summary, schema)
             if not ok:
-                raise WorkflowInputError(
-                    f"agent({{schema}}) invalid output: {err}"
-                )
+                raise WorkflowInputError(f"agent({{schema}}) invalid output: {err}")
         return RunnerOutput(value=value, tokens=tokens)
 
     @staticmethod
-    def _parse_and_validate(
-        text: str, schema: dict[str, Any]
-    ) -> tuple[bool, Any, str | None]:
+    def _parse_and_validate(text: str, schema: dict[str, Any]) -> tuple[bool, Any, str | None]:
         try:
             value = parse_json_value(text)
         except WorkflowInputError as exc:
@@ -465,11 +450,11 @@ class ExecutionState:
             if schema is not None:
                 ok, err = SimpleJsonSchema(schema).validate(cached)
                 if not ok:
-                    raise WorkflowInputError(
-                        f"cached agent output failed schema validation: {err}"
-                    )
+                    raise WorkflowInputError(f"cached agent output failed schema validation: {err}")
             self.task.progress_event(
-                "workflow_agent", label=label, phase=phase or self._phase,
+                "workflow_agent",
+                label=label,
+                phase=phase or self._phase,
                 status="cached",
             )
             return cached
@@ -483,7 +468,9 @@ class ExecutionState:
         await asyncio.to_thread(self.journal.record, key, run.value)
         self._emit(f"[workflow] agent done: {label} ({run.tokens} tokens)")
         self.task.progress_event(
-            "workflow_agent", label=label, phase=phase or self._phase,
+            "workflow_agent",
+            label=label,
+            phase=phase or self._phase,
             status="done",
         )
         return run.value
@@ -501,9 +488,7 @@ class ExecutionState:
                 value = await stage(value, item, idx)
             return value
 
-        return await asyncio.gather(
-            *[run_item(item, idx) for idx, item in enumerate(items)]
-        )
+        return await asyncio.gather(*[run_item(item, idx) for idx, item in enumerate(items)])
 
     async def workflow(self, name: str, args: dict[str, Any] | None = None) -> Any:
         """嵌套调用已注册的 workflow（仅一层），共享 journal/budget/limits。"""
@@ -513,10 +498,16 @@ class ExecutionState:
             raise WorkflowInputError(f"unknown workflow '{name}'")
         meta, fn = self._workflows[name]
         child = ExecutionState(
-            self.task, self.journal, self.runner, self.budget,
-            args or {}, self.base_ctx, self._workflows,
+            self.task,
+            self.journal,
+            self.runner,
+            self.budget,
+            args or {},
+            self.base_ctx,
+            self._workflows,
             event_sink=self._event_sink,
-            depth=self._depth + 1, limits=self._limits,
+            depth=self._depth + 1,
+            limits=self._limits,
         )
         return await fn(child, args or {})
 
@@ -560,9 +551,7 @@ def _read_snapshot(store: Path, run_id: str) -> dict[str, Any]:
     try:
         snapshot = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise WorkflowInputError(
-            f"invalid resume snapshot for {run_id}"
-        ) from exc
+        raise WorkflowInputError(f"invalid resume snapshot for {run_id}") from exc
     if not isinstance(snapshot, dict):
         raise WorkflowInputError(f"invalid resume snapshot for {run_id}")
     return snapshot
@@ -624,9 +613,7 @@ class WorkflowTool(Tool):
             "additionalProperties": False,
         }
 
-    async def execute(
-        self, input: dict[str, Any], ctx: ToolContext
-    ) -> ToolOutput:
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         try:
             out = await self.call(
                 input.get("name"),
@@ -662,9 +649,7 @@ class WorkflowTool(Tool):
             else await asyncio.to_thread(reserve_run_id, meta, self._store)
         )
         async with workflow_run_lock(run_id):
-            return await self._call_locked(
-                meta, script_fn, args, run_id, resuming, ctx
-            )
+            return await self._call_locked(meta, script_fn, args, run_id, resuming, ctx)
 
     async def _call_locked(
         self,
@@ -678,25 +663,17 @@ class WorkflowTool(Tool):
         if resuming:
             snapshot = await asyncio.to_thread(_read_snapshot, self._store, run_id)
             if snapshot.get("workflowName") != meta["name"]:
-                raise WorkflowInputError(
-                    "resume run id does not match workflow meta"
-                )
+                raise WorkflowInputError("resume run id does not match workflow meta")
             saved_args = snapshot.get("args", {})
             if args is None:
                 args = saved_args
             elif args != saved_args:
-                raise WorkflowInputError(
-                    "resume args do not match the original run"
-                )
+                raise WorkflowInputError("resume args do not match the original run")
         else:
             args = args or {}
 
-        journal = await asyncio.to_thread(
-            WorkflowJournal, run_id, self._store, resume=resuming
-        )
-        task = WorkflowTask(
-            task_id=f"{run_id}-task", run_id=run_id, meta=meta
-        )
+        journal = await asyncio.to_thread(WorkflowJournal, run_id, self._store, resume=resuming)
+        task = WorkflowTask(task_id=f"{run_id}-task", run_id=run_id, meta=meta)
         task.progress_event(
             "task_started",
             workflow=meta["name"],
@@ -705,8 +682,7 @@ class WorkflowTool(Tool):
         await asyncio.to_thread(
             _write_json,
             self._store / f"{run_id}.json",
-            {"runId": run_id, "workflowName": meta["name"],
-             "args": args, "task": task.serialize()},
+            {"runId": run_id, "workflowName": meta["name"], "args": args, "task": task.serialize()},
         )
 
         budget_total = args.get("budget", self._default_budget)
@@ -730,18 +706,13 @@ class WorkflowTool(Tool):
         finally:
             await asyncio.to_thread(journal.close)
 
-        await asyncio.to_thread(
-            _write_json, self._store / f"{run_id}.output.json", result
-        )
+        await asyncio.to_thread(_write_json, self._store / f"{run_id}.output.json", result)
         await asyncio.to_thread(
             _write_json,
             self._store / f"{run_id}.json",
-            {"runId": run_id, "workflowName": meta["name"],
-             "args": args, "task": task.serialize()},
+            {"runId": run_id, "workflowName": meta["name"], "args": args, "task": task.serialize()},
         )
-        await asyncio.to_thread(
-            (self._store / "last_run.txt").write_text, run_id, "utf-8"
-        )
+        await asyncio.to_thread((self._store / "last_run.txt").write_text, run_id, "utf-8")
         self._emit(
             f"[workflow] {meta['name']} {task.status}: "
             f"{task.usage['agents']} agent(s), {task.usage['tokens']} tokens "

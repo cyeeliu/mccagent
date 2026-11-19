@@ -247,9 +247,7 @@ class TestRegisterUnregisterConcurrent:
         coord.register(rt)
         coord.unregister(rt.runtime_id)
         coord.unregister(rt.runtime_id)
-        assert rt.runtime_id not in {
-            r.runtime_id for r in coord.list_all()
-        }
+        assert rt.runtime_id not in {r.runtime_id for r in coord.list_all()}
         await rt.stop()
 
 
@@ -263,10 +261,12 @@ class TestAttemptOrdering:
         done_new = asyncio.Event()
 
         rt_old = TaskRuntime(
-            ControllableExecutor(done_event=done_old), agent_id="old",
+            ControllableExecutor(done_event=done_old),
+            agent_id="old",
         )
         rt_new = TaskRuntime(
-            ControllableExecutor(done_event=done_new), agent_id="new",
+            ControllableExecutor(done_event=done_new),
+            agent_id="new",
         )
         await rt_old.start()
         await rt_new.start()
@@ -304,7 +304,8 @@ class TestCancelAndCompleteRace:
         started = asyncio.Event()
         done = asyncio.Event()
         executor = ControllableExecutor(
-            start_event=started, done_event=done,
+            start_event=started,
+            done_event=done,
         )
         rt = TaskRuntime(executor, agent_id="race")
         await rt.start()
@@ -351,6 +352,7 @@ class TestEventDuplication:
         await rt.start()
 
         events: list = []
+
         async def collect():
             async for ev in rt.subscribe_events():
                 events.append(ev)
@@ -397,10 +399,14 @@ class TestTaskStoreCAS:
         store = InMemoryTaskStore()
         record = await store.create_task("retry-subject", "desc")
         attempt1 = await store.create_attempt(
-            record.task_id, "agent-1", idempotency_key="key-1",
+            record.task_id,
+            "agent-1",
+            idempotency_key="key-1",
         )
         attempt2 = await store.create_attempt(
-            record.task_id, "agent-1", idempotency_key="key-2",
+            record.task_id,
+            "agent-1",
+            idempotency_key="key-2",
         )
         assert attempt1.attempt_id != attempt2.attempt_id
         assert attempt1.idempotency_key == "key-1"

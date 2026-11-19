@@ -163,16 +163,12 @@ class BudgetInterceptor:
         if not self._warned and total >= limit * loop.warn_threshold:
             self._warned = True
             await ictx.tx.put(
-                Notice(
-                    text=f"Budget warning: ${total:.4} / ${limit:.4} "
-                    f"({total / limit:.0%})"
-                )
+                Notice(text=f"Budget warning: ${total:.4} / ${limit:.4} ({total / limit:.0%})")
             )
         if total >= limit:
             await ictx.tx.put(
                 Notice(
-                    text=f"Budget limit ${limit:.4} reached "
-                    f"after {ictx.iteration - 1} iteration(s)"
+                    text=f"Budget limit ${limit:.4} reached after {ictx.iteration - 1} iteration(s)"
                 )
             )
             raise AgentError(f"cost ${total:.4} >= limit ${limit:.4}")

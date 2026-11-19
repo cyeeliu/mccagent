@@ -38,14 +38,9 @@ class McpToolAdapter:
             raise ValueError("MCP tool info missing 'name'")
         self._raw_name = raw_name
         self._server_name = server_name
-        self._name = (
-            f"mcp__{normalize_mcp_name(server_name)}"
-            f"__{normalize_mcp_name(raw_name)}"
-        )
+        self._name = f"mcp__{normalize_mcp_name(server_name)}__{normalize_mcp_name(raw_name)}"
         if len(self._name) > 64:
-            raise ValueError(
-                f"MCP tool name too long (>64): {self._name}"
-            )
+            raise ValueError(f"MCP tool name too long (>64): {self._name}")
         self._description = str(tool_info.get("description", ""))
         self._input_schema = tool_info.get("inputSchema", {})
         self._client = client
@@ -61,8 +56,6 @@ class McpToolAdapter:
     def input_schema(self) -> dict[str, Any]:
         return self._input_schema
 
-    async def execute(
-        self, input: dict[str, Any], ctx: ToolContext
-    ) -> ToolOutput:
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         text, is_error = await self._client.call_tool(self._raw_name, input)
         return ToolOutput(content=text, is_error=is_error)

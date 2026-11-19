@@ -168,18 +168,10 @@ class QualityGateImpl:
         attempt: int = 1,
     ) -> GateResult:
         """从检查结果列表构建 GateResult。"""
-        required_passed = sum(
-            1 for r in results if r.required and r.passed
-        )
-        required_failed = sum(
-            1 for r in results if r.required and r.is_failure
-        )
-        optional_passed = sum(
-            1 for r in results if not r.required and r.passed
-        )
-        optional_failed = sum(
-            1 for r in results if not r.required and r.is_failure
-        )
+        required_passed = sum(1 for r in results if r.required and r.passed)
+        required_failed = sum(1 for r in results if r.required and r.is_failure)
+        optional_passed = sum(1 for r in results if not r.required and r.passed)
+        optional_failed = sum(1 for r in results if not r.required and r.is_failure)
 
         return GateResult(
             results=tuple(results),

@@ -219,9 +219,7 @@ async def test_edit_not_unique_fails(ctx: ToolContext, tmp_path: Path):
     (tmp_path / "dup.txt").write_text("a\na\n")
     tool = EditFileTool()
 
-    out = await tool.execute(
-        {"path": "dup.txt", "old_string": "a", "new_string": "b"}, ctx
-    )
+    out = await tool.execute({"path": "dup.txt", "old_string": "a", "new_string": "b"}, ctx)
     assert out.is_error
     assert "2 times" in out.content
 
@@ -243,9 +241,7 @@ async def test_edit_not_found(ctx: ToolContext, tmp_path: Path):
     (tmp_path / "f.txt").write_text("hello")
     tool = EditFileTool()
 
-    out = await tool.execute(
-        {"path": "f.txt", "old_string": "xyz", "new_string": "abc"}, ctx
-    )
+    out = await tool.execute({"path": "f.txt", "old_string": "xyz", "new_string": "abc"}, ctx)
     assert out.is_error
     assert "not found" in out.content
 
@@ -255,9 +251,7 @@ async def test_edit_identical_strings(ctx: ToolContext, tmp_path: Path):
     (tmp_path / "f.txt").write_text("hello")
     tool = EditFileTool()
 
-    out = await tool.execute(
-        {"path": "f.txt", "old_string": "hello", "new_string": "hello"}, ctx
-    )
+    out = await tool.execute({"path": "f.txt", "old_string": "hello", "new_string": "hello"}, ctx)
     assert out.is_error
     assert "identical" in out.content
 
@@ -265,9 +259,7 @@ async def test_edit_identical_strings(ctx: ToolContext, tmp_path: Path):
 @pytest.mark.asyncio
 async def test_edit_file_not_found(ctx: ToolContext):
     tool = EditFileTool()
-    out = await tool.execute(
-        {"path": "nope.txt", "old_string": "a", "new_string": "b"}, ctx
-    )
+    out = await tool.execute({"path": "nope.txt", "old_string": "a", "new_string": "b"}, ctx)
     assert out.is_error
 
 

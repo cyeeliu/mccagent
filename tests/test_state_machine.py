@@ -41,45 +41,57 @@ def persistent_sm() -> AgentStateMachine:
 class TestEphemeralTransitions:
     """Ephemeral 模式合法迁移矩阵全覆盖。"""
 
-    @pytest.mark.parametrize("target", [
-        AgentState.RUNNING,
-        AgentState.CANCELLED,
-        AgentState.FAILED,
-    ])
+    @pytest.mark.parametrize(
+        "target",
+        [
+            AgentState.RUNNING,
+            AgentState.CANCELLED,
+            AgentState.FAILED,
+        ],
+    )
     def test_from_created(self, ephemeral_sm, target):
         ephemeral_sm.transition(target, reason="test")
         assert ephemeral_sm.state == target
 
-    @pytest.mark.parametrize("target", [
-        AgentState.PAUSED,
-        AgentState.COMPLETED,
-        AgentState.FAILED,
-        AgentState.CANCELLED,
-        AgentState.TIMEOUT,
-        AgentState.BUDGET_EXCEEDED,
-    ])
+    @pytest.mark.parametrize(
+        "target",
+        [
+            AgentState.PAUSED,
+            AgentState.COMPLETED,
+            AgentState.FAILED,
+            AgentState.CANCELLED,
+            AgentState.TIMEOUT,
+            AgentState.BUDGET_EXCEEDED,
+        ],
+    )
     def test_from_running(self, ephemeral_sm, target):
         ephemeral_sm.transition(AgentState.RUNNING)
         ephemeral_sm.transition(target, reason="test")
         assert ephemeral_sm.state == target
 
-    @pytest.mark.parametrize("target", [
-        AgentState.RUNNING,
-        AgentState.CANCELLED,
-    ])
+    @pytest.mark.parametrize(
+        "target",
+        [
+            AgentState.RUNNING,
+            AgentState.CANCELLED,
+        ],
+    )
     def test_from_paused(self, ephemeral_sm, target):
         ephemeral_sm.transition(AgentState.RUNNING)
         ephemeral_sm.transition(AgentState.PAUSED)
         ephemeral_sm.transition(target, reason="resume")
         assert ephemeral_sm.state == target
 
-    @pytest.mark.parametrize("terminal", [
-        AgentState.COMPLETED,
-        AgentState.FAILED,
-        AgentState.CANCELLED,
-        AgentState.TIMEOUT,
-        AgentState.BUDGET_EXCEEDED,
-    ])
+    @pytest.mark.parametrize(
+        "terminal",
+        [
+            AgentState.COMPLETED,
+            AgentState.FAILED,
+            AgentState.CANCELLED,
+            AgentState.TIMEOUT,
+            AgentState.BUDGET_EXCEEDED,
+        ],
+    )
     def test_terminal_is_stuck(self, ephemeral_sm, terminal):
         ephemeral_sm.transition(AgentState.RUNNING)
         ephemeral_sm.transition(terminal)
@@ -102,37 +114,46 @@ class TestPersistentTransitions:
         assert persistent_sm.state == AgentState.SHUTDOWN
         assert persistent_sm.is_terminal
 
-    @pytest.mark.parametrize("target", [
-        AgentState.IDLE,
-        AgentState.RUNNING,
-        AgentState.FAILED,
-        AgentState.SHUTDOWN,
-    ])
+    @pytest.mark.parametrize(
+        "target",
+        [
+            AgentState.IDLE,
+            AgentState.RUNNING,
+            AgentState.FAILED,
+            AgentState.SHUTDOWN,
+        ],
+    )
     def test_from_starting(self, persistent_sm, target):
         persistent_sm.transition(AgentState.STARTING)
         persistent_sm.transition(target)
         assert persistent_sm.state == target
 
-    @pytest.mark.parametrize("target", [
-        AgentState.RUNNING,
-        AgentState.SHUTDOWN,
-    ])
+    @pytest.mark.parametrize(
+        "target",
+        [
+            AgentState.RUNNING,
+            AgentState.SHUTDOWN,
+        ],
+    )
     def test_from_idle(self, persistent_sm, target):
         persistent_sm.transition(AgentState.STARTING)
         persistent_sm.transition(AgentState.IDLE)
         persistent_sm.transition(target)
         assert persistent_sm.state == target
 
-    @pytest.mark.parametrize("target", [
-        AgentState.IDLE,
-        AgentState.PAUSED,
-        AgentState.COMPLETED,
-        AgentState.FAILED,
-        AgentState.CANCELLED,
-        AgentState.TIMEOUT,
-        AgentState.BUDGET_EXCEEDED,
-        AgentState.STOPPING,
-    ])
+    @pytest.mark.parametrize(
+        "target",
+        [
+            AgentState.IDLE,
+            AgentState.PAUSED,
+            AgentState.COMPLETED,
+            AgentState.FAILED,
+            AgentState.CANCELLED,
+            AgentState.TIMEOUT,
+            AgentState.BUDGET_EXCEEDED,
+            AgentState.STOPPING,
+        ],
+    )
     def test_from_running(self, persistent_sm, target):
         persistent_sm.transition(AgentState.STARTING)
         persistent_sm.transition(AgentState.RUNNING)
@@ -277,6 +298,7 @@ class TestAuditRecord:
 
     def test_timestamps_are_monotonic(self, persistent_sm):
         import time
+
         t0 = time.monotonic()
         persistent_sm.transition(AgentState.STARTING)
         persistent_sm.transition(AgentState.IDLE)
@@ -370,11 +392,13 @@ class TestGuards:
 
     def test_multiple_guards_all_must_pass(self, ephemeral_sm):
         ephemeral_sm.add_guard(
-            AgentState.CREATED, AgentState.RUNNING,
+            AgentState.CREATED,
+            AgentState.RUNNING,
             CallbackGuard(predicate=lambda cur, tgt: True),
         )
         ephemeral_sm.add_guard(
-            AgentState.CREATED, AgentState.RUNNING,
+            AgentState.CREATED,
+            AgentState.RUNNING,
             CallbackGuard(predicate=lambda cur, tgt: False),
         )
         with pytest.raises(GuardRejectedError):
@@ -382,7 +406,8 @@ class TestGuards:
 
     def test_guard_does_not_affect_other_transitions(self, ephemeral_sm):
         ephemeral_sm.add_guard(
-            AgentState.CREATED, AgentState.RUNNING,
+            AgentState.CREATED,
+            AgentState.RUNNING,
             CallbackGuard(predicate=lambda cur, tgt: False),
         )
         ephemeral_sm.transition(AgentState.CANCELLED)
@@ -411,11 +436,13 @@ class TestConcurrency:
 
     def test_concurrent_transitions_one_wins(self):
         custom = {
-            AgentState.CREATED: frozenset({
-                AgentState.COMPLETED,
-                AgentState.CANCELLED,
-                AgentState.FAILED,
-            }),
+            AgentState.CREATED: frozenset(
+                {
+                    AgentState.COMPLETED,
+                    AgentState.CANCELLED,
+                    AgentState.FAILED,
+                }
+            ),
             AgentState.COMPLETED: frozenset(),
             AgentState.CANCELLED: frozenset(),
             AgentState.FAILED: frozenset(),

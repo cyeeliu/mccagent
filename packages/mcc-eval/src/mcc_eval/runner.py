@@ -250,9 +250,7 @@ class ProgressTracker:
         self._by_key[(case_id, attempt)] = entry
         self._write()
 
-    def observe(
-        self, case_id: str, attempt: int, ev: TraceEvent, event_count: int
-    ) -> None:
+    def observe(self, case_id: str, attempt: int, ev: TraceEvent, event_count: int) -> None:
         """吸收一个轨迹事件：内存常更新，loop 推进时写盘。"""
         entry = self._by_key.get((case_id, attempt))
         if entry is None:
@@ -369,7 +367,11 @@ async def run_case(
 
         if terminal != "done":
             finished = RunFinished(
-                seq=len(events), status=terminal, score=None, cost_usd=None, turns=0,
+                seq=len(events),
+                status=terminal,
+                score=None,
+                cost_usd=None,
+                turns=0,
             )
             events.append(finished)
             _dump_event(fh, finished)
@@ -387,9 +389,7 @@ async def run_case(
             attempt=attempt,
         )
 
-    run_finished = next(
-        (ev for ev in reversed(events) if isinstance(ev, RunFinished)), None
-    )
+    run_finished = next((ev for ev in reversed(events) if isinstance(ev, RunFinished)), None)
     # adapter 自报的执行终态优先于评分器（与 rebuild 语义一致）：
     # error / timeout 说明 Agent 根本没跑完（如 LLM 认证失败、网关
     # 不可达），对残缺轨迹评分没有意义，reason 透传供排障
@@ -398,8 +398,7 @@ async def run_case(
             case_id=case.case_id,
             status=run_finished.status,
             score=None,
-            reason=run_finished.reason
-            or f"execution terminated as {run_finished.status}",
+            reason=run_finished.reason or f"execution terminated as {run_finished.status}",
             cost_usd=run_finished.cost_usd,
             turns=run_finished.turns,
             duration_s=duration,
@@ -409,13 +408,14 @@ async def run_case(
     snap = snapshot_from_events(events)
     judge_results = None
     if judge is not None:
-        judge_results = await judge.prescore(
-            " ".join(snap.text_outputs), case.expectations
-        )
+        judge_results = await judge.prescore(" ".join(snap.text_outputs), case.expectations)
     scored = await asyncio.to_thread(
         score_case,
-        snap, check=case.check, expectations=case.expectations,
-        work_dir=work_dir, judge_results=judge_results,
+        snap,
+        check=case.check,
+        expectations=case.expectations,
+        work_dir=work_dir,
+        judge_results=judge_results,
         allow_execution=True,
     )
     return CaseResult(
@@ -488,9 +488,7 @@ async def run_batch(
             return result
 
     job_specs = [
-        (case, attempt)
-        for case in cases
-        for attempt in range(1, max(1, runs_per_case) + 1)
+        (case, attempt) for case in cases for attempt in range(1, max(1, runs_per_case) + 1)
     ]
     raw_results = await asyncio.gather(
         *(one(case, attempt) for case, attempt in job_specs),
@@ -501,13 +499,15 @@ async def run_batch(
         if isinstance(raw, CaseResult):
             results.append(raw)
         else:
-            results.append(CaseResult(
-                case_id=case.id,
-                status="error",
-                score=None,
-                reason=f"unhandled exception: {raw!r}",
-                attempt=attempt,
-            ))
+            results.append(
+                CaseResult(
+                    case_id=case.id,
+                    status="error",
+                    score=None,
+                    reason=f"unhandled exception: {raw!r}",
+                    attempt=attempt,
+                )
+            )
     tracker.finish()
     return BatchResult(
         batch_id=batch_dir.name,

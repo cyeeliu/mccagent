@@ -117,8 +117,12 @@ class CompactionReport:
 
     @property
     def notable(self) -> bool:
-        return bool(self.persisted_results or self.archived_messages
-                    or self.replaced_results or self.summarized)
+        return bool(
+            self.persisted_results
+            or self.archived_messages
+            or self.replaced_results
+            or self.summarized
+        )
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -195,17 +199,12 @@ class ContextCompactor:
                 f"[Large tool result persisted at {path}; "
                 f"first {RESULT_PREVIEW_CHARS} chars shown]\n{preview}"
             )
-            total = sum(
-                len(b.content) for b in last.content
-                if isinstance(b, ToolResultBlock)
-            )
+            total = sum(len(b.content) for b in last.content if isinstance(b, ToolResultBlock))
         return messages
 
     # ── 第 2 步：消息条数控制（配对保护的头尾保留）────────────────────
 
-    def snip_compact(
-        self, messages: list[Message], report: CompactionReport
-    ) -> list[Message]:
+    def snip_compact(self, messages: list[Message], report: CompactionReport) -> list[Message]:
         """消息数超上限时归档中段，头尾保留；切点不拆工具配对。"""
         if len(messages) <= MAX_MESSAGES:
             return messages
@@ -218,9 +217,11 @@ class ContextCompactor:
             while head_end < tail_start and _has_tool_result(messages[head_end]):
                 head_end += 1
         # 尾部边界左移：不把 tool_result 的发起调用留在归档内
-        if (0 < tail_start < len(messages)
-                and _has_tool_result(messages[tail_start])
-                and _has_tool_use(messages[tail_start - 1])):
+        if (
+            0 < tail_start < len(messages)
+            and _has_tool_result(messages[tail_start])
+            and _has_tool_use(messages[tail_start - 1])
+        ):
             tail_start -= 1
 
         if tail_start <= head_end:
@@ -230,18 +231,18 @@ class ContextCompactor:
         report.archived_messages = archived
         marker = Message(
             role=Role.user,
-            content=[TextBlock(
-                text=f"[{archived} messages archived; full history is recorded "
-                     f"in the session JSONL and remains resumable]"
-            )],
+            content=[
+                TextBlock(
+                    text=f"[{archived} messages archived; full history is recorded "
+                    f"in the session JSONL and remains resumable]"
+                )
+            ],
         )
         return [*messages[:head_end], marker, *messages[tail_start:]]
 
     # ── 第 3 步：旧工具结果替换为可恢复路径 ──────────────────────────
 
-    def _unseen_tool_result_positions(
-        self, messages: list[Message]
-    ) -> set[tuple[int, int]]:
+    def _unseen_tool_result_positions(self, messages: list[Message]) -> set[tuple[int, int]]:
         """尚未被模型消费过的 tool_result 位置（出现在最后一轮之后）。
 
         末条 assistant 消息是模型最近一次所见；其后追加的 user
@@ -297,13 +298,15 @@ class ContextCompactor:
         """
         unseen = self._unseen_tool_result_positions(messages)
         blocks = [
-            (i, j, b) for i, j, b in (
+            (i, j, b)
+            for i, j, b in (
                 (i, j, blk)
                 for i, msg in enumerate(messages)
                 if msg.role is Role.user
                 for j, blk in enumerate(msg.content)
                 if isinstance(blk, ToolResultBlock)
-            ) if (i, j) in unseen
+            )
+            if (i, j) in unseen
         ]
         for _, _, block in sorted(blocks, key=lambda t: len(t[2].content), reverse=True):
             if estimate_chars(messages) <= target_chars:
@@ -335,15 +338,19 @@ class ContextCompactor:
         report.summarized = True
         compacted = Message(
             role=Role.user,
-            content=[TextBlock(text=(
-                "[Compacted]\n\n"
-                "## Current user request\n"
-                f"{active_request}\n\n"
-                "## Conversation summary\n"
-                f"{summary}\n\n"
-                "(Full history remains recorded in the session JSONL; "
-                "persisted tool outputs are recoverable by path.)"
-            ))],
+            content=[
+                TextBlock(
+                    text=(
+                        "[Compacted]\n\n"
+                        "## Current user request\n"
+                        f"{active_request}\n\n"
+                        "## Conversation summary\n"
+                        f"{summary}\n\n"
+                        "(Full history remains recorded in the session JSONL; "
+                        "persisted tool outputs are recoverable by path.)"
+                    )
+                )
+            ],
         )
         return [compacted]
 
@@ -360,16 +367,12 @@ class ContextCompactor:
             if estimate_chars(messages) > self._char_limit:
                 messages = self.fit_tool_results(messages, target, report)
             if estimate_chars(messages) > self._char_limit:
-                messages = await self.compact_history(
-                    messages, active_request, report
-                )
+                messages = await self.compact_history(messages, active_request, report)
         return messages, report
 
     # ── API 拒绝后的补救 ────────────────────────────────────────────
 
-    async def reactive_compact(
-        self, messages: list[Message], active_request: str
-    ) -> list[Message]:
+    async def reactive_compact(self, messages: list[Message], active_request: str) -> list[Message]:
         """prompt_too_long 拒绝后的一次性补救：摘要旧历史，保尾继续。
 
         切点同样保护工具配对；当前请求经 active_request 显式保留。
@@ -377,21 +380,27 @@ class ContextCompactor:
         if self._summarize is None:
             return messages
         tail_start = max(0, len(messages) - KEEP_RECENT_MESSAGES)
-        if (0 < tail_start < len(messages)
-                and _has_tool_result(messages[tail_start])
-                and _has_tool_use(messages[tail_start - 1])):
+        if (
+            0 < tail_start < len(messages)
+            and _has_tool_result(messages[tail_start])
+            and _has_tool_use(messages[tail_start - 1])
+        ):
             tail_start -= 1
 
         old_history = messages[:tail_start] if tail_start else messages
         summary = await self._summarize(SUMMARY_SYSTEM, old_history)
         notice = Message(
             role=Role.user,
-            content=[TextBlock(text=(
-                "[Reactive compact after context rejection]\n\n"
-                "## Current user request\n"
-                f"{active_request}\n\n"
-                "## Conversation summary\n"
-                f"{summary}"
-            ))],
+            content=[
+                TextBlock(
+                    text=(
+                        "[Reactive compact after context rejection]\n\n"
+                        "## Current user request\n"
+                        f"{active_request}\n\n"
+                        "## Conversation summary\n"
+                        f"{summary}"
+                    )
+                )
+            ],
         )
         return [notice, *messages[tail_start:]] if tail_start else [notice]

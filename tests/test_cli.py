@@ -87,9 +87,7 @@ class TestOnboarding:
 
 
 class TestLlmBaseUrl:
-    def test_explicit_base_url_uses_openai_compatible_client(
-        self, tmp_path: Path, monkeypatch
-    ):
+    def test_explicit_base_url_uses_openai_compatible_client(self, tmp_path: Path, monkeypatch):
         from mcc_cli import _build_source
         from mcc_llm.openai import OpenAiClient
 
@@ -104,9 +102,7 @@ class TestLlmBaseUrl:
         """MCC_LLM_BASE_URL 环境变量经 click option 注入（声明性行为，验证元数据）。"""
         import mcc_cli
 
-        opt = next(
-            p for p in main.params if p.name == "llm_base_url"
-        )
+        opt = next(p for p in main.params if p.name == "llm_base_url")
         assert opt.envvar == "MCC_LLM_BASE_URL"
         assert mcc_cli.__version__
 
@@ -115,9 +111,7 @@ class TestLlmBaseUrl:
         from mcc_llm.mock import MockLlm
 
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        source = _build_source(
-            tmp_path, None, True, None, llm_base_url="http://gw:8000/v1"
-        )
+        source = _build_source(tmp_path, None, True, None, llm_base_url="http://gw:8000/v1")
         assert isinstance(source.agent.llm, MockLlm)
 
 
@@ -178,9 +172,7 @@ class TestUpdateCmd:
     def test_newer_version_advertised(self, monkeypatch):
         from mcc_cli import _latest_pypi_version
 
-        monkeypatch.setattr(
-            "mcc_cli._latest_pypi_version", lambda package="mcc-cli": "99.0.0"
-        )
+        monkeypatch.setattr("mcc_cli._latest_pypi_version", lambda package="mcc-cli": "99.0.0")
         runner = CliRunner()
         result = runner.invoke(main, ["update"])
         assert result.exit_code == 0
@@ -188,18 +180,14 @@ class TestUpdateCmd:
         assert "uv tool upgrade mcc-cli" in result.output
 
     def test_latest_version(self, monkeypatch):
-        monkeypatch.setattr(
-            "mcc_cli._latest_pypi_version", lambda package="mcc-cli": "0.0.1"
-        )
+        monkeypatch.setattr("mcc_cli._latest_pypi_version", lambda package="mcc-cli": "0.0.1")
         runner = CliRunner()
         result = runner.invoke(main, ["update"])
         assert result.exit_code == 0
         assert "You are on the latest version." in result.output
 
     def test_network_failure_is_soft(self, monkeypatch):
-        monkeypatch.setattr(
-            "mcc_cli._latest_pypi_version", lambda package="mcc-cli": None
-        )
+        monkeypatch.setattr("mcc_cli._latest_pypi_version", lambda package="mcc-cli": None)
         runner = CliRunner()
         result = runner.invoke(main, ["update"])
         assert result.exit_code == 0
@@ -258,17 +246,26 @@ def test_headless_stderr_shows_tool_progress(capsys):
     assert "⚙" in captured.err
 
 
-def _make_session(base: Path, sid: str, started: datetime, turns: int = 3,
-                  cost: float = 0.25, title: str | None = None) -> None:
+def _make_session(
+    base: Path,
+    sid: str,
+    started: datetime,
+    turns: int = 3,
+    cost: float = 0.25,
+    title: str | None = None,
+) -> None:
     day = base / started.strftime("%Y-%m-%d")
     day.mkdir(parents=True, exist_ok=True)
     meta = SessionMeta(
-        id=sid, started_at=started, cwd="/tmp", turns=turns,
-        cost_usd=cost, status="ended", title=title,
+        id=sid,
+        started_at=started,
+        cwd="/tmp",
+        turns=turns,
+        cost_usd=cost,
+        status="ended",
+        title=title,
     )
-    (day / f"{sid}.meta.json").write_text(
-        meta.model_dump_json(), encoding="utf-8"
-    )
+    (day / f"{sid}.meta.json").write_text(meta.model_dump_json(), encoding="utf-8")
 
 
 class TestSessionsCmd:
@@ -283,9 +280,12 @@ class TestSessionsCmd:
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
         _make_session(
-            home / ".mcc" / "sessions", "abc123",
+            home / ".mcc" / "sessions",
+            "abc123",
             datetime(2026, 10, 1, 14, 32, tzinfo=UTC),
-            turns=8, cost=0.34, title="修复 rpc client 超时",
+            turns=8,
+            cost=0.34,
+            title="修复 rpc client 超时",
         )
         runner = CliRunner()
         result = runner.invoke(main, ["sessions", "list"])
@@ -314,9 +314,7 @@ class TestSessionsCmd:
         _make_session(base, "ancient", datetime(2026, 1, 1, tzinfo=UTC))
         _make_session(base, "recent", datetime.now(UTC))
         runner = CliRunner()
-        result = runner.invoke(
-            main, ["sessions", "purge", "--older-than", "30d"]
-        )
+        result = runner.invoke(main, ["sessions", "purge", "--older-than", "30d"])
         assert result.exit_code == 0
         assert "purged 1 session(s)" in result.output
         assert "recent" in runner.invoke(main, ["sessions", "list"]).output
@@ -486,9 +484,7 @@ class TestHistoryEvents:
 def _config(main="claude-opus-4-8", subagent=None, summarize=None):
     from mcc_config import Config, ModelConfig
 
-    return Config(
-        model=ModelConfig(main=main, subagent=subagent, summarize=summarize)
-    )
+    return Config(model=ModelConfig(main=main, subagent=subagent, summarize=summarize))
 
 
 class TestResolveModel:

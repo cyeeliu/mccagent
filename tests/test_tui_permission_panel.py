@@ -14,9 +14,7 @@ from mcc_tui.render import _permission_content_lines, _permission_panel
 def _make_perm_app(message: str) -> App:
     """构造有 pending_permission 的 App。"""
     app = App(session_short_id="t")
-    app.apply_event(
-        PermissionRequest(id=1, message=message, tool_name="bash", tool_input={})
-    )
+    app.apply_event(PermissionRequest(id=1, message=message, tool_name="bash", tool_input={}))
     return app
 
 

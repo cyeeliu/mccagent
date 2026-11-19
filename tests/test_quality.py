@@ -72,13 +72,16 @@ class TestCheck:
     def test_invalid_timeout_raises(self, timeout):
         with pytest.raises(QualityError, match="timeout"):
             Check(
-                name="test", kind=CheckKind.TEST,
-                command=("true",), timeout=timeout,
+                name="test",
+                kind=CheckKind.TEST,
+                command=("true",),
+                timeout=timeout,
             )
 
     def test_command_list(self):
         c = Check(
-            name="t", kind=CheckKind.TEST,
+            name="t",
+            kind=CheckKind.TEST,
             command=("python3", "-c", "print(1)"),
         )
         assert c.command_list == ["python3", "-c", "print(1)"]
@@ -94,13 +97,16 @@ class TestCheck:
 class TestCheckKind:
     """检查类型枚举。"""
 
-    @pytest.mark.parametrize("kind,expected", [
-        (CheckKind.TEST, "test"),
-        (CheckKind.LINT, "lint"),
-        (CheckKind.FORMAT, "format"),
-        (CheckKind.FILE_EXISTS, "file_exists"),
-        (CheckKind.CUSTOM, "custom"),
-    ])
+    @pytest.mark.parametrize(
+        "kind,expected",
+        [
+            (CheckKind.TEST, "test"),
+            (CheckKind.LINT, "lint"),
+            (CheckKind.FORMAT, "format"),
+            (CheckKind.FILE_EXISTS, "file_exists"),
+            (CheckKind.CUSTOM, "custom"),
+        ],
+    )
     def test_kind_values(self, kind, expected):
         assert kind == expected
 
@@ -118,19 +124,23 @@ class TestQualityPolicy:
         assert p.optional_checks == ()
 
     def test_required_and_optional(self):
-        p = QualityPolicy(checks=(
-            make_check("r1", required=True),
-            make_check("o1", required=False),
-        ))
+        p = QualityPolicy(
+            checks=(
+                make_check("r1", required=True),
+                make_check("o1", required=False),
+            )
+        )
         assert len(p.required_checks) == 1
         assert len(p.optional_checks) == 1
 
     def test_duplicate_names_raises(self):
         with pytest.raises(QualityError, match="unique"):
-            QualityPolicy(checks=(
-                make_check("dup"),
-                make_check("dup"),
-            ))
+            QualityPolicy(
+                checks=(
+                    make_check("dup"),
+                    make_check("dup"),
+                )
+            )
 
     def test_negative_max_retries_raises(self):
         with pytest.raises(QualityError, match="max_retries"):
@@ -150,24 +160,32 @@ class TestCheckResult:
 
     def test_passed_result(self):
         r = CheckResult(
-            name="t", kind=CheckKind.TEST,
-            passed=True, exit_code=0,
+            name="t",
+            kind=CheckKind.TEST,
+            passed=True,
+            exit_code=0,
         )
         assert not r.is_failure
         assert not r.is_required_failure
 
     def test_failed_required(self):
         r = CheckResult(
-            name="t", kind=CheckKind.TEST,
-            passed=False, exit_code=1, required=True,
+            name="t",
+            kind=CheckKind.TEST,
+            passed=False,
+            exit_code=1,
+            required=True,
         )
         assert r.is_failure
         assert r.is_required_failure
 
     def test_failed_optional(self):
         r = CheckResult(
-            name="t", kind=CheckKind.TEST,
-            passed=False, exit_code=1, required=False,
+            name="t",
+            kind=CheckKind.TEST,
+            passed=False,
+            exit_code=1,
+            required=False,
         )
         assert r.is_failure
         assert not r.is_required_failure
@@ -195,24 +213,30 @@ class TestGateResult:
 
     def test_all_passed_with_optional(self):
         r = GateResult(
-            required_passed=2, required_failed=0,
-            optional_passed=1, optional_failed=0,
+            required_passed=2,
+            required_failed=0,
+            optional_passed=1,
+            optional_failed=0,
         )
         assert r.all_passed
         assert r.passed
 
     def test_optional_failure_still_passed(self):
         r = GateResult(
-            required_passed=2, required_failed=0,
-            optional_passed=0, optional_failed=1,
+            required_passed=2,
+            required_failed=0,
+            optional_passed=0,
+            optional_failed=1,
         )
         assert r.passed
         assert not r.all_passed
 
     def test_summary(self):
         r = GateResult(
-            required_passed=3, required_failed=1,
-            optional_passed=2, optional_failed=0,
+            required_passed=3,
+            required_failed=1,
+            optional_passed=2,
+            optional_failed=0,
         )
         s = r.summary
         assert "3 passed" in s
@@ -220,8 +244,10 @@ class TestGateResult:
 
     def test_get_result(self):
         cr = CheckResult(
-            name="check1", kind=CheckKind.TEST,
-            passed=True, exit_code=0,
+            name="check1",
+            kind=CheckKind.TEST,
+            passed=True,
+            exit_code=0,
         )
         r = GateResult(results=(cr,))
         assert r.get_result("check1") is cr
@@ -229,12 +255,18 @@ class TestGateResult:
 
     def test_failed_required_property(self):
         cr1 = CheckResult(
-            name="r1", kind=CheckKind.TEST,
-            passed=False, exit_code=1, required=True,
+            name="r1",
+            kind=CheckKind.TEST,
+            passed=False,
+            exit_code=1,
+            required=True,
         )
         cr2 = CheckResult(
-            name="o1", kind=CheckKind.TEST,
-            passed=False, exit_code=1, required=False,
+            name="o1",
+            kind=CheckKind.TEST,
+            passed=False,
+            exit_code=1,
+            required=False,
         )
         r = GateResult(results=(cr1, cr2))
         failed = r.failed_required
@@ -263,27 +295,33 @@ class TestRunCheck:
 
     def test_command_with_output(self):
         gate = QualityGateImpl()
-        result = gate.run_check(make_check(
-            command=("python3", "-c", "print('hello')"),
-        ))
+        result = gate.run_check(
+            make_check(
+                command=("python3", "-c", "print('hello')"),
+            )
+        )
         assert result.passed
         assert "hello" in result.output
 
     def test_command_not_found(self):
         gate = QualityGateImpl()
-        result = gate.run_check(make_check(
-            command=("nonexistent-cmd-xyz-123",),
-        ))
+        result = gate.run_check(
+            make_check(
+                command=("nonexistent-cmd-xyz-123",),
+            )
+        )
         assert not result.passed
         assert result.error is not None
         assert "not found" in result.error
 
     def test_timeout(self):
         gate = QualityGateImpl()
-        result = gate.run_check(make_check(
-            command=("sleep", "10"),
-            timeout=0.5,
-        ))
+        result = gate.run_check(
+            make_check(
+                command=("sleep", "10"),
+                timeout=0.5,
+            )
+        )
         assert not result.passed
         assert result.error is not None
         assert "timeout" in result.error
@@ -291,10 +329,12 @@ class TestRunCheck:
     def test_workdir(self, tmp_path: Path):
         (tmp_path / "test.txt").write_text("x")
         gate = QualityGateImpl()
-        result = gate.run_check(make_check(
-            command=("test", "-f", "test.txt"),
-            workdir=tmp_path,
-        ))
+        result = gate.run_check(
+            make_check(
+                command=("test", "-f", "test.txt"),
+                workdir=tmp_path,
+            )
+        )
         assert result.passed
 
     def test_check_with_workdir_overrides_param(self, tmp_path: Path):
@@ -326,10 +366,12 @@ class TestEvaluate:
 
     def test_all_required_pass(self):
         gate = QualityGateImpl()
-        policy = QualityPolicy(checks=(
-            make_check("r1", command=("true",)),
-            make_check("r2", command=("true",)),
-        ))
+        policy = QualityPolicy(
+            checks=(
+                make_check("r1", command=("true",)),
+                make_check("r2", command=("true",)),
+            )
+        )
         result = gate.evaluate(policy)
         assert result.passed
         assert result.required_passed == 2
@@ -337,10 +379,12 @@ class TestEvaluate:
 
     def test_required_failure_blocks(self):
         gate = QualityGateImpl()
-        policy = QualityPolicy(checks=(
-            make_check("r1", command=("true",)),
-            make_check("r2", command=("false",)),
-        ))
+        policy = QualityPolicy(
+            checks=(
+                make_check("r1", command=("true",)),
+                make_check("r2", command=("false",)),
+            )
+        )
         result = gate.evaluate(policy)
         assert not result.passed
         assert result.required_passed == 1
@@ -348,22 +392,26 @@ class TestEvaluate:
 
     def test_optional_failure_does_not_block(self):
         gate = QualityGateImpl()
-        policy = QualityPolicy(checks=(
-            make_check("r1", command=("true",), required=True),
-            make_check("o1", command=("false",), required=False),
-        ))
+        policy = QualityPolicy(
+            checks=(
+                make_check("r1", command=("true",), required=True),
+                make_check("o1", command=("false",), required=False),
+            )
+        )
         result = gate.evaluate(policy)
         assert result.passed
         assert result.optional_failed == 1
 
     def test_mixed_checks(self):
         gate = QualityGateImpl()
-        policy = QualityPolicy(checks=(
-            make_check("test1", CheckKind.TEST, ("true",), required=True),
-            make_check("lint1", CheckKind.LINT, ("true",), required=True),
-            make_check("fmt1", CheckKind.FORMAT, ("false",), required=False),
-            make_check("custom1", CheckKind.CUSTOM, ("true",), required=False),
-        ))
+        policy = QualityPolicy(
+            checks=(
+                make_check("test1", CheckKind.TEST, ("true",), required=True),
+                make_check("lint1", CheckKind.LINT, ("true",), required=True),
+                make_check("fmt1", CheckKind.FORMAT, ("false",), required=False),
+                make_check("custom1", CheckKind.CUSTOM, ("true",), required=False),
+            )
+        )
         result = gate.evaluate(policy)
         assert result.passed
         assert result.required_passed == 2
@@ -372,10 +420,12 @@ class TestEvaluate:
 
     def test_all_fail(self):
         gate = QualityGateImpl()
-        policy = QualityPolicy(checks=(
-            make_check("r1", command=("false",)),
-            make_check("r2", command=("false",)),
-        ))
+        policy = QualityPolicy(
+            checks=(
+                make_check("r1", command=("false",)),
+                make_check("r2", command=("false",)),
+            )
+        )
         result = gate.evaluate(policy)
         assert not result.passed
         assert result.required_failed == 2
@@ -383,12 +433,15 @@ class TestEvaluate:
     def test_workdir_propagated(self, tmp_path: Path):
         (tmp_path / "exists.txt").write_text("x")
         gate = QualityGateImpl()
-        policy = QualityPolicy(checks=(
-            make_check(
-                "file_check", CheckKind.FILE_EXISTS,
-                ("test", "-f", "exists.txt"),
-            ),
-        ))
+        policy = QualityPolicy(
+            checks=(
+                make_check(
+                    "file_check",
+                    CheckKind.FILE_EXISTS,
+                    ("test", "-f", "exists.txt"),
+                ),
+            )
+        )
         result = gate.evaluate(policy, workdir=tmp_path)
         assert result.passed
 
@@ -401,9 +454,7 @@ class TestEvaluateWithRetries:
 
     def test_no_repair_needed(self):
         gate = QualityGateImpl()
-        policy = QualityPolicy(checks=(
-            make_check("r1", command=("true",)),
-        ))
+        policy = QualityPolicy(checks=(make_check("r1", command=("true",)),))
         result = gate.evaluate_with_retries(policy)
         assert result.passed
         assert result.attempt == 1
@@ -462,7 +513,8 @@ class TestEvaluateWithRetries:
             max_retries=0,
         )
         result = gate.evaluate_with_retries(
-            policy, repair=lambda r: None,
+            policy,
+            repair=lambda r: None,
         )
         assert not result.passed
         assert result.attempt == 1

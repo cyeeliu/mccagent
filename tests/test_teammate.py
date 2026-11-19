@@ -89,9 +89,7 @@ class TestMessageBus:
 
     async def test_concurrent_send(self, tmp_path):
         bus = MessageBus(tmp_path)
-        await asyncio.gather(
-            *[bus.send("sender", "box", f"msg{i}") for i in range(20)]
-        )
+        await asyncio.gather(*[bus.send("sender", "box", f"msg{i}") for i in range(20)])
         msgs = await bus.consume("box")
         assert len(msgs) == 20
 
@@ -670,10 +668,17 @@ class TestTeammateRuntime:
         registry = ToolRegistry()
         llm = MockLlm([single_text_turn("completed")])
         spec = TeammateSpec(
-            name="rt_test", role="coder", system="test", model="claude-haiku-4-5",
+            name="rt_test",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
         )
         rt = TeammateRuntime(
-            spec=spec, llm=llm, registry=registry, bus=bus, plan_store=plan_store,
+            spec=spec,
+            llm=llm,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
             base_dir=tmp_path,
         )
         await rt.start("do work")
@@ -688,15 +693,24 @@ class TestTeammateRuntime:
         bus = MessageBus(tmp_path)
         plan_store = PlanStore()
         registry = ToolRegistry()
-        llm = MockLlm([
-            single_text_turn("first done"),
-            single_text_turn("second done"),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("first done"),
+                single_text_turn("second done"),
+            ]
+        )
         spec = TeammateSpec(
-            name="idle_test", role="coder", system="test", model="claude-haiku-4-5",
+            name="idle_test",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
         )
         rt = TeammateRuntime(
-            spec=spec, llm=llm, registry=registry, bus=bus, plan_store=plan_store,
+            spec=spec,
+            llm=llm,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
             base_dir=tmp_path,
         )
         await rt.start("first task")
@@ -724,11 +738,18 @@ class TestTeammateRuntime:
         plan_store = PlanStore()
         registry = ToolRegistry()
         spec = TeammateSpec(
-            name="hang_test", role="coder", system="test", model="claude-haiku-4-5",
+            name="hang_test",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
         )
         rt = TeammateRuntime(
-            spec=spec, llm=HangingLlm(), registry=registry, bus=bus,
-            plan_store=plan_store, base_dir=tmp_path,
+            spec=spec,
+            llm=HangingLlm(),
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            base_dir=tmp_path,
         )
         await rt.start("hang task")
         await asyncio.sleep(0.1)
@@ -778,9 +799,7 @@ class TestLeadTools:
         mgr = _make_manager(tmp_path)
         tool = SpawnTeammateTool(mgr)
         ctx = _ctx(tmp_path)
-        result = await tool.execute(
-            {"name": "worker", "role": "coder", "prompt": "do stuff"}, ctx
-        )
+        result = await tool.execute({"name": "worker", "role": "coder", "prompt": "do stuff"}, ctx)
         assert not result.is_error
         assert "worker" in result.content
         await mgr.shutdown_all()
@@ -842,9 +861,7 @@ class TestLeadTools:
     async def test_create_worktree_tool(self, tmp_path):
         tool = CreateWorktreeTool(tmp_path)
         ctx = _ctx(tmp_path)
-        result = await tool.execute(
-            {"name": "wt_test", "task_id": "task_001"}, ctx
-        )
+        result = await tool.execute({"name": "wt_test", "task_id": "task_001"}, ctx)
         assert not result.is_error
         assert "Worktree created" in result.content
         remove_worktree("wt_test", tmp_path)
@@ -912,45 +929,51 @@ class TestTeammateTools:
 class TestTeammateStatusMatrix:
     """状态迁移矩阵校验：合法迁移允许，非法迁移拒绝。"""
 
-    @pytest.mark.parametrize("frm,to", [
-        (TeammateStatus.CREATED, TeammateStatus.STARTING),
-        (TeammateStatus.CREATED, TeammateStatus.SHUTTING_DOWN),
-        (TeammateStatus.STARTING, TeammateStatus.IDLE),
-        (TeammateStatus.STARTING, TeammateStatus.ASSIGNED),
-        (TeammateStatus.IDLE, TeammateStatus.ASSIGNED),
-        (TeammateStatus.ASSIGNED, TeammateStatus.PLANNING),
-        (TeammateStatus.ASSIGNED, TeammateStatus.RUNNING),
-        (TeammateStatus.PLANNING, TeammateStatus.WAITING_APPROVAL),
-        (TeammateStatus.PLANNING, TeammateStatus.FAILED),
-        (TeammateStatus.WAITING_APPROVAL, TeammateStatus.RUNNING),
-        (TeammateStatus.WAITING_APPROVAL, TeammateStatus.IDLE),
-        (TeammateStatus.RUNNING, TeammateStatus.REPORTING),
-        (TeammateStatus.RUNNING, TeammateStatus.FAILED),
-        (TeammateStatus.RUNNING, TeammateStatus.TIMEOUT),
-        (TeammateStatus.RUNNING, TeammateStatus.CANCELLED),
-        (TeammateStatus.REPORTING, TeammateStatus.IDLE),
-        (TeammateStatus.FAILED, TeammateStatus.IDLE),
-        (TeammateStatus.FAILED, TeammateStatus.RESTARTING),
-        (TeammateStatus.TIMEOUT, TeammateStatus.RESTARTING),
-        (TeammateStatus.CANCELLED, TeammateStatus.IDLE),
-        (TeammateStatus.RESTARTING, TeammateStatus.IDLE),
-        (TeammateStatus.SHUTTING_DOWN, TeammateStatus.SHUTDOWN),
-    ])
+    @pytest.mark.parametrize(
+        "frm,to",
+        [
+            (TeammateStatus.CREATED, TeammateStatus.STARTING),
+            (TeammateStatus.CREATED, TeammateStatus.SHUTTING_DOWN),
+            (TeammateStatus.STARTING, TeammateStatus.IDLE),
+            (TeammateStatus.STARTING, TeammateStatus.ASSIGNED),
+            (TeammateStatus.IDLE, TeammateStatus.ASSIGNED),
+            (TeammateStatus.ASSIGNED, TeammateStatus.PLANNING),
+            (TeammateStatus.ASSIGNED, TeammateStatus.RUNNING),
+            (TeammateStatus.PLANNING, TeammateStatus.WAITING_APPROVAL),
+            (TeammateStatus.PLANNING, TeammateStatus.FAILED),
+            (TeammateStatus.WAITING_APPROVAL, TeammateStatus.RUNNING),
+            (TeammateStatus.WAITING_APPROVAL, TeammateStatus.IDLE),
+            (TeammateStatus.RUNNING, TeammateStatus.REPORTING),
+            (TeammateStatus.RUNNING, TeammateStatus.FAILED),
+            (TeammateStatus.RUNNING, TeammateStatus.TIMEOUT),
+            (TeammateStatus.RUNNING, TeammateStatus.CANCELLED),
+            (TeammateStatus.REPORTING, TeammateStatus.IDLE),
+            (TeammateStatus.FAILED, TeammateStatus.IDLE),
+            (TeammateStatus.FAILED, TeammateStatus.RESTARTING),
+            (TeammateStatus.TIMEOUT, TeammateStatus.RESTARTING),
+            (TeammateStatus.CANCELLED, TeammateStatus.IDLE),
+            (TeammateStatus.RESTARTING, TeammateStatus.IDLE),
+            (TeammateStatus.SHUTTING_DOWN, TeammateStatus.SHUTDOWN),
+        ],
+    )
     def test_legal_transition_allowed(self, frm, to):
         assert to in _teammate_transitions(frm)
 
-    @pytest.mark.parametrize("frm,to", [
-        (TeammateStatus.CREATED, TeammateStatus.IDLE),
-        (TeammateStatus.CREATED, TeammateStatus.RUNNING),
-        (TeammateStatus.IDLE, TeammateStatus.RUNNING),
-        (TeammateStatus.IDLE, TeammateStatus.PLANNING),
-        (TeammateStatus.RUNNING, TeammateStatus.IDLE),
-        (TeammateStatus.RUNNING, TeammateStatus.ASSIGNED),
-        (TeammateStatus.SHUTDOWN, TeammateStatus.IDLE),
-        (TeammateStatus.SHUTDOWN, TeammateStatus.SHUTTING_DOWN),
-        (TeammateStatus.IDLE, TeammateStatus.CREATED),
-        (TeammateStatus.REPORTING, TeammateStatus.RUNNING),
-    ])
+    @pytest.mark.parametrize(
+        "frm,to",
+        [
+            (TeammateStatus.CREATED, TeammateStatus.IDLE),
+            (TeammateStatus.CREATED, TeammateStatus.RUNNING),
+            (TeammateStatus.IDLE, TeammateStatus.RUNNING),
+            (TeammateStatus.IDLE, TeammateStatus.PLANNING),
+            (TeammateStatus.RUNNING, TeammateStatus.IDLE),
+            (TeammateStatus.RUNNING, TeammateStatus.ASSIGNED),
+            (TeammateStatus.SHUTDOWN, TeammateStatus.IDLE),
+            (TeammateStatus.SHUTDOWN, TeammateStatus.SHUTTING_DOWN),
+            (TeammateStatus.IDLE, TeammateStatus.CREATED),
+            (TeammateStatus.REPORTING, TeammateStatus.RUNNING),
+        ],
+    )
     def test_illegal_transition_blocked(self, frm, to):
         assert to not in _teammate_transitions(frm)
 
@@ -976,7 +999,11 @@ class TestTeammateTransitionMethod:
         llm = MockLlm([single_text_turn("done")])
         spec = TeammateSpec(name="t", role="coder", system="s", model="m")
         return TeammateRuntime(
-            spec=spec, llm=llm, registry=registry, bus=bus, plan_store=plan_store,
+            spec=spec,
+            llm=llm,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
         )
 
     def test_illegal_raises(self, tmp_path):
@@ -1044,7 +1071,10 @@ class TestCurrentExecution:
 
     def test_clear_resets_all(self):
         ce = CurrentExecution(
-            task_id="t1", assignment="work", work_version=3, started_at=1.0,
+            task_id="t1",
+            assignment="work",
+            work_version=3,
+            started_at=1.0,
         )
         ce.clear()
         assert ce.task_id is None
@@ -1068,7 +1098,11 @@ class TestTeammateRecovery:
         llm = MockLlm([single_text_turn("done")])
         spec = TeammateSpec(name="rec", role="coder", system="s", model="m")
         rt = TeammateRuntime(
-            spec=spec, llm=llm, registry=registry, bus=bus, plan_store=plan_store,
+            spec=spec,
+            llm=llm,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
         )
         await rt.start("do work")
         await asyncio.sleep(0.3)
@@ -1104,6 +1138,7 @@ class SlowLlm:
     async def complete(self, req):
         await asyncio.sleep(10)
         from mcc_llm.mock import single_text_turn
+
         return single_text_turn("late")
 
     async def stream(self, req):
@@ -1122,12 +1157,20 @@ class TestTaskOutcomeDispatch:
         registry = ToolRegistry()
         ts = task_store or _TS(tmp_path / ".tasks")
         spec = TeammateSpec(
-            name="dispatch", role="coder", system="test",
-            model="claude-haiku-4-5", timeout_secs=timeout_secs,
+            name="dispatch",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
+            timeout_secs=timeout_secs,
         )
         rt = TeammateRuntime(
-            spec=spec, llm=llm, registry=registry, bus=bus,
-            plan_store=plan_store, task_store=ts, base_dir=tmp_path,
+            spec=spec,
+            llm=llm,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=ts,
+            base_dir=tmp_path,
         )
         return rt, bus, ts
 
@@ -1242,11 +1285,7 @@ def _user_texts(messages: list) -> list[str]:
     from mcc_core import Role
 
     return [
-        b.text
-        for m in messages
-        if m.role == Role.user
-        for b in m.content
-        if hasattr(b, "text")
+        b.text for m in messages if m.role == Role.user for b in m.content if hasattr(b, "text")
     ]
 
 
@@ -1264,11 +1303,7 @@ class TestP105InstructionInjectAndCancel:
         llm = _RecordingLlm(MockLlm([single_text_turn("done")]))
         ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
         registry = default_registry()
-        agent = (
-            AgentLoopBuilder(llm, registry, ctx)
-            .model("claude-haiku-4-5-20251001")
-            .build()
-        )
+        agent = AgentLoopBuilder(llm, registry, ctx).model("claude-haiku-4-5-20251001").build()
 
         iq: asyncio.Queue[str] = asyncio.Queue()
         iq.put_nowait("pivot to new approach")
@@ -1290,11 +1325,7 @@ class TestP105InstructionInjectAndCancel:
         llm = _RecordingLlm(MockLlm([single_text_turn("done")]))
         ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
         registry = default_registry()
-        agent = (
-            AgentLoopBuilder(llm, registry, ctx)
-            .model("claude-haiku-4-5-20251001")
-            .build()
-        )
+        agent = AgentLoopBuilder(llm, registry, ctx).model("claude-haiku-4-5-20251001").build()
 
         iq: asyncio.Queue[str] = asyncio.Queue()
         iq.put_nowait("step 1")
@@ -1334,11 +1365,7 @@ class TestP105InstructionInjectAndCancel:
         ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
         registry = default_registry()
         registry.register(_InjectTool(iq, "switch strategy"))
-        agent = (
-            AgentLoopBuilder(llm, registry, ctx)
-            .model("claude-haiku-4-5-20251001")
-            .build()
-        )
+        agent = AgentLoopBuilder(llm, registry, ctx).model("claude-haiku-4-5-20251001").build()
 
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("do work", queue, instruction_queue=iq)
@@ -1374,16 +1401,10 @@ class TestP105InstructionInjectAndCancel:
         ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
         registry = default_registry()
         registry.register(_CancelTrigger(cancel_event))
-        agent = (
-            AgentLoopBuilder(llm, registry, ctx)
-            .model("claude-haiku-4-5-20251001")
-            .build()
-        )
+        agent = AgentLoopBuilder(llm, registry, ctx).model("claude-haiku-4-5-20251001").build()
 
         queue: asyncio.Queue = asyncio.Queue()
-        run = await agent.run_streaming(
-            "do work", queue, cancel_event=cancel_event
-        )
+        run = await agent.run_streaming("do work", queue, cancel_event=cancel_event)
 
         assert run.final_text == "(cancelled)"
 
@@ -1417,16 +1438,10 @@ class TestP105InstructionInjectAndCancel:
         ctx = ToolContext(cwd=tmp_path, session_id="p105", depth=0)
         registry = default_registry()
         registry.register(_PauseTrigger(pause_event))
-        agent = (
-            AgentLoopBuilder(llm, registry, ctx)
-            .model("claude-haiku-4-5-20251001")
-            .build()
-        )
+        agent = AgentLoopBuilder(llm, registry, ctx).model("claude-haiku-4-5-20251001").build()
 
         queue: asyncio.Queue = asyncio.Queue()
-        run = await agent.run_streaming(
-            "do work", queue, pause_event=pause_event
-        )
+        run = await agent.run_streaming("do work", queue, pause_event=pause_event)
 
         assert run.final_text == "done"
         events: list = []
@@ -1531,8 +1546,13 @@ class TestP105InstructionInjectAndCancel:
             tools=["signal_and_wait"],
         )
         rt = TeammateRuntime(
-            spec=spec, llm=llm, registry=registry, bus=bus,
-            plan_store=plan_store, task_store=ts, base_dir=tmp_path,
+            spec=spec,
+            llm=llm,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=ts,
+            base_dir=tmp_path,
         )
 
         task = ts.create("cancellable task")
@@ -1879,7 +1899,8 @@ class TestTeammateManagerWithOrchestrator:
     async def test_spawn_multiple_agents_all_registered(self, tmp_path):
         """多个 teammate 都注册到 AgentRegistry 和 orchestrator。"""
         mgr, _coord, agent_reg, orch = _make_manager_with_orchestrator(
-            tmp_path, max_teammates=5,
+            tmp_path,
+            max_teammates=5,
         )
         await mgr.spawn("w1", "coder", "t1")
         await mgr.spawn("w2", "reviewer", "t2")
@@ -2086,11 +2107,17 @@ class TestPersistentRuntimeV2SubmitWaitTask:
         plan_store = PlanStore()
         registry = ToolRegistry()
         spec = TeammateSpec(
-            name="worker", role="coder", system="test", model="test",
+            name="worker",
+            role="coder",
+            system="test",
+            model="test",
         )
         rt = TeammateRuntime(
-            spec=spec, llm=MockLlm([]), registry=registry,
-            bus=bus, plan_store=plan_store,
+            spec=spec,
+            llm=MockLlm([]),
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
         )
         pr = PersistentRuntimeV2.from_teammate(rt, bus)
         future: asyncio.Future = asyncio.get_running_loop().create_future()

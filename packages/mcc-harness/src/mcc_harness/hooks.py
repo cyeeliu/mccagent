@@ -134,9 +134,7 @@ class ShellHook:
                 env=env,
                 cwd=str(ctx.cwd),
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self._timeout
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
         except (TimeoutError, FileNotFoundError, OSError) as e:
             return HookResult(allow=True, message=f"hook error: {e}")
 
@@ -144,8 +142,7 @@ class ShellHook:
             return HookResult(allow=True, message=stdout.decode().strip())
         return HookResult(
             allow=False,
-            message=stderr.decode().strip()
-            or f"hook exited with {proc.returncode}",
+            message=stderr.decode().strip() or f"hook exited with {proc.returncode}",
         )
 
 
@@ -177,9 +174,7 @@ class HookRegistry:
     def get(self, hook_type: HookType) -> list[Hook]:
         return self._hooks.get(hook_type, [])
 
-    async def run_hooks(
-        self, hook_type: HookType, ctx: HookContext
-    ) -> list[HookResult]:
+    async def run_hooks(self, hook_type: HookType, ctx: HookContext) -> list[HookResult]:
         results: list[HookResult] = []
         for hook in self.get(hook_type):
             try:

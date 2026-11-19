@@ -26,16 +26,17 @@ def _user(text: str) -> Message:
 
 
 def _assistant_with_tools(*ids: str) -> Message:
-    return Message(role=Role.assistant, content=[
-        ToolUseBlock(id=i, name="run_bash", input={}) for i in ids
-    ])
+    return Message(
+        role=Role.assistant, content=[ToolUseBlock(id=i, name="run_bash", input={}) for i in ids]
+    )
 
 
 def _results_msg(*pairs: tuple[str, str]) -> Message:
     """一条携带多个 tool_result 的 user 消息（mcc 的工具结果形态）。"""
-    return Message(role=Role.user, content=[
-        ToolResultBlock(tool_use_id=tid, content=content) for tid, content in pairs
-    ])
+    return Message(
+        role=Role.user,
+        content=[ToolResultBlock(tool_use_id=tid, content=content) for tid, content in pairs],
+    )
 
 
 def _pair(tid: str, result: str = "ok") -> list[Message]:
@@ -68,6 +69,7 @@ def _fake_summary(text: str = "SUMMARY-TEXT"):
     async def summarize(system: str, messages: list[Message]) -> str:
         assert "summarizer" in system.lower()
         return text
+
     return summarize
 
 
@@ -201,8 +203,7 @@ async def test_snip_never_breaks_tool_pairing(tmp_path: Path) -> None:
         for block in msg.content:
             if isinstance(block, ToolUseBlock):
                 seen_uses.add(block.id)
-            elif (isinstance(block, ToolResultBlock)
-                    and block.tool_use_id not in seen_uses):
+            elif isinstance(block, ToolResultBlock) and block.tool_use_id not in seen_uses:
                 orphan_results.add(block.tool_use_id)
     assert not orphan_results  # 每个 tool_result 都能找到配对调用
 
@@ -316,9 +317,7 @@ async def test_prepare_escalates_to_summary_when_over_limit(tmp_path: Path) -> N
         _assistant_with_tools("done"),
         _user("continue"),
     ]
-    compactor = _compactor(
-        tmp_path, summarize=_fake_summary(), char_limit=5_000
-    )
+    compactor = _compactor(tmp_path, summarize=_fake_summary(), char_limit=5_000)
 
     out, report = await compactor.prepare(messages, "heavy task")
 
@@ -427,10 +426,7 @@ def _make_agent_with_compactor(llm, ctx, registry, tmp_path: Path, *, char_limit
         char_limit=char_limit,
     )
     return (
-        AgentLoopBuilder(llm, registry, ctx)
-        .model("test-model")
-        .compactor(compactor)
-        .build()
+        AgentLoopBuilder(llm, registry, ctx).model("test-model").compactor(compactor).build()
     ), compactor
 
 
@@ -468,16 +464,18 @@ async def test_agent_loop_compacts_over_limit_conversation(ctx, registry, tmp_pa
         ]
 
     # 三轮各带 4k 文本（撑过 8k 阈值）+ 收尾轮
-    llm = _SummarizingLlm([
-        _tool_turn("A" * 4_000, "t1"),
-        _tool_turn("C" * 4_000, "t2"),
-        _tool_turn("D" * 4_000, "t3"),
-        [TextDelta(text="all done"), MessageStop(
-            stop_reason="end_turn", usage=Usage(input_tokens=5, output_tokens=5))],
-    ])
-    agent, _ = _make_agent_with_compactor(
-        llm, ctx, registry, tmp_path, char_limit=8_000
+    llm = _SummarizingLlm(
+        [
+            _tool_turn("A" * 4_000, "t1"),
+            _tool_turn("C" * 4_000, "t2"),
+            _tool_turn("D" * 4_000, "t3"),
+            [
+                TextDelta(text="all done"),
+                MessageStop(stop_reason="end_turn", usage=Usage(input_tokens=5, output_tokens=5)),
+            ],
+        ]
     )
+    agent, _ = _make_agent_with_compactor(llm, ctx, registry, tmp_path, char_limit=8_000)
     queue: asyncio.Queue = asyncio.Queue()
 
     run = await agent.run_streaming("start task", queue)
@@ -503,19 +501,22 @@ async def test_agent_loop_reactive_compact_on_rejection(ctx, registry, tmp_path)
         """首次 stream 抛 prompt_too_long（真实 API 拒绝形态），不消费轮次。"""
 
         def __init__(self) -> None:
-            super().__init__([
-                [TextDelta(text="recovered"), MessageStop(
-                    stop_reason="end_turn",
-                    usage=Usage(input_tokens=5, output_tokens=5))],
-            ])
+            super().__init__(
+                [
+                    [
+                        TextDelta(text="recovered"),
+                        MessageStop(
+                            stop_reason="end_turn", usage=Usage(input_tokens=5, output_tokens=5)
+                        ),
+                    ],
+                ]
+            )
             self.rejected = False
 
         async def stream(self, req):
             if not self.rejected:
                 self.rejected = True
-                raise RuntimeError(
-                    "Error: prompt_too_long: tokens: 200001 > 200000 maximum"
-                )
+                raise RuntimeError("Error: prompt_too_long: tokens: 200001 > 200000 maximum")
             async for ev in super().stream(req):
                 yield ev
 
@@ -527,9 +528,7 @@ async def test_agent_loop_reactive_compact_on_rejection(ctx, registry, tmp_path)
             )
 
     llm = _RejectingOnceLlm()
-    agent, _ = _make_agent_with_compactor(
-        llm, ctx, registry, tmp_path, char_limit=100_000
-    )
+    agent, _ = _make_agent_with_compactor(llm, ctx, registry, tmp_path, char_limit=100_000)
     queue: asyncio.Queue = asyncio.Queue()
 
     run = await agent.run_streaming("survive rejection", queue)
@@ -604,20 +603,21 @@ async def test_agent_loop_compacts_after_model_request(ctx, registry, tmp_path):
         return [
             TextDelta(text="phase done, compress now"),
             ToolUseStart(id=tid_write, name="run_bash"),
-            ToolUseInputDelta(
-                partial_json=_json.dumps({"command": "echo side-effect"})),
+            ToolUseInputDelta(partial_json=_json.dumps({"command": "echo side-effect"})),
             ToolUseStart(id=tid_compact, name="compact"),
             MessageStop(stop_reason="tool_use", usage=Usage()),
         ]
 
-    llm = _SummarizingLlm([
-        _compact_and_write_turn("w1", "c1"),
-        [TextDelta(text="final answer"), MessageStop(
-            stop_reason="end_turn", usage=Usage(input_tokens=5, output_tokens=5))],
-    ])
-    agent, _ = _make_agent_with_compactor(
-        llm, ctx, registry, tmp_path, char_limit=100_000
+    llm = _SummarizingLlm(
+        [
+            _compact_and_write_turn("w1", "c1"),
+            [
+                TextDelta(text="final answer"),
+                MessageStop(stop_reason="end_turn", usage=Usage(input_tokens=5, output_tokens=5)),
+            ],
+        ]
     )
+    agent, _ = _make_agent_with_compactor(llm, ctx, registry, tmp_path, char_limit=100_000)
     queue: asyncio.Queue = asyncio.Queue()
 
     run = await agent.run_streaming("multi-phase task", queue)

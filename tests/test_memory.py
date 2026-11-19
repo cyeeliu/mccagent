@@ -148,23 +148,23 @@ class TestMemoryPermission:
         checker = PermissionChecker(PermissionConfig(mode="default"))
 
         evq: asyncio.Queue = asyncio.Queue()
-        llm = MockLlm([
+        llm = MockLlm(
             [
-                ToolUseStart(id="m1", name="save_memory"),
-                ToolUseInputDelta(partial_json=(
-                    '{"name": "agent_saved", "type": "user", '
-                    '"description": "agent 记录", "body": "自动保存"}'
-                )),
-                MessageStop(stop_reason="tool_use"),
-            ],
-            single_text_turn("saved"),
-            single_text_turn("标题"),
-        ])
-        agent = (
-            AgentLoopBuilder(llm, registry, ctx)
-            .permission(checker)
-            .build()
+                [
+                    ToolUseStart(id="m1", name="save_memory"),
+                    ToolUseInputDelta(
+                        partial_json=(
+                            '{"name": "agent_saved", "type": "user", '
+                            '"description": "agent 记录", "body": "自动保存"}'
+                        )
+                    ),
+                    MessageStop(stop_reason="tool_use"),
+                ],
+                single_text_turn("saved"),
+                single_text_turn("标题"),
+            ]
         )
+        agent = AgentLoopBuilder(llm, registry, ctx).permission(checker).build()
         await agent.run_streaming("记住我的偏好", evq)
 
         events = []

@@ -95,13 +95,16 @@ def test_indicator_down_hidden_at_bottom():
 # -- 高度估算与实际一致 --
 
 
-@pytest.mark.parametrize("n", [
-    1,
-    _COMP_MAX_ROWS - 1,
-    _COMP_MAX_ROWS,
-    _COMP_MAX_ROWS + 1,
-    _COMP_MAX_ROWS + 5,
-])
+@pytest.mark.parametrize(
+    "n",
+    [
+        1,
+        _COMP_MAX_ROWS - 1,
+        _COMP_MAX_ROWS,
+        _COMP_MAX_ROWS + 1,
+        _COMP_MAX_ROWS + 5,
+    ],
+)
 def test_comp_rows_matches_actual(n):
     """comp_rows 估算与面板实际渲染总高度一致。"""
     app, _ = _make_comp_app(n)
@@ -117,12 +120,15 @@ def test_comp_rows_matches_actual(n):
 # -- 滚动同步 --
 
 
-@pytest.mark.parametrize("key,expected_index,expected_scroll", [
-    (Key.home, 0, 0),
-    (Key.end, 11, 5),
-    (Key.page_down, 7, 1),
-    (Key.page_up, 0, 0),
-])
+@pytest.mark.parametrize(
+    "key,expected_index,expected_scroll",
+    [
+        (Key.home, 0, 0),
+        (Key.end, 11, 5),
+        (Key.page_down, 7, 1),
+        (Key.page_up, 0, 0),
+    ],
+)
 def test_nav_keys(key, expected_index, expected_scroll):
     """Home/End/PageUp/PageDown 在补全浮层中正确定位并滚动。"""
     n = _COMP_MAX_ROWS + 5

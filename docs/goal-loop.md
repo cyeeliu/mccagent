@@ -77,7 +77,7 @@ evaluator 默认用 `summarize_model`（通常 haiku，省钱）。可通过 `go
 ```python
 @dataclass
 class GoalStatus:
-    action: str        # set/cleared/status/achieved/failed/block/limit/error
+    action: str  # set/cleared/status/achieved/failed/block/limit/error
     condition: str
     reason: str
     iterations: int

@@ -37,12 +37,14 @@ from .coordinator import RuntimeCoordinator
 
 logger = logging.getLogger(__name__)
 
-_TASK_DONE_EVENTS = frozenset({
-    RuntimeEventType.TASK_COMPLETED,
-    RuntimeEventType.TASK_FAILED,
-    RuntimeEventType.TASK_CANCELLED,
-    RuntimeEventType.TASK_TIMED_OUT,
-})
+_TASK_DONE_EVENTS = frozenset(
+    {
+        RuntimeEventType.TASK_COMPLETED,
+        RuntimeEventType.TASK_FAILED,
+        RuntimeEventType.TASK_CANCELLED,
+        RuntimeEventType.TASK_TIMED_OUT,
+    }
+)
 
 _ATTEMPT_STATUS_TO_EVENT: dict[AttemptStatus, RuntimeEventType] = {
     AttemptStatus.SUCCEEDED: RuntimeEventType.TASK_COMPLETED,
@@ -218,6 +220,7 @@ class TaskDispatcher:
         )
 
         try:
+
             async def _wait() -> RuntimeEvent:
                 async for event in event_iter:
                     if event.event_type in _TASK_DONE_EVENTS:
@@ -245,8 +248,7 @@ class TaskDispatcher:
         event_type = _ATTEMPT_STATUS_TO_EVENT.get(attempt.status)
         if event_type is None:
             raise DispatchError(
-                f"attempt {attempt.attempt_id} has non-terminal status "
-                f"{attempt.status}",
+                f"attempt {attempt.attempt_id} has non-terminal status {attempt.status}",
             )
         payload: dict[str, object] = {}
         if attempt.summary:
@@ -340,6 +342,7 @@ class TaskDispatcher:
         tasks: [(task_id, agent_id, runtime_id), ...]
         单个任务失败不阻止其他任务。
         """
+
         async def _safe_dispatch(
             task_id: str,
             agent_id: str,
@@ -351,10 +354,7 @@ class TaskDispatcher:
                 return exc
 
         return await asyncio.gather(
-            *(
-                _safe_dispatch(tid, aid, rid)
-                for tid, aid, rid in tasks
-            ),
+            *(_safe_dispatch(tid, aid, rid) for tid, aid, rid in tasks),
         )
 
 

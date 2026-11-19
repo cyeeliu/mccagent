@@ -154,7 +154,8 @@ class TaskRuntime:
             if self._task_store is not None:
                 with contextlib.suppress(Exception):
                     await self._task_store.fail_attempt(
-                        task.attempt_id, error="cancelled",
+                        task.attempt_id,
+                        error="cancelled",
                     )
             await self._emit(
                 RuntimeEventType.TASK_CANCELLED,
@@ -165,7 +166,8 @@ class TaskRuntime:
             if self._task_store is not None:
                 with contextlib.suppress(Exception):
                     await self._task_store.fail_attempt(
-                        task.attempt_id, error=str(exc),
+                        task.attempt_id,
+                        error=str(exc),
                     )
             await self._emit(
                 RuntimeEventType.TASK_FAILED,
@@ -192,7 +194,8 @@ class TaskRuntime:
         else:
             error_msg = str(result.error) if result.error else (result.summary or "failed")
             await self._task_store.fail_attempt(
-                task.attempt_id, error=error_msg,
+                task.attempt_id,
+                error=error_msg,
             )
 
     async def cancel_task(

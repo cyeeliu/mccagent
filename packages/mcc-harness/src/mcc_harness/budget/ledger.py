@@ -141,18 +141,12 @@ class AgentBudget:
 
         with self._lock:
             total_reserved_tokens = sum(
-                r.reserved_tokens
-                for r in self._reservations.values()
-                if not r.released
+                r.reserved_tokens for r in self._reservations.values() if not r.released
             )
             total_reserved_cost = sum(
-                r.reserved_cost_usd
-                for r in self._reservations.values()
-                if not r.released
+                r.reserved_cost_usd for r in self._reservations.values() if not r.released
             )
-            active = sum(
-                1 for r in self._reservations.values() if not r.released
-            )
+            active = sum(1 for r in self._reservations.values() if not r.released)
 
             if (
                 self._policy.max_tokens is not None
@@ -205,10 +199,7 @@ class AgentBudget:
             new_iterations = self._consumed_iterations + event.iterations
 
             errors: list[BudgetExceededError] = []
-            if (
-                self._policy.max_tokens is not None
-                and new_tokens > self._policy.max_tokens
-            ):
+            if self._policy.max_tokens is not None and new_tokens > self._policy.max_tokens:
                 errors.append(
                     BudgetExceededError(
                         BudgetDimension.TOKENS,
@@ -217,10 +208,7 @@ class AgentBudget:
                         event.agent_id,
                     )
                 )
-            if (
-                self._policy.max_cost_usd is not None
-                and new_cost > self._policy.max_cost_usd
-            ):
+            if self._policy.max_cost_usd is not None and new_cost > self._policy.max_cost_usd:
                 errors.append(
                     BudgetExceededError(
                         BudgetDimension.COST_USD,
@@ -340,18 +328,12 @@ class AgentBudget:
     def snapshot(self) -> BudgetSnapshot:
         """获取当前预算快照（不可变视图）。"""
         with self._lock:
-            active = sum(
-                1 for r in self._reservations.values() if not r.released
-            )
+            active = sum(1 for r in self._reservations.values() if not r.released)
             reserved_tokens = sum(
-                r.reserved_tokens
-                for r in self._reservations.values()
-                if not r.released
+                r.reserved_tokens for r in self._reservations.values() if not r.released
             )
             reserved_cost = sum(
-                r.reserved_cost_usd
-                for r in self._reservations.values()
-                if not r.released
+                r.reserved_cost_usd for r in self._reservations.values() if not r.released
             )
             return BudgetSnapshot(
                 policy=self._policy,

@@ -22,9 +22,7 @@ class CompletionItem:
 CompletionProvider = Callable[[str], list[CompletionItem]]
 
 
-def filter_completions(
-    items: list[CompletionItem], text: str
-) -> list[CompletionItem]:
+def filter_completions(items: list[CompletionItem], text: str) -> list[CompletionItem]:
     """前缀过滤：输入以 / 开头且无空格时返回匹配候选。
 
     - 非 / 开头或已含空格（命令参数输入中）→ 关闭浮层
@@ -43,8 +41,7 @@ def make_provider(
     """把 slash 命令表与 skill（name, description）合成为补全 provider。"""
 
     items = [
-        CompletionItem(insert=f"/{name}", label=f"/{name}", hint=desc)
-        for name, desc in commands
+        CompletionItem(insert=f"/{name}", label=f"/{name}", hint=desc) for name, desc in commands
     ] + [
         CompletionItem(insert=f"/{name}", label=f"/{name}", hint=desc or "skill")
         for name, desc in (skill_items or [])

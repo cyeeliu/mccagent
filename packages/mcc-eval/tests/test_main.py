@@ -81,8 +81,9 @@ def test_run_unknown_dataset_exits() -> None:
 def test_run_multiple_samples_flaky_detection(tmp_path: Path, capsys) -> None:
     """--runs-per-case 2：每 case 两份轨迹，demo-fail 两次都挂（稳定失败）。"""
     out = tmp_path / "runs"
-    rc = main(["run", "--cases", str(EXAMPLES), "--mock", "--out", str(out),
-               "--runs-per-case", "2"])
+    rc = main(
+        ["run", "--cases", str(EXAMPLES), "--mock", "--out", str(out), "--runs-per-case", "2"]
+    )
     assert rc == 0
 
     batch_dir = next(out.iterdir())
@@ -94,7 +95,7 @@ def test_run_multiple_samples_flaky_detection(tmp_path: Path, capsys) -> None:
     assert data["summary"]["total"] == 4
     assert data["summary"]["cases"] == 2
     assert data["summary"]["stable_cases"] == 1  # demo-pass 两次全过
-    assert data["summary"]["flaky_cases"] == 0   # demo-fail 两次全挂，非 flaky
+    assert data["summary"]["flaky_cases"] == 0  # demo-fail 两次全挂，非 flaky
     attempts = {r["attempt"] for r in data["results"] if r["case_id"] == "demo-pass"}
     assert attempts == {1, 2}
 
@@ -115,17 +116,16 @@ def test_positive_int_accepts(good: str) -> None:
     assert _positive_int(good) == int(good)
 
 
-def test_distill_subcommand_creates_drafts(tmp_path: Path, capsys,
-                                            monkeypatch) -> None:
+def test_distill_subcommand_creates_drafts(tmp_path: Path, capsys, monkeypatch) -> None:
     """distill：失败会话回流为草稿，幂等（二跑不覆盖）。"""
-    sessions = _make_session(tmp_path, sid="abc12345", status="errored",
-                             task="修复 config 解析崩溃")
+    sessions = _make_session(
+        tmp_path, sid="abc12345", status="errored", task="修复 config 解析崩溃"
+    )
     _make_session(tmp_path, sid="good0001", status="ended", task="正常会话")
 
     out = tmp_path / "cases"
     monkeypatch.chdir(tmp_path)
-    rc = main(["distill", "--sessions-dir", str(sessions),
-               "--out", str(out)])
+    rc = main(["distill", "--sessions-dir", str(sessions), "--out", str(out)])
     assert rc == 0
 
     draft = out / "distill-abc12345.json"
@@ -150,16 +150,26 @@ def _make_session(base: Path, *, sid: str, status: str, task: str) -> Path:
     """构造一个 mcc 会话目录（meta + JSONL 流水）。"""
     day = base / "sessions" / "2026-10-20"
     day.mkdir(parents=True, exist_ok=True)
-    meta = {"id": sid, "started_at": "2026-10-20T10:00:00+00:00",
-            "cwd": "/tmp", "turns": 1, "cost_usd": 0.01, "status": status}
+    meta = {
+        "id": sid,
+        "started_at": "2026-10-20T10:00:00+00:00",
+        "cwd": "/tmp",
+        "turns": 1,
+        "cost_usd": 0.01,
+        "status": status,
+    }
     (day / f"{sid}.meta.json").write_text(json.dumps(meta), encoding="utf-8")
     snapshot = {
-        "ts": "2026-10-20T10:00:01+00:00", "iteration": 1,
+        "ts": "2026-10-20T10:00:01+00:00",
+        "iteration": 1,
         "request_messages": [
             {"role": "user", "content": [{"type": "text", "text": task}]},
         ],
-        "assistant_blocks": [], "tool_outputs": [],
-        "usage": {}, "model": "m", "cost_usd": 0.01,
+        "assistant_blocks": [],
+        "tool_outputs": [],
+        "usage": {},
+        "model": "m",
+        "cost_usd": 0.01,
     }
     (day / f"{sid}.jsonl").write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
     return base / "sessions"

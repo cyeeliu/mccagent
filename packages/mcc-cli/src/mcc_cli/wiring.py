@@ -30,8 +30,7 @@ def _system_prompt() -> str:
         "Use edit_file for targeted modifications. "
         "Use run_bash for shell tasks. "
         "Use grep to search code. "
-        "Be concise and precise.\n\n"
-        + SECURITY_SYSTEM_CLAUSE
+        "Be concise and precise.\n\n" + SECURITY_SYSTEM_CLAUSE
     )
 
 
@@ -43,9 +42,7 @@ def _build_hooks(config, work_dir: Path):
     """
     from mcc_harness import HookRegistry, HookType
 
-    entries = [
-        (HookType.PRE_TOOL, e) for e in config.hooks.pre_tool_use
-    ] + [
+    entries = [(HookType.PRE_TOOL, e) for e in config.hooks.pre_tool_use] + [
         (HookType.POST_TOOL, e) for e in config.hooks.post_tool_use
     ]
     if not entries:
@@ -273,10 +270,7 @@ def _wire_prompt_system(config, work_dir: Path, registry, no_skills: bool):
             work_dir / "skills",
         )
         if skills:
-            skill_items = [
-                (sk.manifest.name, sk.manifest.description)
-                for sk in skills.values()
-            ]
+            skill_items = [(sk.manifest.name, sk.manifest.description) for sk in skills.values()]
             catalog = SkillRouter(skills).catalog_for_prompt()
             if catalog:
                 system = f"{system}\n\n{catalog}"
@@ -294,7 +288,13 @@ def _wire_prompt_system(config, work_dir: Path, registry, no_skills: bool):
 
 
 def _wire_subagent_workflow(
-    config, work_dir: Path, llm, registry, hooks, subagent_model: str, summarize_model: str,
+    config,
+    work_dir: Path,
+    llm,
+    registry,
+    hooks,
+    subagent_model: str,
+    summarize_model: str,
     coordinator=None,
 ) -> tuple[Any, Any]:
     """SubagentRunner + Workflow 运行时（可信代码编排多步调用）。"""
@@ -311,7 +311,8 @@ def _wire_subagent_workflow(
     )
     registry.register(
         SpawnSubagentTool(
-            runner, default_presets(subagent_model, summarize_model),
+            runner,
+            default_presets(subagent_model, summarize_model),
             coordinator=coordinator,
         )
     )
@@ -334,7 +335,14 @@ def _wire_subagent_workflow(
 
 
 def _wire_team(
-    config, work_dir: Path, llm, registry, task_store, hooks, checker, subagent_model: str,
+    config,
+    work_dir: Path,
+    llm,
+    registry,
+    task_store,
+    hooks,
+    checker,
+    subagent_model: str,
     coordinator=None,
 ):
     """多 Agent 团队：长驻 teammate 协作。"""
@@ -410,8 +418,7 @@ _REVIEW_FINDINGS_SCHEMA = {
                 "required": ["title", "severity"],
                 "properties": {
                     "title": {"type": "string"},
-                    "severity": {"type": "string",
-                                 "enum": ["high", "medium", "low"]},
+                    "severity": {"type": "string", "enum": ["high", "medium", "low"]},
                 },
             },
         }
@@ -448,29 +455,29 @@ async def _review_changes_workflow(ctx, args):
 
     async def verify(audited, dimension, _idx):
         ctx.phase("Verify")
-        verdicts = await ctx.parallel([
-            (lambda f=f: ctx.agent(
-                f"Adversarially verify this {dimension} finding against the "
-                f"supplied change context.\n\nChange context:\n{review_input}"
-                f"\n\nFinding:\n{json.dumps(f, ensure_ascii=False)}",
-                schema=_REVIEW_VERDICT_SCHEMA,
-                label=f"verify:{dimension}:{f['title']}",
-                phase="Verify",
-            ))
-            for f in audited["findings"]
-        ])
-        confirmed = [f for f, v in zip(audited["findings"], verdicts, strict=True)
-                     if v and v.get("isReal")]
+        verdicts = await ctx.parallel(
+            [
+                (
+                    lambda f=f: ctx.agent(
+                        f"Adversarially verify this {dimension} finding against the "
+                        f"supplied change context.\n\nChange context:\n{review_input}"
+                        f"\n\nFinding:\n{json.dumps(f, ensure_ascii=False)}",
+                        schema=_REVIEW_VERDICT_SCHEMA,
+                        label=f"verify:{dimension}:{f['title']}",
+                        phase="Verify",
+                    )
+                )
+                for f in audited["findings"]
+            ]
+        )
+        confirmed = [
+            f for f, v in zip(audited["findings"], verdicts, strict=True) if v and v.get("isReal")
+        ]
         return {"dimension": dimension, "confirmed": confirmed}
 
     results = await ctx.pipeline(dimensions, audit, verify)
-    confirmed = [
-        {"dimension": r["dimension"], **f}
-        for r in results if r for f in r["confirmed"]
-    ]
-    confirmed.sort(
-        key=lambda f: {"high": 0, "medium": 1, "low": 2}.get(f["severity"], 3)
-    )
+    confirmed = [{"dimension": r["dimension"], **f} for r in results if r for f in r["confirmed"]]
+    confirmed.sort(key=lambda f: {"high": 0, "medium": 1, "low": 2}.get(f["severity"], 3))
     ctx.log(f"confirmed {len(confirmed)} real finding(s)")
     return {"confirmed": confirmed}
 
@@ -506,9 +513,7 @@ def _wire_observability(config, work_dir: Path, sid: str, builder):
     log_dir = work_dir / ".mcc" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(log_dir / "mcc.log.jsonl", encoding="utf-8")
-    handler.setFormatter(
-        JsonFormatter(text=config.observability.log_format == "text")
-    )
+    handler.setFormatter(JsonFormatter(text=config.observability.log_format == "text"))
     logger = logging.getLogger("mcc")
     logger.setLevel(config.observability.log_level.upper())
     if not any(isinstance(h, logging.FileHandler) for h in logger.handlers):
@@ -556,42 +561,48 @@ def _assemble_builder(
         # 转存目录在会话工作目录内，随产物自包含
         from mcc_harness import ContextCompactor
 
-        builder = builder.compactor(ContextCompactor(
-            persist_dir=work_dir / ".task_outputs" / "tool-results",
-            char_limit=config.context.char_limit,
-        ))
+        builder = builder.compactor(
+            ContextCompactor(
+                persist_dir=work_dir / ".task_outputs" / "tool-results",
+                char_limit=config.context.char_limit,
+            )
+        )
 
     builder = builder.model(resolve_model("main", model, config=config))
     builder = builder.summarize_model(summarize_model)
 
-    checker = PermissionChecker(
-        config.permissions, hardened=config.security.hardened
-    )
+    checker = PermissionChecker(config.permissions, hardened=config.security.hardened)
     builder = builder.permission(checker)
 
     # 安全纵深：L3 hardened 由 checker 承载；L2/L5 注入 AgentLoop
     from mcc_harness import SecurityPolicy
 
-    builder = builder.security(SecurityPolicy(
-        hardened=config.security.hardened,
-        redact_output=config.security.redact_output,
-        untrusted_wrap=config.security.untrusted_wrap,
-    ))
+    builder = builder.security(
+        SecurityPolicy(
+            hardened=config.security.hardened,
+            redact_output=config.security.redact_output,
+            untrusted_wrap=config.security.untrusted_wrap,
+        )
+    )
 
     # 可靠性：重试退避始终生效；熔断/turn 超时按配置启用
     from mcc_harness import CircuitBreaker, RetryPolicy
 
-    builder = builder.retry_policy(RetryPolicy(
-        max_attempts=config.reliability.max_attempts,
-        base_delay=config.reliability.base_delay,
-        max_delay=config.reliability.max_delay,
-        jitter=config.reliability.jitter,
-    ))
+    builder = builder.retry_policy(
+        RetryPolicy(
+            max_attempts=config.reliability.max_attempts,
+            base_delay=config.reliability.base_delay,
+            max_delay=config.reliability.max_delay,
+            jitter=config.reliability.jitter,
+        )
+    )
     if config.reliability.circuit_failure_threshold > 0:
-        builder = builder.circuit_breaker(CircuitBreaker(
-            failure_threshold=config.reliability.circuit_failure_threshold,
-            reset_timeout=config.reliability.circuit_reset_timeout,
-        ))
+        builder = builder.circuit_breaker(
+            CircuitBreaker(
+                failure_threshold=config.reliability.circuit_failure_threshold,
+                reset_timeout=config.reliability.circuit_reset_timeout,
+            )
+        )
     if config.reliability.turn_timeout_secs > 0:
         builder = builder.turn_timeout(config.reliability.turn_timeout_secs)
 
@@ -601,10 +612,12 @@ def _assemble_builder(
     builder = builder.max_cost_per_turn(config.budget.max_usd_per_turn)
 
     if config.thinking.enabled:
-        builder = builder.thinking({
-            "type": "enabled",
-            "budget_tokens": config.thinking.budget_tokens,
-        })
+        builder = builder.thinking(
+            {
+                "type": "enabled",
+                "budget_tokens": config.thinking.budget_tokens,
+            }
+        )
 
     if history:
         builder = builder.history(history)
@@ -683,23 +696,46 @@ def build_source(
 
     coordinator = RuntimeCoordinator()
     _runner, workflow_tool = _wire_subagent_workflow(
-        config, work_dir, llm, registry, hook_registry,
-        subagent_model, summarize_model,
+        config,
+        work_dir,
+        llm,
+        registry,
+        hook_registry,
+        subagent_model,
+        summarize_model,
         coordinator=coordinator,
     )
 
     recorder = SessionRecorder.open_sync(sid, work_dir)
     builder, checker, goal_controller = _assemble_builder(
-        config, llm, registry, ctx, work_dir, system, recorder,
-        model=model, no_compact=no_compact, history=history,
-        hooks=hook_registry, todo_manager=todo_manager, task_store=task_store,
-        background_manager=background_manager, cron_scheduler=cron_scheduler,
-        subagent_model=subagent_model, summarize_model=summarize_model,
+        config,
+        llm,
+        registry,
+        ctx,
+        work_dir,
+        system,
+        recorder,
+        model=model,
+        no_compact=no_compact,
+        history=history,
+        hooks=hook_registry,
+        todo_manager=todo_manager,
+        task_store=task_store,
+        background_manager=background_manager,
+        cron_scheduler=cron_scheduler,
+        subagent_model=subagent_model,
+        summarize_model=summarize_model,
     )
 
     team_manager, orchestrator = _wire_team(
-        config, work_dir, llm, registry, task_store, hook_registry,
-        checker, subagent_model,
+        config,
+        work_dir,
+        llm,
+        registry,
+        task_store,
+        hook_registry,
+        checker,
+        subagent_model,
         coordinator=coordinator,
     )
 
@@ -711,7 +747,9 @@ def build_source(
 
     agent_factory = DefaultAgentFactory()
     runtime = agent_factory.build_interactive_runtime_v2(
-        builder, session_id=sid, agent_id="main",
+        builder,
+        session_id=sid,
+        agent_id="main",
     )
     agent = runtime.agent
     coordinator.register(runtime)

@@ -70,9 +70,7 @@ def is_path_sensitive(path: str) -> bool:
         if normalized.startswith("./"):
             normalized = normalized[2:]
         normalized = "/" + normalized
-    return any(
-        fnmatch.fnmatch(normalized, glob) for glob in HARDENED_PATH_GLOBS
-    )
+    return any(fnmatch.fnmatch(normalized, glob) for glob in HARDENED_PATH_GLOBS)
 
 
 # -- L2 untrusted 标签 --
@@ -84,11 +82,7 @@ def wrap_untrusted(source: str, content: str) -> str:
     nonce 防止内容伪造闭合标签。
     """
     nonce = secrets.token_hex(4)
-    return (
-        f'<untrusted source="{source}" id="{nonce}">\n'
-        f"{content}\n"
-        f'</untrusted id="{nonce}">'
-    )
+    return f'<untrusted source="{source}" id="{nonce}">\n{content}\n</untrusted id="{nonce}">'
 
 
 # -- L5 工具输出扫描 --

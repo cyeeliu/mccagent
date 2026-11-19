@@ -287,9 +287,7 @@ def _ctx(tmp_path: Path) -> ToolContext:
 class TestCancelPreservesHistory:
     """cancel 后 agent.history 应保留被中断轮的上下文。"""
 
-    async def test_cancel_during_tool_execution_finalizes_history(
-        self, _ctx: ToolContext
-    ):
+    async def test_cancel_during_tool_execution_finalizes_history(self, _ctx: ToolContext):
         """工具执行中途 cancel：history 含 user + assistant(tool_use) + tool(interrupted)。"""
         started = asyncio.Event()
         registry = ToolRegistry()
@@ -310,32 +308,28 @@ class TestCancelPreservesHistory:
 
         assert agent.history[0].content[0].text == "do something"
 
-        tool_uses = [
-            b for b in agent.history[1].content if isinstance(b, ToolUseBlock)
-        ]
+        tool_uses = [b for b in agent.history[1].content if isinstance(b, ToolUseBlock)]
         assert len(tool_uses) == 1
         assert tool_uses[0].id == "t1"
 
-        tool_results = [
-            b for b in agent.history[2].content if isinstance(b, ToolResultBlock)
-        ]
+        tool_results = [b for b in agent.history[2].content if isinstance(b, ToolResultBlock)]
         assert len(tool_results) == 1
         assert tool_results[0].tool_use_id == "t1"
         assert tool_results[0].is_error is True
         assert "interrupted" in tool_results[0].content
 
-    async def test_cancel_during_tool_then_next_turn_works(
-        self, _ctx: ToolContext
-    ):
+    async def test_cancel_during_tool_then_next_turn_works(self, _ctx: ToolContext):
         """中断后下一轮能正常调用 LLM（消息序列合法）。"""
         started = asyncio.Event()
         registry = ToolRegistry()
         registry.register(_HangingTool(started))
 
-        llm = MockLlm([
-            _tool_use_turn("t1", "hang_forever", {}),
-            single_text_turn("recovered after interrupt"),
-        ])
+        llm = MockLlm(
+            [
+                _tool_use_turn("t1", "hang_forever", {}),
+                single_text_turn("recovered after interrupt"),
+            ]
+        )
         agent = AgentLoopBuilder(llm, registry, _ctx).build()
 
         evq: asyncio.Queue = asyncio.Queue()
@@ -353,15 +347,11 @@ class TestCancelPreservesHistory:
 
         from mcc_core import TextDelta
 
-        text_parts = [
-            e.text for e in captured if isinstance(e, TextDelta)
-        ]
+        text_parts = [e.text for e in captured if isinstance(e, TextDelta)]
         assert "".join(text_parts) != ""
         assert any(isinstance(e, TurnEnd) for e in captured)
 
-    async def test_cancel_during_llm_stream_preserves_user_message(
-        self, _ctx: ToolContext
-    ):
+    async def test_cancel_during_llm_stream_preserves_user_message(self, _ctx: ToolContext):
         """LLM 流式输出中途 cancel：history 至少保留 user 消息。"""
 
         class _BlockingLlm:

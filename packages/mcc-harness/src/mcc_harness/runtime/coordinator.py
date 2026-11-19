@@ -320,16 +320,11 @@ class RuntimeCoordinator:
             for rid, rt in list(self._runtimes.items()):
                 if not rt.capabilities.supports_health_check:
                     continue
-                mstate = self._monitor_states.setdefault(
-                    rid, RuntimeMonitorState()
-                )
+                mstate = self._monitor_states.setdefault(rid, RuntimeMonitorState())
                 mstate.last_check_at = time.monotonic()
                 try:
                     health = await rt.health_check()
-                    is_unhealthy = (
-                        hasattr(health, "state")
-                        and str(health.state) == "unhealthy"
-                    )
+                    is_unhealthy = hasattr(health, "state") and str(health.state) == "unhealthy"
                     if is_unhealthy:
                         if not mstate.failure_reported:
                             mstate.failure_reported = True
@@ -431,10 +426,7 @@ class RuntimeCoordinator:
                 timeout=timeout,
             )
         except TimeoutError:
-            results = [
-                await self._safe_stop_no_wait(rt, prt)
-                for rt in sorted_runtimes
-            ]
+            results = [await self._safe_stop_no_wait(rt, prt) for rt in sorted_runtimes]
 
         report = ShutdownReport()
         for rt, (status, err) in zip(sorted_runtimes, results, strict=True):

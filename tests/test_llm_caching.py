@@ -26,12 +26,14 @@ def _req(system) -> CompleteRequest:
 
 def test_anthropic_system_blocks_preserve_cache_control() -> None:
     client = AnthropicClient(api_key="sk-test")
-    req = _req([
-        TextBlock(
-            text="You are helpful.",
-            cache_control=CacheControl(kind="ephemeral"),
-        ),
-    ])
+    req = _req(
+        [
+            TextBlock(
+                text="You are helpful.",
+                cache_control=CacheControl(kind="ephemeral"),
+            ),
+        ]
+    )
     body = client._build_body(req, stream=False)
     assert body["system"] == [
         {
@@ -44,13 +46,15 @@ def test_anthropic_system_blocks_preserve_cache_control() -> None:
 
 def test_anthropic_system_blocks_multiple() -> None:
     client = AnthropicClient(api_key="sk-test")
-    req = _req([
-        TextBlock(text="base prompt"),
-        TextBlock(
-            text="cached tail",
-            cache_control=CacheControl(kind="ephemeral"),
-        ),
-    ])
+    req = _req(
+        [
+            TextBlock(text="base prompt"),
+            TextBlock(
+                text="cached tail",
+                cache_control=CacheControl(kind="ephemeral"),
+            ),
+        ]
+    )
     body = client._build_body(req, stream=False)
     assert len(body["system"]) == 2
     assert body["system"][0] == {"type": "text", "text": "base prompt"}
@@ -68,13 +72,15 @@ def test_anthropic_system_str_still_works() -> None:
 
 def test_openai_system_blocks_strip_cache_control() -> None:
     client = OpenAiClient(api_key="sk-test")
-    req = _req([
-        TextBlock(
-            text="Part 1",
-            cache_control=CacheControl(kind="ephemeral"),
-        ),
-        TextBlock(text="Part 2"),
-    ])
+    req = _req(
+        [
+            TextBlock(
+                text="Part 1",
+                cache_control=CacheControl(kind="ephemeral"),
+            ),
+            TextBlock(text="Part 2"),
+        ]
+    )
     body = client._build_body(req, stream=False)
     assert body["messages"][0] == {
         "role": "system",

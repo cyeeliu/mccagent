@@ -13,6 +13,7 @@ from rich.text import Text
 
 # ────────────────────────────── fixtures ──────────────────────────────
 
+
 @pytest.fixture(
     params=[
         "Hello World",
@@ -32,6 +33,7 @@ def term_width(request: pytest.FixtureRequest) -> int:
 
 
 # ────────────────────────────── width ──────────────────────────────
+
 
 class TestWidth:
     def test_ascii(self) -> None:
@@ -68,6 +70,7 @@ class TestWidth:
 
 # ────────────────────────────── truncate ──────────────────────────────
 
+
 class TestTruncate:
     def test_short_no_truncate(self) -> None:
         assert _truncate("Hello", 80) == "Hello"
@@ -96,14 +99,13 @@ class TestTruncate:
         result = _truncate("Hello", 1)
         assert metrics.width(result) <= 1
 
-    def test_truncate_preserves_width_limit(
-        self, sample_text: str, term_width: int
-    ) -> None:
+    def test_truncate_preserves_width_limit(self, sample_text: str, term_width: int) -> None:
         result = _truncate(sample_text, term_width)
         assert metrics.width(result) <= term_width
 
 
 # ────────────────────────────── wrap ──────────────────────────────
+
 
 class TestWrap:
     def test_short_no_wrap(self) -> None:
@@ -128,21 +130,18 @@ class TestWrap:
     def test_empty(self) -> None:
         assert metrics.wrap("", 80) == [""]
 
-    def test_wrap_preserves_content(
-        self, sample_text: str, term_width: int
-    ) -> None:
+    def test_wrap_preserves_content(self, sample_text: str, term_width: int) -> None:
         result = metrics.wrap(sample_text, term_width)
         assert "".join(result) == sample_text
 
-    def test_wrap_respects_width_limit(
-        self, sample_text: str, term_width: int
-    ) -> None:
+    def test_wrap_respects_width_limit(self, sample_text: str, term_width: int) -> None:
         result = metrics.wrap(sample_text, term_width)
         for line in result:
             assert metrics.width(line) <= term_width
 
 
 # ────────────────────────────── wrap_offsets ──────────────────────────────
+
 
 class TestWrapOffsets:
     def test_short2short_offsets(self) -> None:
@@ -170,6 +169,7 @@ class TestWrapOffsets:
 
 
 # ────────────────────────────── render integration ──────────────────────────────
+
 
 class TestRenderWidthIntegration:
     def test_truncate_uses_display_width(self) -> None:
@@ -211,9 +211,7 @@ class TestRenderWidthIntegration:
         for line in result:
             assert any(span.style == "bold red" for span in line.spans)
 
-    def test_no_overflow_mixed(
-        self, sample_text: str, term_width: int
-    ) -> None:
+    def test_no_overflow_mixed(self, sample_text: str, term_width: int) -> None:
         text = Text(sample_text)
         result = _split_lines(text, term_width)
         for line in result:

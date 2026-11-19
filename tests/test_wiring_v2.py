@@ -15,7 +15,9 @@ class TestBuildSourceV2:
     """build_source 始终使用 V2 Runtime。"""
 
     def test_creates_interactive_runtime_v2(
-        self, tmp_path: Path, monkeypatch,
+        self,
+        tmp_path: Path,
+        monkeypatch,
     ) -> None:
         from mcc_cli import _build_source
         from mcc_harness.runtime.interactive import InteractiveRuntimeV2
@@ -25,7 +27,9 @@ class TestBuildSourceV2:
         assert isinstance(source.runtime, InteractiveRuntimeV2)
 
     def test_v2_runtime_registered_in_coordinator(
-        self, tmp_path: Path, monkeypatch,
+        self,
+        tmp_path: Path,
+        monkeypatch,
     ) -> None:
         from mcc_cli import _build_source
 
@@ -35,7 +39,9 @@ class TestBuildSourceV2:
         assert any(r.runtime_id == source.runtime.runtime_id for r in registered)
 
     def test_v2_runtime_has_agent(
-        self, tmp_path: Path, monkeypatch,
+        self,
+        tmp_path: Path,
+        monkeypatch,
     ) -> None:
         from mcc_cli import _build_source
 

@@ -64,9 +64,7 @@ class TodoManager:
     def render(self) -> str:
         if not self.items:
             return "No todos."
-        lines = [
-            f"{_MARKERS[t.status]} {t.content}" for t in self.items
-        ]
+        lines = [f"{_MARKERS[t.status]} {t.content}" for t in self.items]
         done = sum(t.status == "completed" for t in self.items)
         lines.append(f"\n({done}/{len(self.items)} completed)")
         return "\n".join(lines)
@@ -117,9 +115,7 @@ class TodoWriteTool:
             },
         }
 
-    async def execute(
-        self, input: dict[str, Any], ctx: ToolContext
-    ) -> ToolOutput:
+    async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         todos = input.get("todos")
         try:
             output = self._manager.update(todos)

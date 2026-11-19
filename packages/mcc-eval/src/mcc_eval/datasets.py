@@ -104,9 +104,7 @@ class Case:
         if not isinstance(setup_raw, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in setup_raw.items()
         ):
-            raise ValueError(
-                "case setup must be a {relative_path: content} mapping of strings"
-            )
+            raise ValueError("case setup must be a {relative_path: content} mapping of strings")
         return cls(
             case_id=case_id,
             task=task,
@@ -264,9 +262,7 @@ def _retryable(exc: Exception) -> bool:
     return False
 
 
-def _get_with_retry(
-    client: httpx.Client, params: dict[str, Any], *, what: str
-) -> httpx.Response:
+def _get_with_retry(client: httpx.Client, params: dict[str, Any], *, what: str) -> httpx.Response:
     """单次 rows API 请求：指数退避重试瞬时故障。
 
     重试耗尽把原始异常包进 RuntimeError（附已尝试的请求与次数），
@@ -291,9 +287,7 @@ def _get_with_retry(
                     file=sys.stderr,
                 )
                 time.sleep(delay)
-    raise RuntimeError(
-        f"拉取 {what} 失败（已重试 {FETCH_ATTEMPTS} 次）：{last_exc}"
-    ) from last_exc
+    raise RuntimeError(f"拉取 {what} 失败（已重试 {FETCH_ATTEMPTS} 次）：{last_exc}") from last_exc
 
 
 def fetch_rows(spec: DatasetSpec, limit: int = 0, client: httpx.Client | None = None) -> list[dict]:

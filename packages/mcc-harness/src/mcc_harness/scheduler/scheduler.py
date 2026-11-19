@@ -127,9 +127,7 @@ class TaskSchedulerImpl:
                 task_spec=candidate.spec,
             )
             assignments.append(assignment)
-            self._agent_loads[agent.agent_id] = (
-                self._agent_loads.get(agent.agent_id, 0) + 1
-            )
+            self._agent_loads[agent.agent_id] = self._agent_loads.get(agent.agent_id, 0) + 1
             assigned_count += 1
 
             if self._claim_callback is not None:
@@ -155,6 +153,7 @@ class TaskSchedulerImpl:
         retry = self._policy.retry_policy
         if not retry.should_retry(attempt):
             from .base import RetryExhaustedError
+
             raise RetryExhaustedError(
                 f"task {task_id} exhausted {retry.max_retries} retries",
             )
@@ -213,7 +212,8 @@ class TaskSchedulerImpl:
         """为任务选择最佳 Agent：能力匹配 → 排除 → 负载最低。"""
         capable = self._find_capable_agents(spec, registry)
         available = [
-            agent for agent in capable
+            agent
+            for agent in capable
             if agent.agent_id not in exclude_agents and agent.has_capacity
         ]
         if not available:
@@ -234,9 +234,7 @@ class TaskSchedulerImpl:
             registrations = registry.list(
                 status=RegistrationStatus.AVAILABLE,
             )
-        return [
-            self._to_candidate(reg) for reg in registrations
-        ]
+        return [self._to_candidate(reg) for reg in registrations]
 
     def _to_candidate(self, reg: AgentRegistration) -> AgentCandidate:
         """将 AgentRegistration 转为 AgentCandidate，附加负载信息。"""
@@ -284,6 +282,7 @@ class RetryHandler:
         delay = self._policy.delay_for(attempt)
         if not self._policy.should_retry(attempt):
             from .base import RetryExhaustedError
+
             raise RetryExhaustedError(
                 f"task {task_id} exhausted {self._policy.max_retries} retries",
             )
@@ -378,7 +377,4 @@ class LeaseManager:
 
     def active_leases(self) -> dict[str, str]:
         """返回当前活跃租约的 {task_id: agent_id} 映射。"""
-        return {
-            tid: agent_id
-            for tid, (agent_id, _) in self._leases.items()
-        }
+        return {tid: agent_id for tid, (agent_id, _) in self._leases.items()}

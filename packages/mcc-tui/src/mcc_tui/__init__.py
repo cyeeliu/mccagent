@@ -221,16 +221,12 @@ def _send_input(app: App, handles: TuiHandles) -> bool:
     return False
 
 
-def _send_decision(
-    app: App, handles: TuiHandles, action: str, feedback: str = ""
-) -> None:
+def _send_decision(app: App, handles: TuiHandles, action: str, feedback: str = "") -> None:
     """向 agent 回传当前权限请求的决策，并弹出下一个排队请求。"""
     req = app.resolve_permission()
     if req is not None and handles.permission_tx is not None:
         handles.permission_tx.put_nowait(
-            PermissionDecision(
-                request_id=req.id, action=action, feedback=feedback
-            )
+            PermissionDecision(request_id=req.id, action=action, feedback=feedback)
         )
     app.push(
         _notice_item(
@@ -248,9 +244,7 @@ def _handle_selection_key(app: App, handles: TuiHandles, key: Key | str) -> bool
         return False
     if key == Key.escape:
         if handles.selection_tx is not None:
-            handles.selection_tx.put_nowait(
-                SelectionDecision(request_id=req.id, value=None)
-            )
+            handles.selection_tx.put_nowait(SelectionDecision(request_id=req.id, value=None))
         app.pending_selection = None
         app.sel_index = 0
         app.sel_scroll = 0
@@ -274,9 +268,7 @@ def _handle_selection_key(app: App, handles: TuiHandles, key: Key | str) -> bool
     elif key == Key.enter:
         value = req.options[app.sel_index].value
         if handles.selection_tx is not None:
-            handles.selection_tx.put_nowait(
-                SelectionDecision(request_id=req.id, value=value)
-            )
+            handles.selection_tx.put_nowait(SelectionDecision(request_id=req.id, value=value))
         app.pending_selection = None
         app.sel_index = 0
         app.sel_scroll = 0

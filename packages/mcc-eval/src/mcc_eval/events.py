@@ -90,13 +90,7 @@ class RunFinished(_Base):
 
 
 TraceEvent = Annotated[
-    RunStarted
-    | LlmRequest
-    | LlmChunk
-    | ToolCall
-    | ToolResult
-    | LlmUsage
-    | RunFinished,
+    RunStarted | LlmRequest | LlmChunk | ToolCall | ToolResult | LlmUsage | RunFinished,
     Field(discriminator="type"),
 ]
 

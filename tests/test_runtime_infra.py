@@ -143,7 +143,9 @@ class TestInteractiveRuntime:
 
     def test_explicit_agent_id(self):
         rt = InteractiveRuntimeV2(
-            FakeAgent(), runtime_id="rt-x", agent_id="agent-42",
+            FakeAgent(),
+            runtime_id="rt-x",
+            agent_id="agent-42",
         )
         assert rt.agent_id == "agent-42"
 
@@ -598,9 +600,7 @@ class TestRuntimeCoordinator:
 
         for i in range(3):
             with pytest.raises(CoordinatorClosedError):
-                coord.register(
-                    InteractiveRuntimeV2(FakeAgent(), runtime_id=f"late-{i}")
-                )
+                coord.register(InteractiveRuntimeV2(FakeAgent(), runtime_id=f"late-{i}"))
 
 
 # -- RuntimeFactory 测试 --
@@ -611,7 +611,9 @@ class TestRuntimeFactory:
         factory = RuntimeFactory()
         agent = FakeAgent()
         rt = factory.create_interactive_v2(
-            agent, session_id="s1", agent_id="a1",
+            agent,
+            session_id="s1",
+            agent_id="a1",
         )
         assert isinstance(rt, InteractiveRuntimeV2)
         assert rt.session_id == "s1"
@@ -628,7 +630,8 @@ class TestRuntimeFactory:
     def test_create_interactive_v2_explicit_id(self):
         factory = RuntimeFactory()
         rt = factory.create_interactive_v2(
-            FakeAgent(), runtime_id="custom-rt",
+            FakeAgent(),
+            runtime_id="custom-rt",
         )
         assert rt.runtime_id == "custom-rt"
 
@@ -638,8 +641,10 @@ class TestRuntimeFactory:
         plan_store = PlanStore()
         registry = ToolRegistry()
         spec = TeammateSpec(
-            name="fac-worker", role="coder",
-            system="test", model="claude-haiku-4-5",
+            name="fac-worker",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
         )
         teammate = TeammateRuntime(
             spec=spec,
@@ -696,8 +701,10 @@ class TestRuntimeFactory:
         plan_store = PlanStore()
         registry = ToolRegistry()
         spec = TeammateSpec(
-            name="v2-worker", role="coder",
-            system="test", model="claude-haiku-4-5",
+            name="v2-worker",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
         )
         teammate = TeammateRuntime(
             spec=spec,

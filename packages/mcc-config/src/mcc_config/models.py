@@ -68,7 +68,12 @@ class SandboxConfig(BaseModel):
     max_file_mb: int = 1024
     env_allow: list[str] = Field(
         default_factory=lambda: [
-            "PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL",
+            "PATH",
+            "LANG",
+            "LC_ALL",
+            "TERM",
+            "TMPDIR",
+            "SHELL",
         ]
     )
 

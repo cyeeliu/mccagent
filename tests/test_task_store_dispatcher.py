@@ -60,20 +60,27 @@ class TestTaskRecord:
 
     def test_can_retry_respects_max_attempts(self):
         task = TaskRecord(
-            task_id="t-1", subject="test", description="desc",
-            max_attempts=2, attempt_count=2,
+            task_id="t-1",
+            subject="test",
+            description="desc",
+            max_attempts=2,
+            attempt_count=2,
         )
         assert not task.can_retry
 
     def test_is_terminal(self):
         task = TaskRecord(
-            task_id="t-1", subject="test", description="desc",
+            task_id="t-1",
+            subject="test",
+            description="desc",
             status=TaskStatus.SUCCEEDED,
         )
         assert task.is_terminal
 
         task2 = TaskRecord(
-            task_id="t-2", subject="test", description="desc",
+            task_id="t-2",
+            subject="test",
+            description="desc",
             status=TaskStatus.RUNNING,
         )
         assert not task2.is_terminal
@@ -85,27 +92,35 @@ class TestTaskRecord:
 class TestTaskAttempt:
     def test_default_idempotency_key(self):
         attempt = TaskAttempt(
-            attempt_id="att-1", task_id="t-1", agent_id="a-1",
+            attempt_id="att-1",
+            task_id="t-1",
+            agent_id="a-1",
         )
         assert attempt.idempotency_key == "t-1:att-1"
 
     def test_custom_idempotency_key(self):
         attempt = TaskAttempt(
-            attempt_id="att-1", task_id="t-1", agent_id="a-1",
+            attempt_id="att-1",
+            task_id="t-1",
+            agent_id="a-1",
             idempotency_key="custom-key",
         )
         assert attempt.idempotency_key == "custom-key"
 
     def test_is_terminal(self):
         attempt = TaskAttempt(
-            attempt_id="att-1", task_id="t-1", agent_id="a-1",
+            attempt_id="att-1",
+            task_id="t-1",
+            agent_id="a-1",
             status=AttemptStatus.SUCCEEDED,
         )
         assert attempt.is_terminal
 
     def test_is_retry(self):
         attempt = TaskAttempt(
-            attempt_id="att-2", task_id="t-1", agent_id="a-1",
+            attempt_id="att-2",
+            task_id="t-1",
+            agent_id="a-1",
             idempotency_key="t-1:att-1",
         )
         assert attempt.is_retry
@@ -117,8 +132,10 @@ class TestTaskAttempt:
 class TestTaskAssignment:
     def test_is_active_by_default(self):
         asg = TaskAssignment(
-            assignment_id="asg-1", task_id="t-1",
-            attempt_id="att-1", agent_id="a-1",
+            assignment_id="asg-1",
+            task_id="t-1",
+            attempt_id="att-1",
+            agent_id="a-1",
         )
         assert asg.is_active
         assert not asg.is_expired
@@ -127,8 +144,10 @@ class TestTaskAssignment:
         from datetime import UTC, datetime, timedelta
 
         asg = TaskAssignment(
-            assignment_id="asg-1", task_id="t-1",
-            attempt_id="att-1", agent_id="a-1",
+            assignment_id="asg-1",
+            task_id="t-1",
+            attempt_id="att-1",
+            agent_id="a-1",
             lease_expires_at=datetime.now(UTC) - timedelta(seconds=10),
         )
         assert asg.is_expired
@@ -136,8 +155,10 @@ class TestTaskAssignment:
 
     def test_completed_not_active(self):
         asg = TaskAssignment(
-            assignment_id="asg-1", task_id="t-1",
-            attempt_id="att-1", agent_id="a-1",
+            assignment_id="asg-1",
+            task_id="t-1",
+            attempt_id="att-1",
+            agent_id="a-1",
             status=AssignmentStatus.COMPLETED,
         )
         assert not asg.is_active
@@ -184,7 +205,9 @@ class TestInMemoryTaskStoreCAS:
         task = await store.create_task("s", "d")
         old_version = task.version
         updated = await store.transition_task(
-            task.task_id, TaskStatus.PENDING, TaskStatus.QUEUED,
+            task.task_id,
+            TaskStatus.PENDING,
+            TaskStatus.QUEUED,
         )
         assert updated.status is TaskStatus.QUEUED
         assert updated.version > old_version
@@ -194,7 +217,9 @@ class TestInMemoryTaskStoreCAS:
         task = await store.create_task("s", "d")
         with pytest.raises(CASConflictError):
             await store.transition_task(
-                task.task_id, TaskStatus.QUEUED, TaskStatus.DISPATCHED,
+                task.task_id,
+                TaskStatus.QUEUED,
+                TaskStatus.DISPATCHED,
             )
 
     async def test_transition_task_invalid_transition(self):
@@ -202,14 +227,18 @@ class TestInMemoryTaskStoreCAS:
         task = await store.create_task("s", "d")
         with pytest.raises(InvalidTransitionError):
             await store.transition_task(
-                task.task_id, TaskStatus.PENDING, TaskStatus.RUNNING,
+                task.task_id,
+                TaskStatus.PENDING,
+                TaskStatus.RUNNING,
             )
 
     async def test_transition_task_not_found(self):
         store = InMemoryTaskStore()
         with pytest.raises(TaskNotFoundError):
             await store.transition_task(
-                "nope", TaskStatus.PENDING, TaskStatus.QUEUED,
+                "nope",
+                TaskStatus.PENDING,
+                TaskStatus.QUEUED,
             )
 
 
@@ -275,10 +304,14 @@ class TestInMemoryTaskStoreAttempt:
         store = InMemoryTaskStore()
         task = await store.create_task("s", "d")
         a1 = await store.create_attempt(
-            task.task_id, "a-1", idempotency_key="idem-1",
+            task.task_id,
+            "a-1",
+            idempotency_key="idem-1",
         )
         a2 = await store.create_attempt(
-            task.task_id, "a-1", idempotency_key="idem-1",
+            task.task_id,
+            "a-1",
+            idempotency_key="idem-1",
         )
         assert a1.attempt_id == a2.attempt_id
 
@@ -287,7 +320,9 @@ class TestInMemoryTaskStoreAttempt:
         task = await store.create_task("s", "d")
         attempt = await store.create_attempt(task.task_id, "a-1")
         completed = await store.complete_attempt(
-            attempt.attempt_id, summary="done", output={"result": 42},
+            attempt.attempt_id,
+            summary="done",
+            output={"result": 42},
         )
         assert completed.status is AttemptStatus.SUCCEEDED
         assert completed.summary == "done"
@@ -322,7 +357,9 @@ class TestInMemoryTaskStoreAttempt:
         store = InMemoryTaskStore()
         task = await store.create_task("s", "d")
         await store.create_attempt(
-            task.task_id, "a-1", idempotency_key="special-key",
+            task.task_id,
+            "a-1",
+            idempotency_key="special-key",
         )
         found = await store.find_by_idempotency_key("special-key")
         assert found is not None
@@ -339,7 +376,9 @@ class TestInMemoryTaskStoreAssignment:
         task = await store.create_task("s", "d")
         attempt = await store.create_attempt(task.task_id, "a-1")
         asg = await store.create_assignment(
-            task.task_id, attempt.attempt_id, "a-1",
+            task.task_id,
+            attempt.attempt_id,
+            "a-1",
         )
         assert asg.task_id == task.task_id
         assert asg.agent_id == "a-1"
@@ -359,7 +398,9 @@ class TestInMemoryTaskStoreAssignment:
         task = await store.create_task("s", "d")
         attempt = await store.create_attempt(task.task_id, "a-1")
         asg = await store.create_assignment(
-            task.task_id, attempt.attempt_id, "a-1",
+            task.task_id,
+            attempt.attempt_id,
+            "a-1",
         )
         completed = await store.complete_assignment(asg.assignment_id)
         assert completed.status is AssignmentStatus.COMPLETED
@@ -461,7 +502,9 @@ class TestTaskDispatcher:
 
         task = await store.create_task("test subject", "test desc")
         handle = await dispatcher.dispatch(
-            task.task_id, "agent-1", runtime_id="rt-1",
+            task.task_id,
+            "agent-1",
+            runtime_id="rt-1",
         )
         assert handle.task_id == task.task_id
         assert handle.runtime_id == "rt-1"
@@ -478,7 +521,9 @@ class TestTaskDispatcher:
         task = await store.create_task("s", "d")
         with pytest.raises(DispatchError, match="runtime not found"):
             await dispatcher.dispatch(
-                task.task_id, "agent-1", runtime_id="nope",
+                task.task_id,
+                "agent-1",
+                runtime_id="nope",
             )
 
     async def test_dispatch_task_not_found(self):
@@ -500,11 +545,15 @@ class TestTaskDispatcher:
 
         task = await store.create_task("s", "d")
         h1 = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="rt-1",
+            task.task_id,
+            "a-1",
+            runtime_id="rt-1",
             idempotency_key="idem-key",
         )
         h2 = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="rt-1",
+            task.task_id,
+            "a-1",
+            runtime_id="rt-1",
             idempotency_key="idem-key",
         )
         assert h1.attempt_id == h2.attempt_id
@@ -518,13 +567,16 @@ class TestTaskDispatcher:
 
         task = await store.create_task("s", "d")
         handle = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="rt-1",
+            task.task_id,
+            "a-1",
+            runtime_id="rt-1",
         )
 
         async def emit_done():
             await asyncio.sleep(0.05)
             await rt._emit_done(
-                handle.task_id, handle.attempt_id,
+                handle.task_id,
+                handle.attempt_id,
                 RuntimeEventType.TASK_COMPLETED,
                 payload={"summary": "all good"},
             )
@@ -546,13 +598,16 @@ class TestTaskDispatcher:
 
         task = await store.create_task("s", "d")
         handle = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="rt-1",
+            task.task_id,
+            "a-1",
+            runtime_id="rt-1",
         )
 
         async def emit_fail():
             await asyncio.sleep(0.05)
             await rt._emit_done(
-                handle.task_id, handle.attempt_id,
+                handle.task_id,
+                handle.attempt_id,
                 RuntimeEventType.TASK_FAILED,
                 payload={"error": "something went wrong"},
             )
@@ -576,7 +631,9 @@ class TestTaskDispatcher:
 
         task = await store.create_task("s", "d")
         handle = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="rt-1",
+            task.task_id,
+            "a-1",
+            runtime_id="rt-1",
         )
 
         with pytest.raises(TaskTimeoutError):
@@ -591,7 +648,9 @@ class TestTaskDispatcher:
 
         task = await store.create_task("s", "d", max_attempts=3)
         h1 = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="rt-1",
+            task.task_id,
+            "a-1",
+            runtime_id="rt-1",
         )
         await store.fail_attempt(h1.attempt_id, error="first failed")
 
@@ -620,10 +679,12 @@ class TestTaskDispatcher:
 
         t1 = await store.create_task("s1", "d1")
         t2 = await store.create_task("s2", "d2")
-        results = await dispatcher.dispatch_batch([
-            (t1.task_id, "a-1", "rt-1"),
-            (t2.task_id, "a-1", "rt-1"),
-        ])
+        results = await dispatcher.dispatch_batch(
+            [
+                (t1.task_id, "a-1", "rt-1"),
+                (t2.task_id, "a-1", "rt-1"),
+            ]
+        )
         assert len(results) == 2
         assert all(isinstance(r, type(results[0])) for r in results)
 
@@ -635,10 +696,12 @@ class TestTaskDispatcher:
         dispatcher = TaskDispatcher(store, coord)
 
         t1 = await store.create_task("s1", "d1")
-        results = await dispatcher.dispatch_batch([
-            (t1.task_id, "a-1", "rt-1"),
-            ("nonexistent", "a-1", "rt-1"),
-        ])
+        results = await dispatcher.dispatch_batch(
+            [
+                (t1.task_id, "a-1", "rt-1"),
+                ("nonexistent", "a-1", "rt-1"),
+            ]
+        )
         assert len(results) == 2
         assert not isinstance(results[0], Exception)
         assert isinstance(results[1], Exception)

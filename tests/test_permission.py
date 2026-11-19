@@ -23,8 +23,10 @@ def _cfg(allow: list[str], deny: list[str], mode: str | None = None) -> Permissi
 @pytest.fixture
 def checker_factory():
     """创建 PermissionChecker 的工厂 fixture。"""
+
     def _make(allow: list[str], deny: list[str], mode: str | None = None):
         return PermissionChecker(_cfg(allow, deny, mode))
+
     return _make
 
 

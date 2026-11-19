@@ -21,7 +21,7 @@ from mcc_eval.datasets import (
 
 HUMANEVAL_ROW = {
     "task_id": "HumanEval/0",
-    "prompt": "def return_hello():\n    \"\"\"say hello\"\"\"\n",
+    "prompt": 'def return_hello():\n    """say hello"""\n',
     "test": "def check(candidate):\n    assert candidate() == 'hello'\n",
     "entry_point": "return_hello",
 }
@@ -119,8 +119,9 @@ def _mock_transport(pages: list[list[dict]], total: int) -> httpx.MockTransport:
         idx = state["offset"]
         state["offset"] += 1
         assert offset == idx * 100  # 按页推进
-        return httpx.Response(200, json={"rows": [{"row": r} for r in pages[idx]],
-                                     "num_rows_total": total})
+        return httpx.Response(
+            200, json={"rows": [{"row": r} for r in pages[idx]], "num_rows_total": total}
+        )
 
     return httpx.MockTransport(handler)
 
@@ -161,10 +162,14 @@ def test_case_from_dict_requires_id_and_task() -> None:
 
 def test_case_setup_roundtrip() -> None:
     """setup 环境预置随 case 落盘 / 读取往返保持。"""
-    case = Case(case_id="s1", task="修复 config 解析", setup={
-        "config/app.yaml": "port: 8081\n",
-        "tests/test_app.py": "def test_port(): ...\n",
-    })
+    case = Case(
+        case_id="s1",
+        task="修复 config 解析",
+        setup={
+            "config/app.yaml": "port: 8081\n",
+            "tests/test_app.py": "def test_port(): ...\n",
+        },
+    )
     raw = case.to_dict()
     assert raw["setup"]["config/app.yaml"] == "port: 8081\n"
     assert Case.from_dict(raw) == case

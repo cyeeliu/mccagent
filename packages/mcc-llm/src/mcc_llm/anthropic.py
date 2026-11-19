@@ -58,8 +58,7 @@ class AnthropicClient:
                 body["system"] = req.system
             else:
                 body["system"] = [
-                    b.model_dump(by_alias=True, exclude_none=True)
-                    for b in req.system
+                    b.model_dump(by_alias=True, exclude_none=True) for b in req.system
                 ]
         if req.temperature is not None:
             body["temperature"] = req.temperature

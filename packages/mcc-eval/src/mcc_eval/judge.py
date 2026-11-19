@@ -86,9 +86,7 @@ class JudgeScorer:
                         temperature=0.0,
                     )
                 )
-                text = "".join(
-                    getattr(b, "text", "") for b in resp.content
-                )
+                text = "".join(getattr(b, "text", "") for b in resp.content)
                 parsed = _parse_score(text)
                 if parsed is not None:
                     return parsed, f"judge scored {parsed}/5"
@@ -107,9 +105,7 @@ class JudgeScorer:
         回退权重，保住无 key 的冒烟链路。
         """
         results: dict[int, tuple[int, str]] = {}
-        has_judge = any(
-            exp.get("type") == "judge" for exp in expectations
-        )
+        has_judge = any(exp.get("type") == "judge" for exp in expectations)
         if not has_judge:
             return results
         if self._ensure() is None:

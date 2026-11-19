@@ -71,8 +71,10 @@ class EditFileTool:
                 "or set replace_all=true to replace all occurrences"
             )
 
-        new_body = body.replace(old_string, new_string) if replace_all else body.replace(
-            old_string, new_string, 1
+        new_body = (
+            body.replace(old_string, new_string)
+            if replace_all
+            else body.replace(old_string, new_string, 1)
         )
 
         tmp = path.with_suffix(path.suffix + ".mcctmp")

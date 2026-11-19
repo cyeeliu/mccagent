@@ -65,12 +65,14 @@ class DependencyPolicy(StrEnum):
     ANY_SUCCESS = "any_success"
 
 
-_TERMINAL_RUN_STATUSES = frozenset({
-    TeamRunStatus.COMPLETED,
-    TeamRunStatus.FAILED,
-    TeamRunStatus.CANCELLED,
-    TeamRunStatus.SHUTDOWN,
-})
+_TERMINAL_RUN_STATUSES = frozenset(
+    {
+        TeamRunStatus.COMPLETED,
+        TeamRunStatus.FAILED,
+        TeamRunStatus.CANCELLED,
+        TeamRunStatus.SHUTDOWN,
+    }
+)
 
 
 class OrchestratorError(RuntimeError):
@@ -314,8 +316,7 @@ class Planner(Protocol):
         objective: str,
         *,
         context: AgentContext | None = None,
-    ) -> list[TaskSpec]:
-        ...
+    ) -> list[TaskSpec]: ...
 
 
 @runtime_checkable
@@ -333,16 +334,14 @@ class TaskScheduler(Protocol):
         registry: AgentRegistry,
         *,
         exclude_agents: frozenset[str] = frozenset(),
-    ) -> list[Assignment]:
-        ...
+    ) -> list[Assignment]: ...
 
 
 @runtime_checkable
 class ResultCollector(Protocol):
     """结果收集器：汇总各 Agent 执行结果。"""
 
-    async def collect(self, run_id: str) -> TeamRunResult:
-        ...
+    async def collect(self, run_id: str) -> TeamRunResult: ...
 
 
 # -- 默认实现 --
@@ -431,8 +430,7 @@ class SimpleResultCollector:
         results = tuple(run.results)
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
-            1 for r in results
-            if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
+            1 for r in results if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
         )
         return TeamRunResult(
             run_id=run_id,
@@ -810,9 +808,7 @@ class TeamOrchestrator:
         """
         run = self._get_run(run_id)
         if run.status not in (TeamRunStatus.RUNNING, TeamRunStatus.PAUSED):
-            raise RunStateError(
-                f"cannot execute run in {run.status.value} state"
-            )
+            raise RunStateError(f"cannot execute run in {run.status.value} state")
 
         # 为未被 Scheduler 分配的任务记录失败，使其参与终态判定
         assigned_task_ids = {a.task_id for a in run.assignments if a.task_id}
@@ -838,14 +834,16 @@ class TeamOrchestrator:
             a.task_spec.subject: a for a in run.assignments
         }
         completion_events: dict[str, asyncio.Event] = {
-            a.task_spec.subject: asyncio.Event()
-            for a in run.assignments
+            a.task_spec.subject: asyncio.Event() for a in run.assignments
         }
         subject_outcomes: dict[str, str] = {}
 
         tasks = [
             self._execute_assignment(
-                run_id, assignment, semaphore, max_attempts,
+                run_id,
+                assignment,
+                semaphore,
+                max_attempts,
                 completion_events=completion_events,
                 subject_to_assignment=subject_to_assignment,
                 subject_outcomes=subject_outcomes,
@@ -922,13 +920,11 @@ class TeamOrchestrator:
                         return
 
                     try:
-                        result_summary, result_error, result_cost = (
-                            await self._dispatch_and_wait(
-                                assignment,
-                                runtime,
-                                run_id,
-                                run.team.policy.task_lease_secs,
-                            )
+                        result_summary, result_error, result_cost = await self._dispatch_and_wait(
+                            assignment,
+                            runtime,
+                            run_id,
+                            run.team.policy.task_lease_secs,
                         )
                         if result_error is None:
                             with contextlib.suppress(RunStateError):
@@ -999,9 +995,7 @@ class TeamOrchestrator:
         - ALL_TERMINAL：所有依赖到达任意终态（非 unassigned）。
         - ANY_SUCCESS：至少一个依赖 succeeded。
         """
-        dep_outcomes = [
-            subject_outcomes.get(dep, "unassigned") for dep in blocked_by
-        ]
+        dep_outcomes = [subject_outcomes.get(dep, "unassigned") for dep in blocked_by]
         if policy is DependencyPolicy.ALL_SUCCESS:
             return all(o == "succeeded" for o in dep_outcomes)
         if policy is DependencyPolicy.ALL_TERMINAL:
@@ -1126,8 +1120,7 @@ class TeamOrchestrator:
         results = self._aggregate_results(run)
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
-            1 for r in results
-            if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
+            1 for r in results if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
         )
         active = len(run.agent_ids)
         elapsed = 0.0
@@ -1153,8 +1146,7 @@ class TeamOrchestrator:
         results = self._aggregate_results(run)
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
-            1 for r in results
-            if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
+            1 for r in results if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
         )
         return TeamRunResult(
             run_id=run_id,

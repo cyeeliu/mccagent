@@ -169,9 +169,7 @@ def _split_lines(text: Text, width: int = 80) -> list[Text]:
     return result or [Text("")]
 
 
-def _select_visible(
-    items: list[Text], available: int, scroll: int, width: int = 80
-) -> list[Text]:
+def _select_visible(items: list[Text], available: int, scroll: int, width: int = 80) -> list[Text]:
     """行级滑动窗口：把所有 item 展开为行，按 scroll 裁取 available 行。"""
     if not items:
         return [Text("")]
@@ -311,8 +309,7 @@ def _status_info(app: App) -> Text:
         pct = app.ctx_tokens / app.context_limit
         style = "green" if pct < 0.6 else "yellow" if pct < 0.85 else "red"
         text.append(
-            f" · ctx {_fmt_tokens(app.ctx_tokens)}/{_fmt_tokens(app.context_limit)}"
-            f" {pct:.0%}",
+            f" · ctx {_fmt_tokens(app.ctx_tokens)}/{_fmt_tokens(app.context_limit)} {pct:.0%}",
             style=style,
         )
         if pct >= 0.85:
@@ -365,9 +362,7 @@ def _render_input_panel(app: App, console_width: int, input_rows: int) -> Panel:
     content_height = max(1, input_rows - _PANEL_BORDERS)
 
     app.input_viewport.update(app.input, app.cursor, content_width, content_height)
-    vis_lines = app.input_viewport.visible_lines(
-        app.input, content_width, content_height
-    )
+    vis_lines = app.input_viewport.visible_lines(app.input, content_width, content_height)
     vis_row, vis_col = app.input_viewport.cursor_visible_pos(app.input, app.cursor)
 
     input_text = Text()
@@ -444,15 +439,8 @@ def build_renderable(app: App, console: Console) -> Layout:
     top = max(0, bottom - available)
     visible = all_lines[top:bottom] or [Text("")]
 
-    thinking = (
-        f" · thinking… ~{_fmt_tokens(app.est_stream_tokens)} tok"
-        if app.agent_busy
-        else ""
-    )
-    title = (
-        f" mini-claude-code — session {app.session_short_id}"
-        f" (${app.cost_usd:.3f}){thinking} "
-    )
+    thinking = f" · thinking… ~{_fmt_tokens(app.est_stream_tokens)} tok" if app.agent_busy else ""
+    title = f" mini-claude-code — session {app.session_short_id} (${app.cost_usd:.3f}){thinking} "
     msg_panel = Panel(Group(*visible), title=title, border_style="blue")
 
     if app.permission_feedback_mode:

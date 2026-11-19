@@ -69,9 +69,7 @@ async def test_resume_full_flow_through_tui_mode(tmp_path: Path):
 
     # 1. 创建一个有历史的 session
     sid = "abc12345"
-    await _create_session_with_history(
-        tmp_path, sid, "hello world", "Hi! How can I help?"
-    )
+    await _create_session_with_history(tmp_path, sid, "hello world", "Hi! How can I help?")
 
     # 2. 创建当前会话（模拟用户刚启动 mcc）
     current_sid = "cur99999"
@@ -114,15 +112,10 @@ async def test_resume_full_flow_through_tui_mode(tmp_path: Path):
         # 4c. 验证当前会话被标记
         labels = [opt.label for opt in selection_req.options]
         current_marked = any("●" in lbl and current_sid in lbl for lbl in labels)
-        assert current_marked, (
-            f"当前会话 {current_sid} 未被 ● 标记。labels:\n"
-            + "\n".join(labels)
-        )
+        assert current_marked, f"当前会话 {current_sid} 未被 ● 标记。labels:\n" + "\n".join(labels)
 
         # 4c-2. 验证当前会话排在第一位
-        assert current_sid in labels[0], (
-            "当前会话未排在第一位。labels:\n" + "\n".join(labels)
-        )
+        assert current_sid in labels[0], "当前会话未排在第一位。labels:\n" + "\n".join(labels)
 
         # 4d. 用户选择有历史的 session
         target_option = None
@@ -134,9 +127,7 @@ async def test_resume_full_flow_through_tui_mode(tmp_path: Path):
 
         from mcc_core import SelectionDecision
 
-        handles.selection_tx.put_nowait(
-            SelectionDecision(request_id=selection_req.id, value=sid)
-        )
+        handles.selection_tx.put_nowait(SelectionDecision(request_id=selection_req.id, value=sid))
 
         # 4e. 收集后续所有事件直到 TurnEnd
         turn_end_count = 0

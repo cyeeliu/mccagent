@@ -124,9 +124,7 @@ class TestSessionRecorder:
     async def test_save_meta_persists_title(self, recorder):
         recorder.meta.title = "新标题"
         await recorder.save_meta()
-        meta = SessionMeta.model_validate_json(
-            recorder._meta_path.read_text(encoding="utf-8")
-        )
+        meta = SessionMeta.model_validate_json(recorder._meta_path.read_text(encoding="utf-8"))
         assert meta.title == "新标题"
 
     @pytest.mark.asyncio
@@ -134,9 +132,7 @@ class TestSessionRecorder:
         msgs = [Message.user("a")]
         blocks = [TextBlock(text="b")]
         outputs: list[tuple[str, str, bool]] = [("t1", "x", False)]
-        snap = build_turn_snapshot(
-            1, msgs, blocks, outputs, Usage(), "m", 0.0
-        )
+        snap = build_turn_snapshot(1, msgs, blocks, outputs, Usage(), "m", 0.0)
         msgs.append(Message.user("c"))
         blocks.append(TextBlock(text="d"))
         outputs.append(("t2", "y", True))
@@ -157,24 +153,37 @@ class TestLoadSession:
             TextBlock(text="listing"),
             ToolUseBlock(id="t1", name="list_dir", input={"path": "."}),
         ]
-        await r.record(_snap(request_messages=[Message.user("列出文件")],
-                             assistant_blocks=blocks, tool_outputs=tool_outputs))
+        await r.record(
+            _snap(
+                request_messages=[Message.user("列出文件")],
+                assistant_blocks=blocks,
+                tool_outputs=tool_outputs,
+            )
+        )
         turn2_request = [
             Message.user("列出文件"),
             Message(role=Role.assistant, content=blocks),
-            Message(role=Role.tool, content=[
-                ToolResultBlock(tool_use_id="t1", content="file1\nfile2")
-            ]),
+            Message(
+                role=Role.tool, content=[ToolResultBlock(tool_use_id="t1", content="file1\nfile2")]
+            ),
         ]
-        await r.record(_snap(iteration=2, request_messages=turn2_request,
-                             assistant_blocks=[TextBlock(text="all done")]))
+        await r.record(
+            _snap(
+                iteration=2,
+                request_messages=turn2_request,
+                assistant_blocks=[TextBlock(text="all done")],
+            )
+        )
         await r.finalize("ended")
 
         meta, messages = load_session("rb", base)
         assert meta.id == "rb"
         assert meta.turns == 2
         assert [m.role for m in messages] == [
-            Role.user, Role.assistant, Role.tool, Role.assistant,
+            Role.user,
+            Role.assistant,
+            Role.tool,
+            Role.assistant,
         ]
         assert messages[1].content[1].name == "list_dir"
         assert messages[2].content[0].tool_use_id == "t1"
@@ -208,9 +217,7 @@ class TestListSessions:
             d = base / day
             d.mkdir(parents=True)
             (d / f"{sid}.meta.json").write_text(
-                SessionMeta(
-                    id=sid, started_at=started, cwd=str(tmp_path)
-                ).model_dump_json(),
+                SessionMeta(id=sid, started_at=started, cwd=str(tmp_path)).model_dump_json(),
                 encoding="utf-8",
             )
 
@@ -306,9 +313,7 @@ class TestDeleteSession:
 
 class TestMaybeGenerateTitle:
     async def test_existing_title_skipped(self):
-        meta = SessionMeta(
-            id="t", started_at=datetime.now(UTC), cwd=".", turns=1, title="已有"
-        )
+        meta = SessionMeta(id="t", started_at=datetime.now(UTC), cwd=".", turns=1, title="已有")
         llm = MockLlm([])
         assert await maybe_generate_title(meta, llm, _snap()) == "已有"
         assert llm.call_count == 0

@@ -24,14 +24,13 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     if not lines or lines[0].rstrip("\r\n") != "---":
         return {}, text
     closing = next(
-        (i for i, line in enumerate(lines[1:], start=1)
-         if line.rstrip("\r\n") == "---"),
+        (i for i, line in enumerate(lines[1:], start=1) if line.rstrip("\r\n") == "---"),
         None,
     )
     if closing is None:
         return {}, text
     fm = "".join(lines[1:closing])
-    body = "".join(lines[closing + 1:]).strip()
+    body = "".join(lines[closing + 1 :]).strip()
     try:
         meta = yaml.safe_load(fm) or {}
     except yaml.YAMLError:
@@ -83,9 +82,7 @@ class SkillLoader:
             raw_name = meta.get("name")
             name = raw_name.strip() if isinstance(raw_name, str) else ""
             name = name or manifest_path.parent.name
-            description = _clean_description(
-                meta.get("description"), body.split("\n", 1)[0]
-            )
+            description = _clean_description(meta.get("description"), body.split("\n", 1)[0])
             model = meta.get("model")
             model = str(model) if isinstance(model, str) else None
             self.skills[name] = Skill(
@@ -117,9 +114,7 @@ def load_skills_merged(home: Path | None, project: Path | None) -> dict[str, Ski
     return merged
 
 
-def resolve_slash(
-    commands: dict[str, SlashCommand], user_input: str
-) -> str | None:
+def resolve_slash(commands: dict[str, SlashCommand], user_input: str) -> str | None:
     """命中 slash 命令时返回替换后的文本，否则 None。"""
     parts = user_input.strip().split(None, 1)
     if not parts:
@@ -164,9 +159,7 @@ class SlashRegistry:
         return resolve_slash(self.commands, user_input)
 
 
-def load_commands_merged(
-    home: Path | None, project: Path | None
-) -> dict[str, SlashCommand]:
+def load_commands_merged(home: Path | None, project: Path | None) -> dict[str, SlashCommand]:
     """加载 home + project 两层 commands，project 同名覆盖 home。"""
     merged: dict[str, SlashCommand] = {}
     if home is not None:

@@ -57,9 +57,7 @@ class LayoutEngine:
         )
         status_height = _STATUS_ROWS
 
-        message_height = (
-            h - _PANEL_BORDERS - comp_rows - sel_rows - input_height - status_height
-        )
+        message_height = h - _PANEL_BORDERS - comp_rows - sel_rows - input_height - status_height
 
         if message_height < 1:
             if comp_rows > 0:

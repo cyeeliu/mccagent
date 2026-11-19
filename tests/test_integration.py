@@ -37,7 +37,11 @@ from mcc_harness.integration import (
 
 def _git(args: list[str], cwd: Path) -> str:
     result = subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return result.stdout.strip()
 
@@ -114,7 +118,9 @@ class TestIntegrationRequest:
 
     def test_defaults(self, tmp_path: Path):
         req = IntegrationRequest(
-            agent_id="a1", task_id="t1", worktree_dir=tmp_path,
+            agent_id="a1",
+            task_id="t1",
+            worktree_dir=tmp_path,
         )
         assert req.target_branch == "main"
         assert req.agent_branch == ""
@@ -153,11 +159,14 @@ class TestDiffArtifact:
         assert not diff.is_empty
         assert diff.total_files == 1
 
-    @pytest.mark.parametrize("ins,dels,expected", [
-        (10, 5, 15),
-        (0, 0, 0),
-        (100, 50, 150),
-    ])
+    @pytest.mark.parametrize(
+        "ins,dels,expected",
+        [
+            (10, 5, 15),
+            (0, 0, 0),
+            (100, 50, 150),
+        ],
+    )
     def test_total_files_with_changes(self, ins, dels, expected):
         diff = DiffArtifact(
             diff_content="x",
@@ -236,24 +245,30 @@ class TestVerificationResult:
 class TestEnums:
     """枚举值。"""
 
-    @pytest.mark.parametrize("status,expected", [
-        (IntegrationStatus.PENDING, "pending"),
-        (IntegrationStatus.COLLECTED, "collected"),
-        (IntegrationStatus.COMMITTED, "committed"),
-        (IntegrationStatus.MERGED, "merged"),
-        (IntegrationStatus.CONFLICT, "conflict"),
-        (IntegrationStatus.VALIDATION_FAILED, "validation_failed"),
-        (IntegrationStatus.ROLLED_BACK, "rolled_back"),
-        (IntegrationStatus.COMPLETED, "completed"),
-    ])
+    @pytest.mark.parametrize(
+        "status,expected",
+        [
+            (IntegrationStatus.PENDING, "pending"),
+            (IntegrationStatus.COLLECTED, "collected"),
+            (IntegrationStatus.COMMITTED, "committed"),
+            (IntegrationStatus.MERGED, "merged"),
+            (IntegrationStatus.CONFLICT, "conflict"),
+            (IntegrationStatus.VALIDATION_FAILED, "validation_failed"),
+            (IntegrationStatus.ROLLED_BACK, "rolled_back"),
+            (IntegrationStatus.COMPLETED, "completed"),
+        ],
+    )
     def test_integration_status_values(self, status, expected):
         assert status == expected
 
-    @pytest.mark.parametrize("strategy,expected", [
-        (MergeStrategy.FAST_FORWARD, "fast_forward"),
-        (MergeStrategy.MERGE_COMMIT, "merge_commit"),
-        (MergeStrategy.SQUASH, "squash"),
-    ])
+    @pytest.mark.parametrize(
+        "strategy,expected",
+        [
+            (MergeStrategy.FAST_FORWARD, "fast_forward"),
+            (MergeStrategy.MERGE_COMMIT, "merge_commit"),
+            (MergeStrategy.SQUASH, "squash"),
+        ],
+    )
     def test_merge_strategy_values(self, strategy, expected):
         assert strategy == expected
 
@@ -595,8 +610,11 @@ class TestRecordManagement:
         _write(wt / "new2.py", "y = 2\n")
         mgr.integrate(
             make_request(
-                wt, agent_id="a2", task_id="t2",
-                agent_branch=branch, commit_message="add2",
+                wt,
+                agent_id="a2",
+                task_id="t2",
+                agent_branch=branch,
+                commit_message="add2",
             ),
         )
         assert mgr.total_records == 2
@@ -622,16 +640,22 @@ class TestEndToEnd:
         mgr = IntegrationManagerImpl()
         r1 = mgr.integrate(
             make_request(
-                wt1, agent_id="a1", task_id="t1",
-                agent_branch="task/agent-1", commit_message="add a.py",
+                wt1,
+                agent_id="a1",
+                task_id="t1",
+                agent_branch="task/agent-1",
+                commit_message="add a.py",
             ),
         )
         assert r1.is_completed
 
         r2 = mgr.integrate(
             make_request(
-                wt2, agent_id="a2", task_id="t2",
-                agent_branch="task/agent-2", commit_message="add b.py",
+                wt2,
+                agent_id="a2",
+                task_id="t2",
+                agent_branch="task/agent-2",
+                commit_message="add b.py",
             ),
         )
         assert r2.is_completed

@@ -19,6 +19,7 @@ def default_sessions_base() -> Path:
     """默认会话目录（调用时求值，跟随当前 HOME）。"""
     return Path.home() / ".mcc" / "sessions"
 
+
 TITLE_MODEL = "claude-haiku-4-5"
 """标题生成模型的最终兜底值。
 
@@ -67,9 +68,7 @@ class SessionRecorder:
         self._lock = asyncio.Lock()
 
     @classmethod
-    def open_sync(
-        cls, id: str, cwd: Path, base_dir: Path | None = None
-    ) -> SessionRecorder:
+    def open_sync(cls, id: str, cwd: Path, base_dir: Path | None = None) -> SessionRecorder:
         """同步打开（或恢复）一个会话，供 CLI 构建期调用。"""
         base = base_dir or default_sessions_base()
         dir_ = base / _utcnow().strftime("%Y-%m-%d")
@@ -79,9 +78,7 @@ class SessionRecorder:
         meta_path = dir_ / f"{id}.meta.json"
 
         if meta_path.exists():
-            meta = SessionMeta.model_validate_json(
-                meta_path.read_text(encoding="utf-8")
-            )
+            meta = SessionMeta.model_validate_json(meta_path.read_text(encoding="utf-8"))
             meta.status = "running"
         else:
             meta = SessionMeta(
@@ -97,9 +94,7 @@ class SessionRecorder:
         return cls(id, jsonl_path, meta_path, meta)
 
     @classmethod
-    async def open(
-        cls, id: str, cwd: Path, base_dir: Path | None = None
-    ) -> SessionRecorder:
+    async def open(cls, id: str, cwd: Path, base_dir: Path | None = None) -> SessionRecorder:
         """打开（或恢复）一个会话。
 
         按"当天日期/session id"定位文件；meta 已存在时沿用原
@@ -162,9 +157,7 @@ def _find_meta_path(id: str, base_dir: Path | None) -> Path | None:
     return None
 
 
-def load_session(
-    id: str, base_dir: Path | None = None
-) -> tuple[SessionMeta, list[Message]]:
+def load_session(id: str, base_dir: Path | None = None) -> tuple[SessionMeta, list[Message]]:
     """加载会话：返回元数据与从 JSONL 重建的消息列表。
 
     每行快照都携带完整 request_messages，逐行重放得到末态对话；
@@ -184,17 +177,13 @@ def load_session(
                 continue
             turn = TurnSnapshot.model_validate_json(line)
             messages = list(turn.request_messages)
-            messages.append(
-                Message(role=Role.assistant, content=list(turn.assistant_blocks))
-            )
+            messages.append(Message(role=Role.assistant, content=list(turn.assistant_blocks)))
             if turn.tool_outputs:
                 messages.append(
                     Message(
                         role=Role.tool,
                         content=[
-                            ToolResultBlock(
-                                tool_use_id=tid, content=out, is_error=is_err
-                            )
+                            ToolResultBlock(tool_use_id=tid, content=out, is_error=is_err)
                             for tid, out, is_err in turn.tool_outputs
                         ],
                     )
@@ -213,9 +202,7 @@ def list_sessions(base_dir: Path | None = None) -> list[SessionMeta]:
             continue
         for f in day.glob("*.meta.json"):
             try:
-                metas.append(
-                    SessionMeta.model_validate_json(f.read_text(encoding="utf-8"))
-                )
+                metas.append(SessionMeta.model_validate_json(f.read_text(encoding="utf-8")))
             except Exception as e:
                 logger.warning("skipping corrupt session meta %s: %s", f, e)
                 continue
@@ -296,9 +283,7 @@ async def maybe_generate_title(
                 model=model,
                 max_tokens=TITLE_MAX_TOKENS,
                 messages=[
-                    Message.user(
-                        f"用 10 个中文字以内概括这次对话主题，只输出标题：\n{first_user}"
-                    )
+                    Message.user(f"用 10 个中文字以内概括这次对话主题，只输出标题：\n{first_user}")
                 ],
                 temperature=0.0,
             )

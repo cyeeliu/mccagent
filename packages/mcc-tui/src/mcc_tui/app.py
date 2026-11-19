@@ -196,9 +196,7 @@ class App:
     def resolve_permission(self) -> PermissionRequest | None:
         """结束当前确认（无论用户选了什么），弹出下一个排队的请求。"""
         resolved = self.pending_permission
-        self.pending_permission = (
-            self.permission_queue.pop(0) if self.permission_queue else None
-        )
+        self.pending_permission = self.permission_queue.pop(0) if self.permission_queue else None
         self.permission_feedback = ""
         self.permission_feedback_mode = False
         return resolved
@@ -254,9 +252,7 @@ class App:
             # 每轮 LLM 调用完成后的用量快照：上下文占比与缓存命中率的
             # 权威数据源（请求发出时 input 未知，流尾才上报）
             self.turn_in = (
-                ev.input_tokens
-                + ev.cache_read_input_tokens
-                + ev.cache_creation_input_tokens
+                ev.input_tokens + ev.cache_read_input_tokens + ev.cache_creation_input_tokens
             )
             self.turn_out = ev.output_tokens
             self.ctx_tokens = self.turn_in
@@ -273,10 +269,7 @@ class App:
             run_out = self.session_out - self._run_start_out
             run_cache = self.cache_read_total - self._run_start_cache
             if run_in or run_out:
-                stats = (
-                    f"↳ {run_in:,} in · {run_out:,} out"
-                    f" · ${ev.cost_usd:.4f}"
-                )
+                stats = f"↳ {run_in:,} in · {run_out:,} out · ${ev.cost_usd:.4f}"
                 if run_cache:
                     stats += f" · cache {run_cache:,} hit"
                 self.push(RenderItem(kind="turn_stats", stats=stats))

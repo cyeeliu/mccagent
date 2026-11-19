@@ -107,7 +107,5 @@ def distill_sessions(
                 json.dumps([case.to_dict()], ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-        outcomes.append(
-            DistillOutcome(case=case, path=path, created=created, source_status=status)
-        )
+        outcomes.append(DistillOutcome(case=case, path=path, created=created, source_status=status))
     return outcomes

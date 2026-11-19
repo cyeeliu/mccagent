@@ -92,14 +92,10 @@ class PermissionChecker:
                 case BashAction(cmd=cmd):
                     reason = hardened_deny_reason(cmd)
                     if reason is not None:
-                        return Deny(
-                            f"blocked by hardened security policy: {reason}"
-                        )
+                        return Deny(f"blocked by hardened security policy: {reason}")
                 case PathAction(path=path):
                     if is_path_sensitive(path):
-                        return Deny(
-                            "blocked by hardened security policy: sensitive path"
-                        )
+                        return Deny("blocked by hardened security policy: sensitive path")
 
         match req.action:
             case BashAction(cmd=cmd):
@@ -154,7 +150,7 @@ def bash_word_match(cmd: str, prefix: str) -> bool:
     """
     if not cmd.startswith(prefix):
         return False
-    after = cmd[len(prefix):]
+    after = cmd[len(prefix) :]
     return after == "" or after[0].isspace() or after[0] == "/"
 
 

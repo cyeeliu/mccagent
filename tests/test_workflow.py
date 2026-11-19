@@ -67,9 +67,7 @@ async def _echo_workflow(state: ExecutionState, args: dict[str, Any]) -> Any:
 
 def _tool(tmp_path: Path, runner: MockWorkflowRunner, **kw: Any) -> WorkflowTool:
     workflows = {"demo-wf": (META, _echo_workflow)}
-    return WorkflowTool(
-        runner, tmp_path / ".workflows", workflows=workflows, **kw
-    )
+    return WorkflowTool(runner, tmp_path / ".workflows", workflows=workflows, **kw)
 
 
 # -- run id --
@@ -82,8 +80,7 @@ class TestRunId:
 
     @pytest.mark.parametrize(
         "bad",
-        ["", "wf", "wf_x", "wf_demo_zzzz", "wf_demo-wf_0123456g",
-         "Wf_demo-wf_01234567", 123],
+        ["", "wf", "wf_x", "wf_demo_zzzz", "wf_demo-wf_0123456g", "Wf_demo-wf_01234567", 123],
     )
     def test_validate_rejects(self, bad: Any) -> None:
         with pytest.raises(WorkflowInputError):
@@ -137,13 +134,12 @@ class TestSimpleJsonSchema:
             ({"type": "null"}, None),
             ({"type": "string", "enum": ["a", "b"]}, "a"),
             ({"type": "object", "required": ["x"]}, {"x": 1}),
-            ({"type": "object", "properties": {"x": {"type": "integer"}}},
-             {"x": 1}),
+            ({"type": "object", "properties": {"x": {"type": "integer"}}}, {"x": 1}),
             ({"type": "array", "items": {"type": "string"}}, ["a", "b"]),
-            ({"type": "object",
-              "properties": {"nested": {"type": "object",
-                                        "required": ["y"]}}},
-             {"nested": {"y": 2}}),
+            (
+                {"type": "object", "properties": {"nested": {"type": "object", "required": ["y"]}}},
+                {"nested": {"y": 2}},
+            ),
         ],
     )
     def test_valid(self, schema: dict, value: Any) -> None:
@@ -160,8 +156,11 @@ class TestSimpleJsonSchema:
             ({"type": "array"}, {}, "expected type array"),
             ({"type": "string", "enum": ["a"]}, "z", "not in enum"),
             ({"type": "object", "required": ["x"]}, {}, "missing required"),
-            ({"type": "object", "properties": {"x": {"type": "integer"}}},
-             {"x": "s"}, "property x"),
+            (
+                {"type": "object", "properties": {"x": {"type": "integer"}}},
+                {"x": "s"},
+                "property x",
+            ),
             ({"type": "array", "items": {"type": "string"}}, [1], "item 0"),
         ],
     )
@@ -194,9 +193,7 @@ class TestParseJsonValue:
 
 
 class TestWorkflowJournal:
-    def test_key_stable_and_schema_order_independent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_key_stable_and_schema_order_independent(self, tmp_path: Path) -> None:
         j = WorkflowJournal("wf_demo-wf_01234567", tmp_path)
         try:
             k1 = j.key("agent", "l", "p", {"a": 1, "b": 2})
@@ -213,9 +210,11 @@ class TestWorkflowJournal:
         assert j.cached("agent-1") == {"v": 1}
         assert j.cached("agent-2") is MISS
         j.close()
-        lines = (tmp_path / "wf_demo-wf_01234567.journal.jsonl").read_text(
-            encoding="utf-8"
-        ).splitlines()
+        lines = (
+            (tmp_path / "wf_demo-wf_01234567.journal.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
         assert json.loads(lines[0]) == {"key": "agent-1", "value": {"v": 1}}
 
     def test_resume_loads_cache(self, tmp_path: Path) -> None:
@@ -293,9 +292,7 @@ def _state(
 
 
 class TestExecutionState:
-    async def test_agent_records_journal_and_usage(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_agent_records_journal_and_usage(self, tmp_path: Path) -> None:
         runner = MockWorkflowRunner()
         state = _state(tmp_path, runner)
         value = await state.agent("do x", label="x")
@@ -311,10 +308,7 @@ class TestExecutionState:
         value = await state.agent("do x", label="x")
         assert value == {"label": "x", "ok": True}
         assert len(runner.calls) == 1
-        cached_events = [
-            e for e in state.task.progress
-            if e.get("status") == "cached"
-        ]
+        cached_events = [e for e in state.task.progress if e.get("status") == "cached"]
         assert len(cached_events) == 1
 
     async def test_agent_budget_exceeded(self, tmp_path: Path) -> None:
@@ -350,10 +344,12 @@ class TestExecutionState:
 
     async def test_parallel_success(self, tmp_path: Path) -> None:
         state = _state(tmp_path, MockWorkflowRunner())
-        results = await state.parallel([
-            lambda: state.agent("a", label="a"),
-            lambda: state.agent("b", label="b"),
-        ])
+        results = await state.parallel(
+            [
+                lambda: state.agent("a", label="a"),
+                lambda: state.agent("b", label="b"),
+            ]
+        )
         assert [r["label"] for r in results] == ["a", "b"]
 
     async def test_parallel_fail_fast(self, tmp_path: Path) -> None:
@@ -364,10 +360,12 @@ class TestExecutionState:
 
         state = _state(tmp_path, MockWorkflowRunner(handler))
         with pytest.raises(WorkflowInputError, match="boom"):
-            await state.parallel([
-                lambda: state.agent("ok", label="ok"),
-                lambda: state.agent("bad", label="bad"),
-            ])
+            await state.parallel(
+                [
+                    lambda: state.agent("ok", label="ok"),
+                    lambda: state.agent("bad", label="bad"),
+                ]
+            )
 
     async def test_pipeline_stages(self, tmp_path: Path) -> None:
         state = _state(tmp_path, MockWorkflowRunner())
@@ -405,9 +403,7 @@ class TestExecutionState:
         with pytest.raises(WorkflowInputError, match="unknown workflow"):
             await state.workflow("nope", {})
 
-    async def test_nested_shares_budget_and_limits(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_nested_shares_budget_and_limits(self, tmp_path: Path) -> None:
         async def child(state: ExecutionState, args: dict[str, Any]) -> Any:
             return await state.agent("inner", label="inner")
 
@@ -447,9 +443,7 @@ class TestSubagentWorkflowRunner:
 
     async def test_schema_valid(self, tmp_path: Path) -> None:
         schema = {"type": "object", "required": ["x"]}
-        runner = SubagentWorkflowRunner(
-            FakeSubagentRunner(['{"x": 1}']), "m"
-        )
+        runner = SubagentWorkflowRunner(FakeSubagentRunner(['{"x": 1}']), "m")
         out = await runner.run("p", schema, "l", _ctx(tmp_path))
         assert out.value == {"x": 1}
 
@@ -465,9 +459,7 @@ class TestSubagentWorkflowRunner:
 
     async def test_schema_retry_still_invalid(self, tmp_path: Path) -> None:
         schema = {"type": "object", "required": ["x"]}
-        runner = SubagentWorkflowRunner(
-            FakeSubagentRunner(["bad", "still bad"]), "m"
-        )
+        runner = SubagentWorkflowRunner(FakeSubagentRunner(["bad", "still bad"]), "m")
         with pytest.raises(WorkflowInputError, match="invalid output"):
             await runner.run("p", schema, "l", _ctx(tmp_path))
 
@@ -490,13 +482,9 @@ class TestWorkflowTool:
         assert schema["required"] == ["name"]
         assert schema["additionalProperties"] is False
 
-    async def test_run_completes_with_artifacts(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_run_completes_with_artifacts(self, tmp_path: Path) -> None:
         tool = _tool(tmp_path, MockWorkflowRunner())
-        out = await tool.execute(
-            {"name": "demo-wf", "args": {"x": "hi"}}, _ctx(tmp_path)
-        )
+        out = await tool.execute({"name": "demo-wf", "args": {"x": "hi"}}, _ctx(tmp_path))
         assert not out.is_error
         payload = json.loads(out.content)
         run_id = payload["launched"]["runId"]
@@ -553,8 +541,7 @@ class TestWorkflowTool:
         resumed = json.loads(
             (
                 await tool2.execute(
-                    {"name": "demo-wf",
-                     "resume_from_run_id": first["launched"]["runId"]},
+                    {"name": "demo-wf", "resume_from_run_id": first["launched"]["runId"]},
                     ctx,
                 )
             ).content
@@ -571,8 +558,11 @@ class TestWorkflowTool:
             (await tool.execute({"name": "demo-wf", "args": {"x": "1"}}, ctx)).content
         )
         out = await tool.execute(
-            {"name": "demo-wf", "args": {"x": "2"},
-             "resume_from_run_id": first["launched"]["runId"]},
+            {
+                "name": "demo-wf",
+                "args": {"x": "2"},
+                "resume_from_run_id": first["launched"]["runId"],
+            },
             ctx,
         )
         assert out.is_error
@@ -589,8 +579,7 @@ class TestWorkflowTool:
             workflows={"other-wf": (other_meta, _echo_workflow)},
         )
         out = await tool2.execute(
-            {"name": "other-wf",
-             "resume_from_run_id": first["launched"]["runId"]},
+            {"name": "other-wf", "resume_from_run_id": first["launched"]["runId"]},
             ctx,
         )
         assert out.is_error
@@ -613,8 +602,7 @@ class TestWorkflowTool:
             (await tool.execute({"name": "demo-wf", "args": {"x": "1"}}, ctx)).content
         )
         await tool.execute(
-            {"name": "demo-wf",
-             "resume_from_run_id": first["launched"]["runId"]},
+            {"name": "demo-wf", "resume_from_run_id": first["launched"]["runId"]},
             ctx,
         )
         assert captured == [{"x": "1"}, {"x": "1"}]
@@ -663,9 +651,7 @@ class TestRegistry:
         async def fn(state: ExecutionState, args: dict[str, Any]) -> Any:
             return "ok"
 
-        register_workflow(
-            {"name": "test-registry-wf", "description": "d"}, fn
-        )
+        register_workflow({"name": "test-registry-wf", "description": "d"}, fn)
         try:
             assert "test-registry-wf" in WORKFLOWS
             assert WORKFLOWS["test-registry-wf"][1] is fn

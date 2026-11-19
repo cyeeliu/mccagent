@@ -12,17 +12,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-_INHERITED_FIELDS: frozenset[str] = frozenset({
-    "tenant",
-    "workspace_id",
-    "budget_id",
-    "trace_id",
-    "tags",
-})
+_INHERITED_FIELDS: frozenset[str] = frozenset(
+    {
+        "tenant",
+        "workspace_id",
+        "budget_id",
+        "trace_id",
+        "tags",
+    }
+)
 
-_SENSITIVE_FIELDS: frozenset[str] = frozenset({
-    "permission_profile_id",
-})
+_SENSITIVE_FIELDS: frozenset[str] = frozenset(
+    {
+        "permission_profile_id",
+    }
+)
 
 
 class ContextValidationError(ValueError):
@@ -65,9 +69,7 @@ class AgentContext:
         if not self.agent_id:
             raise ContextValidationError("agent_id must not be empty")
         if self.parent_agent_id == "":
-            raise ContextValidationError(
-                "parent_agent_id must be None or non-empty"
-            )
+            raise ContextValidationError("parent_agent_id must be None or non-empty")
 
     def derive_child(
         self,

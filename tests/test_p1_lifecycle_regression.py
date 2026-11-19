@@ -76,9 +76,7 @@ class StubRuntime:
 
     @property
     def capabilities(self) -> RuntimeCapabilities:
-        return RuntimeCapabilities(
-            supports_cancel=True, supports_health_check=True
-        )
+        return RuntimeCapabilities(supports_cancel=True, supports_health_check=True)
 
     async def start(self, task: str = "", *, task_id=None) -> None:
         self.start_count += 1
@@ -465,6 +463,7 @@ class TestP1_15ShutdownReport:
 
     async def test_shutdown_report_with_all_subsystems(self):
         """带 team_manager / mcp / event_source 的完整报告。"""
+
         class StubTeamManager:
             def __init__(self) -> None:
                 self.shutdown_called = False
@@ -492,9 +491,7 @@ class TestP1_15ShutdownReport:
         team = StubTeamManager()
         mcp = StubMcpManager()
         event = StubEventSource()
-        app = AgentApplication(
-            mcp_manager=mcp, event_source=event, team_manager=team
-        )
+        app = AgentApplication(mcp_manager=mcp, event_source=event, team_manager=team)
         report = await app.shutdown(timeout=5.0)
 
         assert "step2_team_manager" in report.completed_steps
@@ -519,13 +516,11 @@ class TestP1_15ShutdownReport:
         report = await app.shutdown(timeout=0.1)
         assert isinstance(report, ApplicationShutdownReport)
         assert app.state is ApplicationState.STOPPED
-        assert (
-            "step2_team_manager" in report.timed_out_steps
-            or "overall" in report.timed_out_steps
-        )
+        assert "step2_team_manager" in report.timed_out_steps or "overall" in report.timed_out_steps
 
     async def test_shutdown_step_failure_recorded(self):
         """子系统失败记录到 failed_steps。"""
+
         class FailingTeamManager:
             async def shutdown_all(self) -> None:
                 raise RuntimeError("team shutdown boom")
@@ -573,6 +568,7 @@ class TestP1_15ShutdownReport:
 
     async def test_remaining_time_prevents_long_step(self):
         """前一步消耗时间后，后续步骤使用剩余时间而非完整 timeout。"""
+
         class SlowThenFastTeam:
             def __init__(self) -> None:
                 self.delay = 0.3

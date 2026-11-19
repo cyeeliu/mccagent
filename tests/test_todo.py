@@ -65,11 +65,13 @@ def _noop_turn(tid: str) -> list[StreamEvent]:
 class TestTodoManager:
     def test_update_and_render(self) -> None:
         m = TodoManager()
-        out = m.update([
-            {"content": "step 1", "status": "pending"},
-            {"content": "step 2", "status": "in_progress"},
-            {"content": "step 3", "status": "completed"},
-        ])
+        out = m.update(
+            [
+                {"content": "step 1", "status": "pending"},
+                {"content": "step 2", "status": "in_progress"},
+                {"content": "step 3", "status": "completed"},
+            ]
+        )
         assert "[ ] step 1" in out
         assert "[>] step 2" in out
         assert "[x] step 3" in out
@@ -98,10 +100,12 @@ class TestTodoManager:
     def test_multiple_in_progress_rejected(self) -> None:
         m = TodoManager()
         with pytest.raises(ValueError, match="in_progress"):
-            m.update([
-                {"content": "a", "status": "in_progress"},
-                {"content": "b", "status": "in_progress"},
-            ])
+            m.update(
+                [
+                    {"content": "a", "status": "in_progress"},
+                    {"content": "b", "status": "in_progress"},
+                ]
+            )
 
     def test_non_list_rejected(self) -> None:
         m = TodoManager()
@@ -167,12 +171,10 @@ class TestAgentLoopReminder:
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("plan", queue)
         reminder_msgs = [
-            m for m in agent.history
+            m
+            for m in agent.history
             if m.role.value == "user"
-            and any(
-                getattr(b, "text", "").startswith("<reminder>")
-                for b in m.content
-            )
+            and any(getattr(b, "text", "").startswith("<reminder>") for b in m.content)
         ]
         assert len(reminder_msgs) == 1
 
@@ -192,9 +194,7 @@ class TestAgentLoopReminder:
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("plan", queue)
         assert not any(
-            "<reminder>" in getattr(b, "text", "")
-            for m in agent.history
-            for b in m.content
+            "<reminder>" in getattr(b, "text", "") for m in agent.history for b in m.content
         )
 
     @pytest.mark.asyncio
@@ -211,9 +211,7 @@ class TestAgentLoopReminder:
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("plan", queue)
         assert not any(
-            "<reminder>" in getattr(b, "text", "")
-            for m in agent.history
-            for b in m.content
+            "<reminder>" in getattr(b, "text", "") for m in agent.history for b in m.content
         )
 
     @pytest.mark.asyncio

@@ -198,7 +198,9 @@ class TestP0_01:
 
         task = await store.create_task("s", "d")
         handle = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="quiet-rt",
+            task.task_id,
+            "a-1",
+            runtime_id="quiet-rt",
         )
 
         # 模拟 Runtime 已完成但事件丢失：直接写 TaskStore
@@ -260,7 +262,9 @@ class TestP0_03:
         dispatcher = TaskDispatcher(store, coord)
         task = await store.create_task("s", "d")
         handle = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="task-rt",
+            task.task_id,
+            "a-1",
+            runtime_id="task-rt",
         )
 
         event = await dispatcher.wait_for_result(handle, timeout=5.0)
@@ -281,7 +285,9 @@ class TestP0_03:
         coord = RuntimeCoordinator()
         agent = _DelayedAgentLoop(delay=0.02)
         rt = InteractiveRuntimeV2(
-            agent, agent_id="test-result", task_store=store,
+            agent,
+            agent_id="test-result",
+            task_store=store,
         )
         await rt.start()
         coord.register(rt)
@@ -289,7 +295,9 @@ class TestP0_03:
         dispatcher = TaskDispatcher(store, coord)
         task = await store.create_task("s", "d")
         handle = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id=rt.runtime_id,
+            task.task_id,
+            "a-1",
+            runtime_id=rt.runtime_id,
         )
 
         event = await dispatcher.wait_for_result(handle, timeout=5.0)
@@ -317,7 +325,9 @@ class TestP0_04:
 
         task = await store.create_task("s", "d")
         handle = await dispatcher.dispatch(
-            task.task_id, "a-1", runtime_id="quiet-rt",
+            task.task_id,
+            "a-1",
+            runtime_id="quiet-rt",
         )
 
         with pytest.raises(TaskTimeoutError):

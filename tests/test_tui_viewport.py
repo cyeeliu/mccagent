@@ -12,12 +12,14 @@ from mcc_tui.viewport import InputViewport
 
 # ────────────────────────────── fixtures ──────────────────────────────
 
+
 @pytest.fixture
 def vp() -> InputViewport:
     return InputViewport()
 
 
 # ────────────────────────────── _cursor_to_line_col ──────────────────────────────
+
 
 class TestCursorToLineCol:
     def test_single_line(self) -> None:
@@ -40,6 +42,7 @@ class TestCursorToLineCol:
 
 
 # ────────────────────────────── _horizontal_slice ──────────────────────────────
+
 
 class TestHorizontalSlice:
     def test_no_scroll(self) -> None:
@@ -66,6 +69,7 @@ class TestHorizontalSlice:
 
 
 # ────────────────────────────── update ──────────────────────────────
+
 
 class TestUpdate:
     def test_cursor_visible_no_scroll(self, vp: InputViewport) -> None:
@@ -117,6 +121,7 @@ class TestUpdate:
 
 # ────────────────────────────── visible_lines ──────────────────────────────
 
+
 class TestVisibleLines:
     def test_short_text(self, vp: InputViewport) -> None:
         vp.update("hello", 0, 80, 1)
@@ -159,6 +164,7 @@ class TestVisibleLines:
 
 # ────────────────────────────── cursor_visible_pos ──────────────────────────────
 
+
 class TestCursorVisiblePos:
     def test_no_scroll(self, vp: InputViewport) -> None:
         vp.update("hello", 2, 80, 1)
@@ -190,6 +196,7 @@ class TestCursorVisiblePos:
 
 # ────────────────────────────── reset ──────────────────────────────
 
+
 class TestReset:
     def test_reset_clears_scroll(self, vp: InputViewport) -> None:
         vp.scroll_x = 10
@@ -200,6 +207,7 @@ class TestReset:
 
 
 # ────────────────────────────── integration: cursor always visible ──────────────────────────────
+
 
 class TestCursorAlwaysVisible:
     @pytest.mark.parametrize(

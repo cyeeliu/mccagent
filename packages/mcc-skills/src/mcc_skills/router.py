@@ -18,9 +18,7 @@ class SkillRouter:
         lines = ["# Available Skills"]
         for sk in self.skills.values():
             lines.append(f"- **{sk.manifest.name}** — {sk.manifest.description}")
-        lines.append(
-            "Use the load_skill tool to read the full instructions when a skill applies."
-        )
+        lines.append("Use the load_skill tool to read the full instructions when a skill applies.")
         return "\n".join(lines)
 
     def match_slash(self, user_input: str) -> Skill | None:

@@ -80,8 +80,8 @@ class AgentRun:
     iterations: int
     total_usage: Usage
     cost_usd: float
-    cache_hit_rate: float          # 缓存命中率
-    cost_breakdown: list[TurnCost] # 逐轮成本
+    cache_hit_rate: float  # 缓存命中率
+    cost_breakdown: list[TurnCost]  # 逐轮成本
 ```
 
 ### cache_hit_rate

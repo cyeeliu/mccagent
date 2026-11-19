@@ -74,9 +74,7 @@ class OpenAiClient:
             sys_text = (
                 req.system
                 if isinstance(req.system, str)
-                else "\n\n".join(
-                    b.text for b in req.system if isinstance(b, TextBlock)
-                )
+                else "\n\n".join(b.text for b in req.system if isinstance(b, TextBlock))
             )
             if sys_text:
                 messages.append({"role": "system", "content": sys_text})

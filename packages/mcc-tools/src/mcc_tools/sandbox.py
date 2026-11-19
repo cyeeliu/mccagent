@@ -61,13 +61,15 @@ class ExecTimeout(Exception):
 class SandboxExecutor(Protocol):
     """命令执行器协议：Direct / Restrictions / Bubblewrap 共用。"""
 
-    def run(self, command: str, cwd: Path, timeout: float) -> Awaitable[ExecResult]:
-        ...
+    def run(self, command: str, cwd: Path, timeout: float) -> Awaitable[ExecResult]: ...
 
 
 async def _run_argv(
-    argv: list[str], cwd: Path, timeout: float,
-    *, env: dict[str, str] | None = None,
+    argv: list[str],
+    cwd: Path,
+    timeout: float,
+    *,
+    env: dict[str, str] | None = None,
     preexec_fn=None,
 ) -> ExecResult:
     """spawn → communicate → 超时 kill 的公共底座。"""
@@ -90,9 +92,7 @@ async def _run_argv(
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         await proc.wait()
         raise ExecTimeout(timeout) from None
-    return ExecResult(
-        returncode=proc.returncode or 0, stdout=stdout, stderr=stderr
-    )
+    return ExecResult(returncode=proc.returncode or 0, stdout=stdout, stderr=stderr)
 
 
 class DirectExecutor:
@@ -193,11 +193,15 @@ class BubblewrapExecutor:
         for src in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
             argv += ["--ro-bind", src, src]
         argv += [
-            "--proc", "/proc",
-            "--dev", "/dev",
-            "--tmpfs", "/tmp",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--tmpfs",
+            "/tmp",
             "--die-with-parent",
-            "--chdir", str(cwd),
+            "--chdir",
+            str(cwd),
         ]
         if self._cfg.network == "off":
             argv.append("--unshare-net")
@@ -212,9 +216,7 @@ class BubblewrapExecutor:
         env = {k: os.environ[k] for k in self._cfg.env_allow if k in os.environ}
         env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
         env["HOME"] = str(home)
-        return await _run_argv(
-            self.build_argv(command, cwd), cwd, timeout, env=env
-        )
+        return await _run_argv(self.build_argv(command, cwd), cwd, timeout, env=env)
 
 
 def probe_bubblewrap() -> bool:
@@ -229,10 +231,15 @@ def probe_bubblewrap() -> bool:
         result = subprocess.run(
             [
                 "bwrap",
-                "--ro-bind", "/usr", "/usr",
-                "--dev", "/dev",
-                "--proc", "/proc",
-                "--tmpfs", "/tmp",
+                "--ro-bind",
+                "/usr",
+                "/usr",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--tmpfs",
+                "/tmp",
                 "true",
             ],
             capture_output=True,
@@ -267,8 +274,7 @@ def build_executor(config: SandboxConfig):
     if probe_bubblewrap():
         return BubblewrapExecutor(config)
     print(
-        "沙箱 auto 档：bwrap 不可用，降级为 restrictions（资源限制，"
-        "不含网络隔离）",
+        "沙箱 auto 档：bwrap 不可用，降级为 restrictions（资源限制，不含网络隔离）",
         file=sys.stderr,
     )
     return RestrictionsExecutor(config)

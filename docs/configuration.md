@@ -101,8 +101,8 @@ CLI 与评测（mcc-eval）调用同一 API，不存在第二份实现：
 ```python
 from mcc_config import resolve_model, build_llm_provider
 
-model = resolve_model("main", explicit_arg, config=config)   # 解析模型名
-llm = build_llm_provider(base_url=None, config=config)        # 构建 provider
+model = resolve_model("main", explicit_arg, config=config)  # 解析模型名
+llm = build_llm_provider(base_url=None, config=config)  # 构建 provider
 ```
 
 **解析优先级**（每类型独立生效）：

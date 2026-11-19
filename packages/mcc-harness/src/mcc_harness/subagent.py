@@ -105,9 +105,7 @@ class PermissionChannel:
                     timestamp=time.time(),
                 )
             )
-            await self._responses.put(
-                PermissionDecision(request_id=ev.id, action="allow")
-            )
+            await self._responses.put(PermissionDecision(request_id=ev.id, action="allow"))
         else:
             await self._pending.put(
                 PermissionChannelRequest(
@@ -249,9 +247,7 @@ class BudgetLedger:
     def total_cost_usd(self) -> float:
         return self._total_cost_usd
 
-    async def allocate(
-        self, agent_id: str, tokens: int
-    ) -> BudgetAllocation | None:
+    async def allocate(self, agent_id: str, tokens: int) -> BudgetAllocation | None:
         """预分配 token 额度。余额不足时返回 None。"""
         async with self._lock:
             already = sum(
@@ -261,9 +257,7 @@ class BudgetLedger:
             )
             if already + tokens > self._total_tokens:
                 return None
-            alloc = BudgetAllocation(
-                agent_id=agent_id, allocated_tokens=tokens
-            )
+            alloc = BudgetAllocation(agent_id=agent_id, allocated_tokens=tokens)
             self._allocations[agent_id] = alloc
             return alloc
 
@@ -309,9 +303,7 @@ class BudgetLedger:
         """未分配的剩余 token 额度。"""
         async with self._lock:
             allocated = sum(
-                a.allocated_tokens
-                for a in self._allocations.values()
-                if not a.released
+                a.allocated_tokens for a in self._allocations.values() if not a.released
             )
             return max(0, self._total_tokens - allocated)
 
@@ -321,9 +313,7 @@ class BudgetLedger:
 
     async def total_consumed_cost_usd(self) -> float:
         async with self._lock:
-            return sum(
-                a.consumed_cost_usd for a in self._allocations.values()
-            )
+            return sum(a.consumed_cost_usd for a in self._allocations.values())
 
     async def is_exceeded(self) -> bool:
         """总消耗是否超过总预算。"""
@@ -368,9 +358,7 @@ class BudgetLedger:
             return result
 
 
-def token_budget_to_usd(
-    budget_tokens: int, model: str, *, input_ratio: float = 0.7
-) -> float:
+def token_budget_to_usd(budget_tokens: int, model: str, *, input_ratio: float = 0.7) -> float:
     """token 总预算折算为单次运行的美元上限。
 
     按输入/输出流向加权估算（默认 70% 输入、30% 输出），
@@ -378,9 +366,7 @@ def token_budget_to_usd(
     """
     in_m, out_m = model_price_per_1m(model)
     output_ratio = 1.0 - input_ratio
-    return budget_tokens / 1_000_000.0 * (
-        in_m * input_ratio + out_m * output_ratio
-    )
+    return budget_tokens / 1_000_000.0 * (in_m * input_ratio + out_m * output_ratio)
 
 
 CODE_EXPLORER_SYSTEM = """\
@@ -401,10 +387,7 @@ TEST_RUNNER_SYSTEM = """\
 最终回答不超过 300 字，并给出修复建议。
 如果不确定，明确说明 "I am not confident about ..."。"""
 
-SUMMARIZER_SYSTEM = (
-    "你是一个只回答摘要的子 Agent。不要使用工具，"
-    "直接基于给定任务压缩输出。"
-)
+SUMMARIZER_SYSTEM = "你是一个只回答摘要的子 Agent。不要使用工具，直接基于给定任务压缩输出。"
 
 
 def default_presets(
@@ -509,9 +492,7 @@ class SubagentRunner:
 
             allocation: BudgetAllocation | None = None
             if self._budget_ledger is not None:
-                allocation = await self._budget_ledger.allocate(
-                    ctx.session_id, spec.budget_tokens
-                )
+                allocation = await self._budget_ledger.allocate(ctx.session_id, spec.budget_tokens)
                 if allocation is None:
                     return SubagentResult(
                         name=spec.name,
@@ -596,8 +577,7 @@ class SubagentRunner:
             except TimeoutError:
                 status = SubagentStatus.TIMEOUT
                 summary = (
-                    f"subagent timed out after {spec.timeout_secs:.0f}s; "
-                    "partial work was cancelled"
+                    f"subagent timed out after {spec.timeout_secs:.0f}s; partial work was cancelled"
                 )
                 stopped_reason = "timeout"
             except Exception as e:
@@ -710,9 +690,7 @@ class SpawnSubagentTool:
 
     async def execute(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         if ctx.depth >= self.max_depth:
-            return ToolOutput.err(
-                f"subagent depth limit {self.max_depth} reached"
-            )
+            return ToolOutput.err(f"subagent depth limit {self.max_depth} reached")
 
         preset = str(input.get("preset", ""))
         task = str(input.get("task", ""))
@@ -725,9 +703,7 @@ class SpawnSubagentTool:
 
         return await self._run_via_runtime(spec, task, ctx)
 
-    async def _run_via_runtime(
-        self, spec: SubagentSpec, task: str, ctx: ToolContext
-    ) -> ToolOutput:
+    async def _run_via_runtime(self, spec: SubagentSpec, task: str, ctx: ToolContext) -> ToolOutput:
         """通过 Runtime 执行，由 Coordinator 管理生命周期。
 
         统一使用 TaskRuntime + SubagentExecutor 执行，
@@ -807,6 +783,7 @@ class SpawnSubagentTool:
                 return result
             await asyncio.sleep(0.05)
         return None
+
 
 __all__ = [
     "CODE_EXPLORER_SYSTEM",

@@ -443,9 +443,7 @@ class TestConcurrentSafety:
         n = 20
 
         async def register_one(i: int) -> None:
-            coord.register(
-                InteractiveRuntimeV2(FakeAgent(), runtime_id=f"cc-{i}")
-            )
+            coord.register(InteractiveRuntimeV2(FakeAgent(), runtime_id=f"cc-{i}"))
 
         await asyncio.gather(*(register_one(i) for i in range(n)))
         assert coord.count == n
@@ -457,9 +455,7 @@ class TestConcurrentSafety:
 
         async def try_register() -> None:
             try:
-                coord.register(
-                    InteractiveRuntimeV2(FakeAgent(), runtime_id="dup-cc")
-                )
+                coord.register(InteractiveRuntimeV2(FakeAgent(), runtime_id="dup-cc"))
             except RuntimeError as exc:
                 errors.append(exc)
 
@@ -478,7 +474,9 @@ class TestGetByAgent:
     def test_find_by_agent_id(self):
         coord = RuntimeCoordinator()
         rt = InteractiveRuntimeV2(
-            FakeAgent(), runtime_id="r1", agent_id="agent-alpha",
+            FakeAgent(),
+            runtime_id="r1",
+            agent_id="agent-alpha",
         )
         coord.register(rt)
         found = coord.get_by_agent("agent-alpha")
@@ -491,13 +489,19 @@ class TestGetByAgent:
     def test_find_among_multiple(self):
         coord = RuntimeCoordinator()
         rt1 = InteractiveRuntimeV2(
-            FakeAgent(), runtime_id="r1", agent_id="a1",
+            FakeAgent(),
+            runtime_id="r1",
+            agent_id="a1",
         )
         rt2 = InteractiveRuntimeV2(
-            FakeAgent(), runtime_id="r2", agent_id="a2",
+            FakeAgent(),
+            runtime_id="r2",
+            agent_id="a2",
         )
         rt3 = InteractiveRuntimeV2(
-            FakeAgent(), runtime_id="r3", agent_id="a3",
+            FakeAgent(),
+            runtime_id="r3",
+            agent_id="a3",
         )
         coord.register(rt1)
         coord.register(rt2)
@@ -507,10 +511,14 @@ class TestGetByAgent:
     def test_returns_first_match(self):
         coord = RuntimeCoordinator()
         rt1 = InteractiveRuntimeV2(
-            FakeAgent(), runtime_id="r1", agent_id="dup-agent",
+            FakeAgent(),
+            runtime_id="r1",
+            agent_id="dup-agent",
         )
         rt2 = InteractiveRuntimeV2(
-            FakeAgent(), runtime_id="r2", agent_id="dup-agent",
+            FakeAgent(),
+            runtime_id="r2",
+            agent_id="dup-agent",
         )
         coord.register(rt1)
         coord.register(rt2)
@@ -556,6 +564,7 @@ class _HealthCheckStub:
 
     async def wait_done(self, *, timeout=None):
         from mcc_harness import RuntimeResult
+
         return RuntimeStatus.COMPLETED, RuntimeResult.success(self._rid)
 
     async def health_check(self) -> Any:
@@ -624,6 +633,7 @@ class TestHealthCheckAll:
 
             async def wait_done(self, *, timeout=None):
                 from mcc_harness import RuntimeResult
+
                 return RuntimeStatus.COMPLETED, RuntimeResult.success(self._rid)
 
             async def health_check(self):

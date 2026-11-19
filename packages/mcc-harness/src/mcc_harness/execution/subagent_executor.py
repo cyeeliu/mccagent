@@ -61,11 +61,15 @@ class SubagentExecutor:
         try:
             result = await self._runner.run(self._spec, task.objective, self._ctx)
         except asyncio.CancelledError:
-            return self._build_result(task, SubagentResult(
-                name=self._spec.name,
-                summary="任务被取消",
-                status=SubagentStatus.CANCELLED,
-            ), started_at)
+            return self._build_result(
+                task,
+                SubagentResult(
+                    name=self._spec.name,
+                    summary="任务被取消",
+                    status=SubagentStatus.CANCELLED,
+                ),
+                started_at,
+            )
         except Exception as exc:
             return self._error_result(task, "execution_error", str(exc), started_at)
 

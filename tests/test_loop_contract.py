@@ -63,10 +63,9 @@ class RecordingGuard:
 
 
 def _make_agent(ctx: ToolContext, llm=None, **kw):
-    builder = (
-        AgentLoopBuilder(llm or MockLlm([single_text_turn("done")]), ToolRegistry(), ctx)
-        .model("claude-haiku-4-5-20251001")
-    )
+    builder = AgentLoopBuilder(
+        llm or MockLlm([single_text_turn("done")]), ToolRegistry(), ctx
+    ).model("claude-haiku-4-5-20251001")
     return builder, llm
 
 
@@ -91,20 +90,12 @@ class TestIterationContract:
         sink = _Sink()
         builder, _ = _make_agent(ctx)
         agent = (
-            builder.turn_timeout(600)
-            .observability(sink)
-            .background(background)
-            .cron(cron)
-            .build()
+            builder.turn_timeout(600).observability(sink).background(background).cron(cron).build()
         )
         names = [it.name for it in agent._interceptors]
-        assert names == [
-            "turn_timeout", "observability", "background", "cron", "budget"
-        ]
+        assert names == ["turn_timeout", "observability", "background", "cron", "budget"]
 
-    async def test_registration_order_is_execution_order(
-        self, ctx: ToolContext
-    ) -> None:
+    async def test_registration_order_is_execution_order(self, ctx: ToolContext) -> None:
         log: list[str] = []
         builder, _ = _make_agent(ctx)
         agent = (
@@ -148,19 +139,13 @@ class TestIterationContract:
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("hi", queue)
         assert captured
-        texts = [
-            getattr(b, "text", "")
-            for m in captured[0]
-            for b in m.content
-        ]
+        texts = [getattr(b, "text", "") for m in captured[0] for b in m.content]
         assert "injected-content" in texts
 
     async def test_notice_reaches_event_stream(self, ctx: ToolContext) -> None:
         log: list[str] = []
         builder, _ = _make_agent(ctx)
-        agent = builder.interceptor(
-            RecordingInterceptor("inj", log, inject="x")
-        ).build()
+        agent = builder.interceptor(RecordingInterceptor("inj", log, inject="x")).build()
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("hi", queue)
         notices = []
@@ -177,9 +162,7 @@ class TestGuardContract:
         log: list[str] = []
         builder, _ = _make_agent(ctx)
         agent = (
-            builder.guard(RecordingGuard("outer", log))
-            .guard(RecordingGuard("inner", log))
-            .build()
+            builder.guard(RecordingGuard("outer", log)).guard(RecordingGuard("inner", log)).build()
         )
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("hi", queue)
@@ -190,9 +173,7 @@ class TestGuardContract:
             "guard-out:outer",
         ]
 
-    async def test_reliability_guard_registered_by_default(
-        self, ctx: ToolContext
-    ) -> None:
+    async def test_reliability_guard_registered_by_default(self, ctx: ToolContext) -> None:
         builder, _ = _make_agent(ctx)
         agent = builder.build()
         assert [g.name for g in agent._guards] == ["reliability"]
@@ -212,9 +193,7 @@ class TestGuardContract:
 
 
 class TestBuilderCompatibility:
-    async def test_old_builder_methods_map_to_interceptors(
-        self, ctx: ToolContext
-    ) -> None:
+    async def test_old_builder_methods_map_to_interceptors(self, ctx: ToolContext) -> None:
         """旧 builder 方法注册的拦截器名与内置顺序一致。"""
         from mcc_harness.background import BackgroundTaskManager
         from mcc_tools.sandbox import DirectExecutor
@@ -225,9 +204,7 @@ class TestBuilderCompatibility:
         names = [it.name for it in agent._interceptors]
         assert names == ["turn_timeout", "background", "budget"]
 
-    async def test_custom_interceptors_run_after_builtins(
-        self, ctx: ToolContext
-    ) -> None:
+    async def test_custom_interceptors_run_after_builtins(self, ctx: ToolContext) -> None:
         """协议注册的自定义拦截器在内置段之后执行。"""
         from mcc_harness.background import BackgroundTaskManager
         from mcc_tools.sandbox import DirectExecutor
@@ -244,9 +221,7 @@ class TestBuilderCompatibility:
         assert names.index("background") < names.index("custom")
         assert names.index("budget") < names.index("custom")
 
-    async def test_behavior_unchanged_with_retry_defaults(
-        self, ctx: ToolContext
-    ) -> None:
+    async def test_behavior_unchanged_with_retry_defaults(self, ctx: ToolContext) -> None:
         """无注入时行为回归：默认重试守卫生效，一轮即返回。"""
         builder, _ = _make_agent(ctx)
         agent = builder.build()

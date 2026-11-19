@@ -150,6 +150,7 @@ class AgentLoopExecutor:
         message: str,
     ) -> RuntimeResult:
         from mcc_core.runtime import RuntimeErrorInfo
+
         return RuntimeResult(
             task_id=task.task_id,
             attempt_id=task.attempt_id,

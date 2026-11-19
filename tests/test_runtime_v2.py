@@ -135,13 +135,15 @@ class TestInteractiveRuntimeV2Contract:
     """InteractiveRuntimeV2 契约测试。"""
 
     async def test_initial_status_created(
-        self, interactive_runtime_factory: Any,
+        self,
+        interactive_runtime_factory: Any,
     ) -> None:
         rt = await interactive_runtime_factory()
         assert rt.status is RuntimeStatus.CREATED
 
     async def test_start_transitions_to_ready(
-        self, interactive_runtime_factory: Any,
+        self,
+        interactive_runtime_factory: Any,
     ) -> None:
         rt = await interactive_runtime_factory()
         await rt.start()
@@ -149,7 +151,8 @@ class TestInteractiveRuntimeV2Contract:
         await rt.stop()
 
     async def test_start_twice_raises(
-        self, interactive_runtime_factory: Any,
+        self,
+        interactive_runtime_factory: Any,
     ) -> None:
         rt = await interactive_runtime_factory()
         await rt.start()
@@ -158,7 +161,9 @@ class TestInteractiveRuntimeV2Contract:
         await rt.stop()
 
     async def test_submit_before_start_raises(
-        self, interactive_runtime_factory: Any, make_task: Any,
+        self,
+        interactive_runtime_factory: Any,
+        make_task: Any,
     ) -> None:
         from mcc_core.runtime.errors import RuntimeNotReadyError
 
@@ -168,7 +173,9 @@ class TestInteractiveRuntimeV2Contract:
             await rt.submit(task)
 
     async def test_submit_returns_handle(
-        self, interactive_runtime_factory: Any, make_task: Any,
+        self,
+        interactive_runtime_factory: Any,
+        make_task: Any,
     ) -> None:
         from mcc_core.runtime import TaskHandle
 
@@ -183,7 +190,8 @@ class TestInteractiveRuntimeV2Contract:
         await rt.stop()
 
     async def test_stop_transitions_to_stopped(
-        self, interactive_runtime_factory: Any,
+        self,
+        interactive_runtime_factory: Any,
     ) -> None:
         rt = await interactive_runtime_factory()
         await rt.start()
@@ -191,7 +199,8 @@ class TestInteractiveRuntimeV2Contract:
         assert rt.status is RuntimeStatus.STOPPED
 
     async def test_stop_is_idempotent(
-        self, interactive_runtime_factory: Any,
+        self,
+        interactive_runtime_factory: Any,
     ) -> None:
         rt = await interactive_runtime_factory()
         await rt.start()
@@ -200,7 +209,8 @@ class TestInteractiveRuntimeV2Contract:
         assert rt.status is RuntimeStatus.STOPPED
 
     async def test_health_check(
-        self, interactive_runtime_factory: Any,
+        self,
+        interactive_runtime_factory: Any,
     ) -> None:
         from mcc_core.runtime import RuntimeHealth
 
@@ -212,7 +222,8 @@ class TestInteractiveRuntimeV2Contract:
         await rt.stop()
 
     async def test_pause_unsupported(
-        self, interactive_runtime_factory: Any,
+        self,
+        interactive_runtime_factory: Any,
     ) -> None:
         from mcc_core.runtime.errors import UnsupportedOperationError
 
@@ -229,7 +240,8 @@ class TestInteractiveRuntimeV2Contract:
         assert not rt.capabilities.supports_multiple_tasks
 
     async def test_events_emitted(
-        self, interactive_runtime_factory: Any,
+        self,
+        interactive_runtime_factory: Any,
     ) -> None:
         from mcc_core.runtime import RuntimeEvent
 
@@ -264,13 +276,15 @@ class TestTaskRuntimeContract:
     """TaskRuntime 契约测试。"""
 
     async def test_initial_status_created(
-        self, task_runtime_factory: Any,
+        self,
+        task_runtime_factory: Any,
     ) -> None:
         rt = await task_runtime_factory()
         assert rt.status is RuntimeStatus.CREATED
 
     async def test_start_transitions_to_ready(
-        self, task_runtime_factory: Any,
+        self,
+        task_runtime_factory: Any,
     ) -> None:
         rt = await task_runtime_factory()
         await rt.start()
@@ -278,7 +292,9 @@ class TestTaskRuntimeContract:
         await rt.stop()
 
     async def test_submit_returns_handle(
-        self, task_runtime_factory: Any, make_task: Any,
+        self,
+        task_runtime_factory: Any,
+        make_task: Any,
     ) -> None:
         from mcc_core.runtime import TaskHandle
 
@@ -292,7 +308,9 @@ class TestTaskRuntimeContract:
         await rt.stop()
 
     async def test_submit_executes_task(
-        self, task_runtime_factory: Any, make_task: Any,
+        self,
+        task_runtime_factory: Any,
+        make_task: Any,
     ) -> None:
         rt = await task_runtime_factory()
         await rt.start()
@@ -306,7 +324,9 @@ class TestTaskRuntimeContract:
         await rt.stop()
 
     async def test_cancel_task(
-        self, task_runtime_factory: Any, make_task: Any,
+        self,
+        task_runtime_factory: Any,
+        make_task: Any,
     ) -> None:
         from mcc_harness.execution.cancellation import CancellationToken
         from mcc_harness.runtime.task_runtime import TaskRuntime
@@ -322,7 +342,8 @@ class TestTaskRuntimeContract:
         await rt.stop()
 
     async def test_stop_transitions_to_stopped(
-        self, task_runtime_factory: Any,
+        self,
+        task_runtime_factory: Any,
     ) -> None:
         rt = await task_runtime_factory()
         await rt.start()
@@ -330,7 +351,8 @@ class TestTaskRuntimeContract:
         assert rt.status is RuntimeStatus.STOPPED
 
     async def test_pause_unsupported(
-        self, task_runtime_factory: Any,
+        self,
+        task_runtime_factory: Any,
     ) -> None:
         from mcc_core.runtime.errors import UnsupportedOperationError
 
@@ -347,7 +369,8 @@ class TestTaskRuntimeContract:
         assert not rt.capabilities.supports_multiple_tasks
 
     async def test_health_check(
-        self, task_runtime_factory: Any,
+        self,
+        task_runtime_factory: Any,
     ) -> None:
         from mcc_core.runtime import RuntimeHealth
 
@@ -359,7 +382,8 @@ class TestTaskRuntimeContract:
         await rt.stop()
 
     async def test_events_on_lifecycle(
-        self, task_runtime_factory: Any,
+        self,
+        task_runtime_factory: Any,
     ) -> None:
         from mcc_core.runtime import RuntimeEvent
 
@@ -398,6 +422,7 @@ class TestPersistentRuntimeV2:
 
         class StubTeammate:
             spec = type("S", (), {"name": "test"})()
+
             def runtime_status(self) -> Any: ...
             def notify(self) -> None: ...
             def alive(self) -> bool: ...
@@ -421,8 +446,11 @@ class TestPersistentRuntimeV2:
         class StubTeammate:
             spec = type("S", (), {"name": "test"})()
             runtime_status = RuntimeStatus.CREATED
+
             def notify(self) -> None: ...
-            def alive(self) -> bool: return False
+            def alive(self) -> bool:
+                return False
+
             async def start(self, *a: Any, **k: Any) -> None: ...
             async def shutdown(self, *a: Any, **k: Any) -> None: ...
             def set_task_future(self, *a: Any) -> None: ...

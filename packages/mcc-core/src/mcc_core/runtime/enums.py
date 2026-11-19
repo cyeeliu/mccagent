@@ -64,21 +64,27 @@ class RuntimeEventType(StrEnum):
 _RUNTIME_TRANSITIONS: dict[RuntimeStatus, frozenset[RuntimeStatus]] = {
     RuntimeStatus.CREATED: frozenset({RuntimeStatus.STARTING, RuntimeStatus.FAILED}),
     RuntimeStatus.STARTING: frozenset({RuntimeStatus.READY, RuntimeStatus.FAILED}),
-    RuntimeStatus.READY: frozenset({
-        RuntimeStatus.PAUSING,
-        RuntimeStatus.STOPPING,
-        RuntimeStatus.FAILED,
-    }),
-    RuntimeStatus.PAUSING: frozenset({
-        RuntimeStatus.PAUSED,
-        RuntimeStatus.READY,
-        RuntimeStatus.FAILED,
-    }),
-    RuntimeStatus.PAUSED: frozenset({
-        RuntimeStatus.READY,
-        RuntimeStatus.STOPPING,
-        RuntimeStatus.FAILED,
-    }),
+    RuntimeStatus.READY: frozenset(
+        {
+            RuntimeStatus.PAUSING,
+            RuntimeStatus.STOPPING,
+            RuntimeStatus.FAILED,
+        }
+    ),
+    RuntimeStatus.PAUSING: frozenset(
+        {
+            RuntimeStatus.PAUSED,
+            RuntimeStatus.READY,
+            RuntimeStatus.FAILED,
+        }
+    ),
+    RuntimeStatus.PAUSED: frozenset(
+        {
+            RuntimeStatus.READY,
+            RuntimeStatus.STOPPING,
+            RuntimeStatus.FAILED,
+        }
+    ),
     RuntimeStatus.STOPPING: frozenset({RuntimeStatus.STOPPED, RuntimeStatus.FAILED}),
     RuntimeStatus.STOPPED: frozenset(),
     RuntimeStatus.FAILED: frozenset(),
@@ -87,24 +93,30 @@ _RUNTIME_TRANSITIONS: dict[RuntimeStatus, frozenset[RuntimeStatus]] = {
 _TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PENDING: frozenset({TaskStatus.QUEUED, TaskStatus.DISPATCHED, TaskStatus.CANCELLED}),
     TaskStatus.QUEUED: frozenset({TaskStatus.DISPATCHED, TaskStatus.CANCELLED}),
-    TaskStatus.DISPATCHED: frozenset({
-        TaskStatus.ACCEPTED,
-        TaskStatus.FAILED,
-        TaskStatus.CANCELLED,
-    }),
-    TaskStatus.ACCEPTED: frozenset({
-        TaskStatus.RUNNING,
-        TaskStatus.FAILED,
-        TaskStatus.CANCELLED,
-        TaskStatus.DISPATCHED,
-    }),
-    TaskStatus.RUNNING: frozenset({
-        TaskStatus.SUCCEEDED,
-        TaskStatus.FAILED,
-        TaskStatus.CANCELLED,
-        TaskStatus.TIMED_OUT,
-        TaskStatus.DISPATCHED,
-    }),
+    TaskStatus.DISPATCHED: frozenset(
+        {
+            TaskStatus.ACCEPTED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }
+    ),
+    TaskStatus.ACCEPTED: frozenset(
+        {
+            TaskStatus.RUNNING,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+            TaskStatus.DISPATCHED,
+        }
+    ),
+    TaskStatus.RUNNING: frozenset(
+        {
+            TaskStatus.SUCCEEDED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+            TaskStatus.TIMED_OUT,
+            TaskStatus.DISPATCHED,
+        }
+    ),
     TaskStatus.SUCCEEDED: frozenset(),
     TaskStatus.FAILED: frozenset({TaskStatus.DISPATCHED}),
     TaskStatus.CANCELLED: frozenset(),
@@ -112,12 +124,14 @@ _TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
 }
 
 RUNTIME_TERMINAL_STATUSES = frozenset({RuntimeStatus.STOPPED, RuntimeStatus.FAILED})
-TASK_TERMINAL_STATUSES = frozenset({
-    TaskStatus.SUCCEEDED,
-    TaskStatus.FAILED,
-    TaskStatus.CANCELLED,
-    TaskStatus.TIMED_OUT,
-})
+TASK_TERMINAL_STATUSES = frozenset(
+    {
+        TaskStatus.SUCCEEDED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+        TaskStatus.TIMED_OUT,
+    }
+)
 
 
 def is_valid_runtime_transition(source: RuntimeStatus, target: RuntimeStatus) -> bool:

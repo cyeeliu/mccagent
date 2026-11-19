@@ -45,13 +45,19 @@ async def test_stream_parses_usage_tail_chunk() -> None:
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            content=_sse([
-                {"choices": [{"delta": {"content": "he"}, "finish_reason": None}]},
-                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
-                {"choices": [], "usage": {
-                    "prompt_tokens": 1520, "completion_tokens": 310,
-                }},
-            ]),
+            content=_sse(
+                [
+                    {"choices": [{"delta": {"content": "he"}, "finish_reason": None}]},
+                    {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 1520,
+                            "completion_tokens": 310,
+                        },
+                    },
+                ]
+            ),
         )
 
     client = _client_with(httpx.MockTransport(handler))
@@ -71,9 +77,11 @@ async def test_stream_without_usage_chunk_keeps_zero() -> None:
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            content=_sse([
-                {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
-            ]),
+            content=_sse(
+                [
+                    {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
+                ]
+            ),
         )
 
     client = _client_with(httpx.MockTransport(handler))
@@ -90,20 +98,48 @@ async def test_stream_tool_calls_with_usage() -> None:
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            content=_sse([
-                {"choices": [{"delta": {
-                    "tool_calls": [{"index": 0, "id": "call_1",
-                                    "function": {"name": "run_bash",
-                                                 "arguments": "{\"command\":"}}],
-                }, "finish_reason": None}]},
-                {"choices": [{"delta": {
-                    "tool_calls": [{"index": 0,
-                                    "function": {"arguments": "\"ls\"}"}}],
-                }, "finish_reason": "tool_calls"}]},
-                {"choices": [], "usage": {
-                    "prompt_tokens": 900, "completion_tokens": 80,
-                }},
-            ]),
+            content=_sse(
+                [
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_1",
+                                            "function": {
+                                                "name": "run_bash",
+                                                "arguments": '{"command":',
+                                            },
+                                        }
+                                    ],
+                                },
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {"index": 0, "function": {"arguments": '"ls"}'}}
+                                    ],
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 900,
+                            "completion_tokens": 80,
+                        },
+                    },
+                ]
+            ),
         )
 
     client = _client_with(httpx.MockTransport(handler))

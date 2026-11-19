@@ -99,9 +99,7 @@ class _TeammateExecutorAdapter:
         **kwargs: Any,
     ) -> CoreRuntimeResult:
         _ensure_mappings()
-        future: asyncio.Future[tuple[Any, str]] = (
-            asyncio.get_running_loop().create_future()
-        )
+        future: asyncio.Future[tuple[Any, str]] = asyncio.get_running_loop().create_future()
         self._teammate.set_task_future(task.task_id, future)
         await self._bus.send(
             self._lead_name,
@@ -446,7 +444,10 @@ class PersistentRuntimeV2:
         return tid
 
     async def wait_task(
-        self, task_id: str, *, timeout: float | None = None,
+        self,
+        task_id: str,
+        *,
+        timeout: float | None = None,
     ) -> RuntimeResult:
         """兼容 V1 接口：等待任务完成并返回 RuntimeResult。"""
         future = self._task_futures.get(task_id)
@@ -460,13 +461,15 @@ class PersistentRuntimeV2:
         try:
             if timeout is not None:
                 result = await asyncio.wait_for(
-                    asyncio.shield(future), timeout=timeout,
+                    asyncio.shield(future),
+                    timeout=timeout,
                 )
             else:
                 result = await asyncio.shield(future)
         except TimeoutError:
             raise WaitTimeoutError(
-                self._runtime_id, timeout or 0.0,
+                self._runtime_id,
+                timeout or 0.0,
             ) from None
         except asyncio.CancelledError:
             return _terminal_result(
@@ -478,7 +481,8 @@ class PersistentRuntimeV2:
 
         if isinstance(result, CoreRuntimeResult):
             status = _TASK_STATUS_TO_RUNTIME.get(
-                result.status, RuntimeStatus.FAILED,
+                result.status,
+                RuntimeStatus.FAILED,
             )
             return _terminal_result(
                 self._runtime_id,

@@ -223,15 +223,9 @@ class TestList:
         assert len(persistent) == 1
 
     def test_list_combined_filters(self, registry):
-        registry.register(
-            make_descriptor("a", "A", tenant="t1", mode=RuntimeMode.PERSISTENT)
-        )
-        registry.register(
-            make_descriptor("b", "B", tenant="t1", mode=RuntimeMode.EPHEMERAL)
-        )
-        registry.register(
-            make_descriptor("c", "C", tenant="t2", mode=RuntimeMode.PERSISTENT)
-        )
+        registry.register(make_descriptor("a", "A", tenant="t1", mode=RuntimeMode.PERSISTENT))
+        registry.register(make_descriptor("b", "B", tenant="t1", mode=RuntimeMode.EPHEMERAL))
+        registry.register(make_descriptor("c", "C", tenant="t2", mode=RuntimeMode.PERSISTENT))
         result = registry.list(tenant="t1", mode=RuntimeMode.PERSISTENT)
         assert len(result) == 1
         assert result[0].agent_id == "a"
@@ -244,80 +238,52 @@ class TestFindByCapability:
     """按能力筛选 Agent。"""
 
     def test_find_single_capability(self, registry):
-        registry.register(
-            make_descriptor("a", "A", capabilities=frozenset({"code_generation"}))
-        )
-        registry.register(
-            make_descriptor("b", "B", capabilities=frozenset({"code_review"}))
-        )
+        registry.register(make_descriptor("a", "A", capabilities=frozenset({"code_generation"})))
+        registry.register(make_descriptor("b", "B", capabilities=frozenset({"code_review"})))
         result = registry.find_by_capability("code_generation")
         assert len(result) == 1
         assert result[0].agent_id == "a"
 
     def test_find_capability_no_match(self, registry):
-        registry.register(
-            make_descriptor(capabilities=frozenset({"code_generation"}))
-        )
+        registry.register(make_descriptor(capabilities=frozenset({"code_generation"})))
         assert registry.find_by_capability("translation") == []
 
     def test_find_capability_multiple_matches(self, registry):
-        registry.register(
-            make_descriptor("a", "A", capabilities=frozenset({"code_generation"}))
-        )
-        registry.register(
-            make_descriptor("b", "B", capabilities=frozenset({"code_generation"}))
-        )
+        registry.register(make_descriptor("a", "A", capabilities=frozenset({"code_generation"})))
+        registry.register(make_descriptor("b", "B", capabilities=frozenset({"code_generation"})))
         result = registry.find_by_capability("code_generation")
         assert len(result) == 2
 
     def test_find_capability_with_tenant(self, registry):
         registry.register(
-            make_descriptor(
-                "a", "A", capabilities=frozenset({"code_generation"}), tenant="t1"
-            )
+            make_descriptor("a", "A", capabilities=frozenset({"code_generation"}), tenant="t1")
         )
         registry.register(
-            make_descriptor(
-                "b", "B", capabilities=frozenset({"code_generation"}), tenant="t2"
-            )
+            make_descriptor("b", "B", capabilities=frozenset({"code_generation"}), tenant="t2")
         )
         result = registry.find_by_capability("code_generation", tenant="t1")
         assert len(result) == 1
         assert result[0].agent_id == "a"
 
     def test_find_capability_excludes_unavailable(self, registry):
-        registry.register(
-            make_descriptor("a", "A", capabilities=frozenset({"code_generation"}))
-        )
-        registry.register(
-            make_descriptor("b", "B", capabilities=frozenset({"code_generation"}))
-        )
+        registry.register(make_descriptor("a", "A", capabilities=frozenset({"code_generation"})))
+        registry.register(make_descriptor("b", "B", capabilities=frozenset({"code_generation"})))
         registry.mark_unavailable("a")
         result = registry.find_by_capability("code_generation")
         assert len(result) == 1
         assert result[0].agent_id == "b"
 
     def test_find_capability_include_unavailable(self, registry):
-        registry.register(
-            make_descriptor("a", "A", capabilities=frozenset({"code_generation"}))
-        )
+        registry.register(make_descriptor("a", "A", capabilities=frozenset({"code_generation"})))
         registry.mark_unavailable("a")
-        result = registry.find_by_capability(
-            "code_generation", only_available=False
-        )
+        result = registry.find_by_capability("code_generation", only_available=False)
         assert len(result) == 1
 
     def test_find_by_capabilities_intersection(self, registry):
         registry.register(
-            make_descriptor(
-                "a", "A", capabilities=frozenset({"code_generation", "code_review"})
-            )
+            make_descriptor("a", "A", capabilities=frozenset({"code_generation", "code_review"}))
         )
-        registry.register(
-            make_descriptor(
-                "b", "B", capabilities=frozenset({"code_generation"})
-            )
-        )
+        registry.register(make_descriptor("b", "B", capabilities=frozenset({"code_generation"})))
         result = registry.find_by_capabilities({"code_generation", "code_review"})
         assert len(result) == 1
         assert result[0].agent_id == "a"
@@ -406,9 +372,7 @@ class TestMarkUnavailable:
             registry.mark_unavailable("nonexistent")
 
     def test_mark_unavailable_excludes_from_find(self, registry):
-        registry.register(
-            make_descriptor(capabilities=frozenset({"code_generation"}))
-        )
+        registry.register(make_descriptor(capabilities=frozenset({"code_generation"})))
         registry.mark_unavailable("agent-1")
         assert registry.find_by_capability("code_generation") == []
 

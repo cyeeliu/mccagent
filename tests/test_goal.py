@@ -137,10 +137,12 @@ async def test_evaluate_achieved():
 
 @pytest.mark.asyncio
 async def test_evaluate_block_then_achieved():
-    eval_llm = MockLlm([
-        _eval_turn(ok=False, reason="pytest not run"),
-        _eval_turn(ok=True, reason="pytest passed"),
-    ])
+    eval_llm = MockLlm(
+        [
+            _eval_turn(ok=False, reason="pytest not run"),
+            _eval_turn(ok=True, reason="pytest passed"),
+        ]
+    )
     ctrl = _controller(eval_llm)
     ctrl.set_goal("pytest passes")
     d1 = await ctrl.evaluate_after_turn([Message.user("maybe")])
@@ -181,14 +183,18 @@ async def test_evaluate_block_cap_limit():
 @pytest.mark.asyncio
 async def test_goal_block_continues_then_achieved(ctx, registry):
     """模型想停 → evaluator block → 追加消息继续 → evaluator achieved → 返回。"""
-    worker = MockLlm([
-        single_text_turn("I think I'm done."),
-        single_text_turn("Now pytest passes, really done."),
-    ])
-    evaluator_llm = MockLlm([
-        _eval_turn(ok=False, reason="pytest not run yet"),
-        _eval_turn(ok=True, reason="pytest passed"),
-    ])
+    worker = MockLlm(
+        [
+            single_text_turn("I think I'm done."),
+            single_text_turn("Now pytest passes, really done."),
+        ]
+    )
+    evaluator_llm = MockLlm(
+        [
+            _eval_turn(ok=False, reason="pytest not run yet"),
+            _eval_turn(ok=True, reason="pytest passed"),
+        ]
+    )
     evaluator = PromptGoalEvaluator(llm=evaluator_llm, model="claude-haiku-4-5")
     goal = GoalController(evaluator=evaluator)
     agent = _make_agent(worker, ctx, registry, goal=goal)
@@ -219,9 +225,11 @@ async def test_no_goal_behavior_unchanged(ctx, registry):
 async def test_goal_failed_stops(ctx, registry):
     """evaluator 判断 impossible → 返回，不继续循环。"""
     worker = MockLlm([single_text_turn("can't do it")])
-    evaluator_llm = MockLlm([
-        _eval_turn(ok=False, reason="no such file", impossible=True),
-    ])
+    evaluator_llm = MockLlm(
+        [
+            _eval_turn(ok=False, reason="no such file", impossible=True),
+        ]
+    )
     evaluator = PromptGoalEvaluator(llm=evaluator_llm, model="claude-haiku-4-5")
     goal = GoalController(evaluator=evaluator)
     agent = _make_agent(worker, ctx, registry, goal=goal)
@@ -231,6 +239,4 @@ async def test_goal_failed_stops(ctx, registry):
     run = await agent.run_streaming("try", queue)
     events = await _collect(queue)
     assert run.iterations == 1
-    assert any(
-        isinstance(e, GoalStatus) and e.action == "failed" for e in events
-    )
+    assert any(isinstance(e, GoalStatus) and e.action == "failed" for e in events)

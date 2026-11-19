@@ -42,7 +42,8 @@ class McpClientManager:
                 self._clients[name] = client
                 logger.info(
                     "MCP server %r connected: %d tools",
-                    name, len(client.tools),
+                    name,
+                    len(client.tools),
                 )
             except Exception as e:
                 logger.warning("MCP server %r failed: %s", name, e)
@@ -59,7 +60,9 @@ class McpClientManager:
                 except Exception as e:
                     logger.warning(
                         "MCP tool %r/%r skipped: %s",
-                        server_name, tool_info.get("name"), e,
+                        server_name,
+                        tool_info.get("name"),
+                        e,
                     )
         return count
 

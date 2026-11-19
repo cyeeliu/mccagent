@@ -63,24 +63,23 @@ class McpClient:
                 env=full_env,
             )
         except FileNotFoundError as e:
-            raise McpError(
-                f"MCP server {self.name!r}: command {self.command!r} not found"
-            ) from e
+            raise McpError(f"MCP server {self.name!r}: command {self.command!r} not found") from e
         except OSError as e:
-            raise McpError(
-                f"MCP server {self.name!r}: failed to start: {e}"
-            ) from e
+            raise McpError(f"MCP server {self.name!r}: failed to start: {e}") from e
 
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         await self._initialize()
         self._tools = await self._tools_list()
 
     async def _initialize(self) -> dict[str, Any]:
-        result = await self._rpc("initialize", {
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": CLIENT_INFO,
-        })
+        result = await self._rpc(
+            "initialize",
+            {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": CLIENT_INFO,
+            },
+        )
         await self._notify("notifications/initialized")
         return result
 
@@ -88,14 +87,15 @@ class McpClient:
         result = await self._rpc("tools/list", {})
         return result.get("tools", [])
 
-    async def call_tool(
-        self, name: str, arguments: dict[str, Any]
-    ) -> tuple[str, bool]:
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
         """调用 server 工具，返回 (text, is_error)。"""
-        result = await self._rpc("tools/call", {
-            "name": name,
-            "arguments": arguments,
-        })
+        result = await self._rpc(
+            "tools/call",
+            {
+                "name": name,
+                "arguments": arguments,
+            },
+        )
         content = result.get("content", [])
         text = "\n".join(
             block.get("text", "")
@@ -140,12 +140,17 @@ class McpClient:
             raise McpError(f"server {self.name!r} not connected")
         self._id += 1
         req_id = self._id
-        line = json.dumps({
-            "jsonrpc": JSONRPC_VERSION,
-            "id": req_id,
-            "method": method,
-            "params": params,
-        }) + "\n"
+        line = (
+            json.dumps(
+                {
+                    "jsonrpc": JSONRPC_VERSION,
+                    "id": req_id,
+                    "method": method,
+                    "params": params,
+                }
+            )
+            + "\n"
+        )
         self._proc.stdin.write(line.encode())
         await self._proc.stdin.drain()
         return await self._read_response(req_id)
@@ -154,10 +159,15 @@ class McpClient:
         """发 JSON-RPC notification（无 id，不期待响应）。"""
         if self._proc is None:
             raise McpError(f"server {self.name!r} not connected")
-        line = json.dumps({
-            "jsonrpc": JSONRPC_VERSION,
-            "method": method,
-        }) + "\n"
+        line = (
+            json.dumps(
+                {
+                    "jsonrpc": JSONRPC_VERSION,
+                    "method": method,
+                }
+            )
+            + "\n"
+        )
         self._proc.stdin.write(line.encode())
         await self._proc.stdin.drain()
 
@@ -176,23 +186,16 @@ class McpClient:
                     f"after {self._read_timeout}s (id={expected_id})"
                 ) from None
             if not raw:
-                raise McpError(
-                    f"server {self.name!r} closed stdout before response"
-                )
+                raise McpError(f"server {self.name!r} closed stdout before response")
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError as e:
-                raise McpError(
-                    f"server {self.name!r}: invalid JSON: {e}"
-                ) from e
+                raise McpError(f"server {self.name!r}: invalid JSON: {e}") from e
             if "id" not in msg:
                 continue
             if msg["id"] != expected_id:
                 continue
             if "error" in msg and msg["error"] is not None:
                 err = msg["error"]
-                raise McpError(
-                    f"server {self.name!r} JSON-RPC error: "
-                    f"{err.get('message', err)}"
-                )
+                raise McpError(f"server {self.name!r} JSON-RPC error: {err.get('message', err)}")
             return msg.get("result")

@@ -10,6 +10,7 @@ from pathlib import Path
 
 # ---------- mcc-core ----------
 
+
 def test_mcc_core_imports():
     import mcc_core
 
@@ -128,6 +129,7 @@ def test_agent_event_types():
 
 # ---------- mcc-config ----------
 
+
 def test_mcc_config_imports():
     import mcc_config
 
@@ -244,6 +246,7 @@ def test_config_legacy_json_only_main(tmp_path: Path):
 
 # ---------- 其余 package ----------
 
+
 def test_mcc_llm_imports():
     import mcc_llm
     from mcc_llm import TextDelta
@@ -289,6 +292,7 @@ def test_mcc_cli_imports():
 
 
 # ---------- 依赖图验证 ----------
+
 
 def test_dependency_graph():
     """验证模块依赖图与设计一致。"""

@@ -342,9 +342,7 @@ class InMemoryTaskStore:
         return self._attempts.get(attempt_id)
 
     async def list_attempts(self, task_id: TaskId) -> list[TaskAttempt]:
-        return [
-            a for a in self._attempts.values() if a.task_id == task_id
-        ]
+        return [a for a in self._attempts.values() if a.task_id == task_id]
 
     async def complete_attempt(
         self,

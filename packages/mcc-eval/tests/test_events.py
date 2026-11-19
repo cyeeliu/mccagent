@@ -29,8 +29,15 @@ def _schema_types() -> set[str]:
 
 def test_schema_covers_all_event_types() -> None:
     """schema oneOf 与 pydantic 判别式联合必须一一对应。"""
-    expected = {"run_started", "llm_request", "llm_chunk", "tool_call", "tool_result",
-                "llm_usage", "run_finished"}
+    expected = {
+        "run_started",
+        "llm_request",
+        "llm_chunk",
+        "tool_call",
+        "tool_result",
+        "llm_usage",
+        "run_finished",
+    }
     assert _schema_types() == expected
 
 
@@ -42,8 +49,7 @@ def test_schema_covers_all_event_types() -> None:
         ToolCall(seq=2, turn=0, call_id="x", tool_name="bash", args="pytest"),
         ToolResult(seq=3, call_id="x", output="ok"),
         LlmRequest(seq=4, turn=0, input_tokens=120),
-        LlmUsage(seq=5, turn=0, input_tokens=120, output_tokens=48,
-                 cost_usd=0.0021),
+        LlmUsage(seq=5, turn=0, input_tokens=120, output_tokens=48, cost_usd=0.0021),
         RunFinished(seq=6, status="passed", score=1.0),
         RunFinished(seq=7, status="error", reason="no ANTHROPIC_API_KEY"),
     ],

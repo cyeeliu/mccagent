@@ -198,7 +198,9 @@ class TestRemoveArchivePolicy:
         (wt / "file.txt").write_text("content\n", encoding="utf-8")
 
         archive_path = remove_worktree(
-            "wt1", non_git_base, policy=CleanupPolicy.ARCHIVE,
+            "wt1",
+            non_git_base,
+            policy=CleanupPolicy.ARCHIVE,
         )
         assert archive_path is not None
         assert archive_path.exists()

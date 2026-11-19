@@ -37,8 +37,7 @@ async def test_direct_executor_runs_plain(tmp_path: Path) -> None:
     assert result.stdout.strip() == b"hello"
 
 
-async def test_direct_executor_sees_full_env(tmp_path: Path,
-                                              monkeypatch) -> None:
+async def test_direct_executor_sees_full_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MCC_SANDBOX_TEST_SECRET", "leak-me")
     result = await _run(DirectExecutor(), "echo $MCC_SANDBOX_TEST_SECRET", tmp_path)
     assert b"leak-me" in result.stdout
@@ -56,20 +55,22 @@ async def test_executor_timeout_kills_process(tmp_path: Path) -> None:
 def restricted() -> RestrictionsExecutor:
     """allowlist 强隔离档（评测同款，显式声明全部关键参数）。"""
     return RestrictionsExecutor(
-        SandboxConfig(mode="restrictions", env_policy="allowlist",
-                      redirect_home=True, max_memory_mb=256,
-                      max_cpu_secs=30, max_processes=64, max_file_mb=8)
+        SandboxConfig(
+            mode="restrictions",
+            env_policy="allowlist",
+            redirect_home=True,
+            max_memory_mb=256,
+            max_cpu_secs=30,
+            max_processes=64,
+            max_file_mb=8,
+        )
     )
 
 
-async def test_restrictions_env_whitelist_hides_secrets(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_restrictions_env_whitelist_hides_secrets(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MCC_SANDBOX_TEST_SECRET", "leak-me")
     monkeypatch.setenv("TERM", "xterm")  # 白名单内应可见
-    ex = RestrictionsExecutor(
-        SandboxConfig(mode="restrictions", env_policy="allowlist")
-    )
+    ex = RestrictionsExecutor(SandboxConfig(mode="restrictions", env_policy="allowlist"))
 
     secret = await _run(ex, "echo [$MCC_SANDBOX_TEST_SECRET]", tmp_path)
     assert b"[]" in secret.stdout  # 白名单外被剥离
@@ -80,8 +81,7 @@ async def test_restrictions_env_whitelist_hides_secrets(
 
 async def test_restrictions_home_redirected(tmp_path: Path) -> None:
     ex = RestrictionsExecutor(
-        SandboxConfig(mode="restrictions", env_policy="allowlist",
-                      redirect_home=True)
+        SandboxConfig(mode="restrictions", env_policy="allowlist", redirect_home=True)
     )
     result = await _run(ex, "echo $HOME", tmp_path)
     assert str(tmp_path / SANDBOX_HOME_DIRNAME) in result.stdout.decode()
@@ -107,8 +107,7 @@ async def test_restrictions_file_size_limit_enforced(
     """写超限文件（>8MB）被 SIGXFSZ 拦截，python 报 errno 27。"""
     await _run(
         restricted,
-        "python3 -c 'open(\"big.bin\",\"wb\").write(b\"x\"*(16*1024*1024))' "
-        "2>&1; echo rc=$?",
+        'python3 -c \'open("big.bin","wb").write(b"x"*(16*1024*1024))\' 2>&1; echo rc=$?',
         tmp_path,
     )
     assert (tmp_path / "big.bin").stat().st_size < 16 * 1024 * 1024
@@ -127,9 +126,7 @@ async def test_restrictions_ulimits_visible(
 
 
 async def test_restrictions_umask_applied(tmp_path: Path) -> None:
-    ex = RestrictionsExecutor(
-        SandboxConfig(mode="restrictions", env_policy="allowlist")
-    )
+    ex = RestrictionsExecutor(SandboxConfig(mode="restrictions", env_policy="allowlist"))
     await _run(ex, "touch made-in-sandbox.txt", tmp_path)
     mode = (tmp_path / "made-in-sandbox.txt").stat().st_mode & 0o777
     assert mode == 0o600
@@ -251,18 +248,13 @@ async def test_run_bash_default_executor_zero_regression(tmp_path: Path) -> None
     assert not out.is_error
 
 
-async def test_run_bash_with_restricted_executor(tmp_path: Path,
-                                                 monkeypatch) -> None:
+async def test_run_bash_with_restricted_executor(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MCC_SANDBOX_TEST_SECRET", "leak")
     tool = RunBashTool(
-        RestrictionsExecutor(
-            SandboxConfig(mode="restrictions", env_policy="allowlist")
-        )
+        RestrictionsExecutor(SandboxConfig(mode="restrictions", env_policy="allowlist"))
     )
     ctx = ToolContext(cwd=tmp_path, session_id="s2")
-    out = await tool.execute(
-        {"command": "echo [$MCC_SANDBOX_TEST_SECRET]"}, ctx
-    )
+    out = await tool.execute({"command": "echo [$MCC_SANDBOX_TEST_SECRET]"}, ctx)
     assert "[]" in out.content
 
 
@@ -277,8 +269,7 @@ async def test_run_bash_timeout_message_kept(tmp_path: Path) -> None:
 # ─── env_policy 分支（harness 温和档 vs 评测强隔离档）────────────────────
 
 
-async def test_inherit_policy_passes_full_env(tmp_path: Path,
-                                              monkeypatch) -> None:
+async def test_inherit_policy_passes_full_env(tmp_path: Path, monkeypatch) -> None:
     """inherit（harness 默认）：venv PATH 与自定义变量原样可见。
 
     Agent 需要项目 venv / cargo 等用户工具链，温和档不剥离环境。
@@ -308,9 +299,7 @@ async def test_inherit_policy_keeps_home_and_umask(tmp_path: Path) -> None:
     assert mode != 0o600
 
 
-async def test_allowlist_policy_resets_path_not_inherit(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_allowlist_policy_resets_path_not_inherit(tmp_path: Path, monkeypatch) -> None:
     """allowlist：PATH 重置为系统默认——harness 的 venv 路径不泄漏。
 
     这是评测环境清洗的关键：被测 Agent 的 `python` 必须是系统
@@ -323,9 +312,7 @@ async def test_allowlist_policy_resets_path_not_inherit(
     (fake_bin / "python").chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
 
-    ex = RestrictionsExecutor(
-        SandboxConfig(mode="restrictions", env_policy="allowlist")
-    )
+    ex = RestrictionsExecutor(SandboxConfig(mode="restrictions", env_policy="allowlist"))
     result = await _run(ex, "which python 2>/dev/null || echo none", tmp_path)
     assert "FAKE-PYTHON" not in result.stdout.decode()
     assert str(fake_bin) not in result.stdout.decode()
@@ -336,8 +323,7 @@ async def test_allowlist_home_kept_when_redirect_disabled(
 ) -> None:
     """allowlist + redirect_home=False：HOME 保留真实值（不建目录）。"""
     ex = RestrictionsExecutor(
-        SandboxConfig(mode="restrictions", env_policy="allowlist",
-                      redirect_home=False)
+        SandboxConfig(mode="restrictions", env_policy="allowlist", redirect_home=False)
     )
     result = await _run(ex, "echo $HOME", tmp_path)
     assert str(tmp_path / SANDBOX_HOME_DIRNAME) not in result.stdout.decode()
@@ -348,8 +334,7 @@ async def test_restrictions_rlimits_apply_in_inherit_mode(
 ) -> None:
     """inherit 档 rlimit 照常生效（温和档 = 纯资源防失控）。"""
     ex = RestrictionsExecutor(
-        SandboxConfig(mode="restrictions", env_policy="inherit",
-                      max_memory_mb=256)
+        SandboxConfig(mode="restrictions", env_policy="inherit", max_memory_mb=256)
     )
     result = await _run(ex, "ulimit -v", tmp_path)
     assert int(result.stdout.strip()) == 256 * 1024

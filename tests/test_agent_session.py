@@ -60,16 +60,14 @@ def base(tmp_path: Path) -> Path:
 
 class TestRecorderWiring:
     async def test_end_turn_recorded_and_finalized(self, ctx, base, tmp_path):
-        llm = CapturingLlm([
-            single_text_turn("你好，有什么可以帮你？"),
-            single_text_turn("打招呼测试"),
-        ])
-        recorder = SessionRecorder.open_sync("r1", tmp_path, base_dir=base)
-        agent = (
-            AgentLoopBuilder(llm, default_registry(), ctx)
-            .recorder(recorder)
-            .build()
+        llm = CapturingLlm(
+            [
+                single_text_turn("你好，有什么可以帮你？"),
+                single_text_turn("打招呼测试"),
+            ]
         )
+        recorder = SessionRecorder.open_sync("r1", tmp_path, base_dir=base)
+        agent = AgentLoopBuilder(llm, default_registry(), ctx).recorder(recorder).build()
         run = await agent.run("hi")
 
         assert recorder.meta.turns == 1
@@ -83,42 +81,36 @@ class TestRecorderWiring:
         assert msgs[-1].content[0].text == "你好，有什么可以帮你？"
 
     async def test_tool_outputs_recorded(self, ctx, base, tmp_path):
-        llm = CapturingLlm([
-            _tool_turn("t1", "write_file", {"path": "x.txt", "content": "X"}),
-            single_text_turn("written"),
-            single_text_turn("写文件测试"),
-        ])
-        recorder = SessionRecorder.open_sync("r2", tmp_path, base_dir=base)
-        agent = (
-            AgentLoopBuilder(llm, default_registry(), ctx)
-            .recorder(recorder)
-            .build()
+        llm = CapturingLlm(
+            [
+                _tool_turn("t1", "write_file", {"path": "x.txt", "content": "X"}),
+                single_text_turn("written"),
+                single_text_turn("写文件测试"),
+            ]
         )
+        recorder = SessionRecorder.open_sync("r2", tmp_path, base_dir=base)
+        agent = AgentLoopBuilder(llm, default_registry(), ctx).recorder(recorder).build()
         await agent.run("create x.txt")
 
         _, msgs = load_session("r2", base)
         roles = [m.role for m in msgs]
         assert roles == [Role.user, Role.assistant, Role.tool, Role.assistant]
-        tool_results = [
-            b for b in msgs[2].content if isinstance(b, ToolResultBlock)
-        ]
+        tool_results = [b for b in msgs[2].content if isinstance(b, ToolResultBlock)]
         assert tool_results[0].tool_use_id == "t1"
         assert tool_results[0].is_error is False
         assert "written" in tool_results[0].content
 
     async def test_cost_accumulated_across_turns(self, ctx, base, tmp_path):
         usage2 = Usage(input_tokens=2000, output_tokens=200)
-        llm = CapturingLlm([
-            _tool_turn("c1", "run_bash", {"command": "echo cost"}),
-            single_text_turn("多轮测试"),
-            single_text_turn("done", usage=usage2),
-        ])
-        recorder = SessionRecorder.open_sync("r3", tmp_path, base_dir=base)
-        agent = (
-            AgentLoopBuilder(llm, default_registry(), ctx)
-            .recorder(recorder)
-            .build()
+        llm = CapturingLlm(
+            [
+                _tool_turn("c1", "run_bash", {"command": "echo cost"}),
+                single_text_turn("多轮测试"),
+                single_text_turn("done", usage=usage2),
+            ]
         )
+        recorder = SessionRecorder.open_sync("r3", tmp_path, base_dir=base)
+        agent = AgentLoopBuilder(llm, default_registry(), ctx).recorder(recorder).build()
         run = await agent.run("go")
 
         assert recorder.meta.turns == 2
@@ -136,11 +128,7 @@ class TestRecorderWiring:
                 raise RuntimeError(msg)
 
         recorder = SessionRecorder.open_sync("r4", tmp_path, base_dir=base)
-        agent = (
-            AgentLoopBuilder(BoomLlm(), default_registry(), ctx)
-            .recorder(recorder)
-            .build()
-        )
+        agent = AgentLoopBuilder(BoomLlm(), default_registry(), ctx).recorder(recorder).build()
         with pytest.raises(RuntimeError, match="api down"):
             await agent.run("go")
         assert recorder.meta.status == "errored"
@@ -157,11 +145,7 @@ class TestRecorderWiring:
                 pass
 
         llm = CapturingLlm([single_text_turn("still ok")])
-        agent = (
-            AgentLoopBuilder(llm, default_registry(), ctx)
-            .recorder(BrokenRecorder())
-            .build()
-        )
+        agent = AgentLoopBuilder(llm, default_registry(), ctx).recorder(BrokenRecorder()).build()
         evq: asyncio.Queue = asyncio.Queue()
         run = await agent.run_streaming("go", evq)
 
@@ -169,20 +153,17 @@ class TestRecorderWiring:
         events = []
         while not evq.empty():
             events.append(evq.get_nowait())
-        assert any(
-            isinstance(e, Notice) and "session record failed" in e.text
-            for e in events
-        )
+        assert any(isinstance(e, Notice) and "session record failed" in e.text for e in events)
 
 
 class TestSummarizeModel:
-    async def test_title_uses_configured_summarize_model(
-        self, ctx, base, tmp_path
-    ):
-        llm = CapturingLlm([
-            single_text_turn("回答"),
-            single_text_turn("标题"),
-        ])
+    async def test_title_uses_configured_summarize_model(self, ctx, base, tmp_path):
+        llm = CapturingLlm(
+            [
+                single_text_turn("回答"),
+                single_text_turn("标题"),
+            ]
+        )
         recorder = SessionRecorder.open_sync("sm1", tmp_path, base_dir=base)
         agent = (
             AgentLoopBuilder(llm, default_registry(), ctx)
@@ -197,21 +178,17 @@ class TestSummarizeModel:
         assert complete_reqs[0].model == "gpt-4o-mini"
         assert recorder.meta.title == "标题"
 
-    async def test_title_falls_back_without_summarize_model(
-        self, ctx, base, tmp_path
-    ):
+    async def test_title_falls_back_without_summarize_model(self, ctx, base, tmp_path):
         from mcc_session import TITLE_MODEL
 
-        llm = CapturingLlm([
-            single_text_turn("回答"),
-            single_text_turn("标题"),
-        ])
-        recorder = SessionRecorder.open_sync("sm2", tmp_path, base_dir=base)
-        agent = (
-            AgentLoopBuilder(llm, default_registry(), ctx)
-            .recorder(recorder)
-            .build()
+        llm = CapturingLlm(
+            [
+                single_text_turn("回答"),
+                single_text_turn("标题"),
+            ]
         )
+        recorder = SessionRecorder.open_sync("sm2", tmp_path, base_dir=base)
+        agent = AgentLoopBuilder(llm, default_registry(), ctx).recorder(recorder).build()
         await agent.run("问题")
 
         complete_reqs = [r for kind, r in llm.requests if kind == "complete"]
@@ -220,11 +197,13 @@ class TestSummarizeModel:
 
 class TestHistoryAccumulation:
     async def test_history_accumulates_across_runs(self, ctx):
-        llm = CapturingLlm([
-            single_text_turn("第一轮回答"),
-            single_text_turn("标题"),
-            single_text_turn("第二轮回答"),
-        ])
+        llm = CapturingLlm(
+            [
+                single_text_turn("第一轮回答"),
+                single_text_turn("标题"),
+                single_text_turn("第二轮回答"),
+            ]
+        )
         agent = AgentLoopBuilder(llm, default_registry(), ctx).build()
         await agent.run("第一问")
         await agent.run("第二问")
@@ -244,11 +223,7 @@ class TestHistoryAccumulation:
             Message.user("旧问题"),
             Message.assistant("旧回答"),
         ]
-        agent = (
-            AgentLoopBuilder(llm, default_registry(), ctx)
-            .history(history)
-            .build()
-        )
+        agent = AgentLoopBuilder(llm, default_registry(), ctx).history(history).build()
         await agent.run("新问题")
 
         req = llm.stream_requests[0]
@@ -260,11 +235,7 @@ class TestHistoryAccumulation:
 
         llm = CapturingLlm([single_text_turn("ok"), single_text_turn("ok")])
         history = [Message.user("原问题")]
-        agent = (
-            AgentLoopBuilder(llm, default_registry(), ctx)
-            .history(history)
-            .build()
-        )
+        agent = AgentLoopBuilder(llm, default_registry(), ctx).history(history).build()
         await agent.run("第一次")
         await agent.run("第二次")
         assert len(history) == 1
@@ -272,16 +243,14 @@ class TestHistoryAccumulation:
 
 class TestResume:
     async def test_resume_continues_conversation(self, ctx, base, tmp_path):
-        llm1 = CapturingLlm([
-            single_text_turn("已记住 uv 偏好"),
-            single_text_turn("工具偏好"),
-        ])
-        recorder = SessionRecorder.open_sync("res1", tmp_path, base_dir=base)
-        agent1 = (
-            AgentLoopBuilder(llm1, default_registry(), ctx)
-            .recorder(recorder)
-            .build()
+        llm1 = CapturingLlm(
+            [
+                single_text_turn("已记住 uv 偏好"),
+                single_text_turn("工具偏好"),
+            ]
         )
+        recorder = SessionRecorder.open_sync("res1", tmp_path, base_dir=base)
+        agent1 = AgentLoopBuilder(llm1, default_registry(), ctx).recorder(recorder).build()
         await agent1.run("记住：这个项目用 uv 管理依赖")
 
         meta, history = load_session("res1", base)
@@ -289,11 +258,7 @@ class TestResume:
 
         ctx2 = ToolContext(cwd=tmp_path, session_id="res1")
         llm2 = CapturingLlm([single_text_turn("你之前提到 uv")])
-        agent2 = (
-            AgentLoopBuilder(llm2, default_registry(), ctx2)
-            .history(history)
-            .build()
-        )
+        agent2 = AgentLoopBuilder(llm2, default_registry(), ctx2).history(history).build()
         await agent2.run("我之前说了什么？")
 
         req = llm2.stream_requests[0]
@@ -303,11 +268,7 @@ class TestResume:
     async def test_resume_same_session_appends_jsonl(self, ctx, base, tmp_path):
         llm1 = CapturingLlm([single_text_turn("第一段"), single_text_turn("t")])
         recorder = SessionRecorder.open_sync("res2", tmp_path, base_dir=base)
-        agent1 = (
-            AgentLoopBuilder(llm1, default_registry(), ctx)
-            .recorder(recorder)
-            .build()
-        )
+        agent1 = AgentLoopBuilder(llm1, default_registry(), ctx).recorder(recorder).build()
         await agent1.run("第一问")
         assert recorder.meta.turns == 1
 
@@ -325,28 +286,22 @@ class TestResume:
         await agent2.run("第二问")
 
         _, history = load_session("res2", base)
-        user_texts = [
-            m.content[0].text for m in history if m.role == Role.user
-        ]
+        user_texts = [m.content[0].text for m in history if m.role == Role.user]
         assert "第一问" in user_texts and "第二问" in user_texts
 
-    def test_turnsnapshot_roundtrip_via_agent(
-        self, ctx, base, tmp_path
-    ):
+    def test_turnsnapshot_roundtrip_via_agent(self, ctx, base, tmp_path):
         """完整回放：JSONL 每行可解析为 TurnSnapshot。"""
         import asyncio as aio
 
         async def run():
-            llm = CapturingLlm([
-                single_text_turn("done"),
-                single_text_turn("回放测试"),
-            ])
-            recorder = SessionRecorder.open_sync("rt", tmp_path, base_dir=base)
-            agent = (
-                AgentLoopBuilder(llm, default_registry(), ctx)
-                .recorder(recorder)
-                .build()
+            llm = CapturingLlm(
+                [
+                    single_text_turn("done"),
+                    single_text_turn("回放测试"),
+                ]
             )
+            recorder = SessionRecorder.open_sync("rt", tmp_path, base_dir=base)
+            agent = AgentLoopBuilder(llm, default_registry(), ctx).recorder(recorder).build()
             await agent.run("play")
 
         aio.run(run())

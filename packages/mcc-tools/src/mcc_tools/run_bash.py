@@ -81,18 +81,14 @@ class RunBashTool:
         timeout = input.get("timeout_secs", 30)
 
         if input.get("run_in_background") is True and self._background is not None:
-            task_id = await self._background.start(
-                command, Path(str(ctx.cwd)), float(timeout)
-            )
+            task_id = await self._background.start(command, Path(str(ctx.cwd)), float(timeout))
             return ToolOutput.ok(
                 f"[Background task {task_id} started. "
                 "The result will be collected on a later turn.]"
             )
 
         try:
-            result = await self._executor.run(
-                command, Path(str(ctx.cwd)), float(timeout)
-            )
+            result = await self._executor.run(command, Path(str(ctx.cwd)), float(timeout))
         except ExecTimeout:
             return ToolOutput.err(f"command timed out after {timeout}s: {command}")
 

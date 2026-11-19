@@ -46,8 +46,9 @@ def _write_settings(project: Path, main: str) -> None:
     ],
     ids=["explicit-wins", "env-beats-config", "config-used", "explicit-beats-env"],
 )
-def test_resolve_model_priority(explicit, env_model, configured, expected,
-                                tmp_path, monkeypatch) -> None:
+def test_resolve_model_priority(
+    explicit, env_model, configured, expected, tmp_path, monkeypatch
+) -> None:
     monkeypatch.delenv("MODEL", raising=False)
     if env_model:
         monkeypatch.setenv("MODEL", env_model)
@@ -147,8 +148,7 @@ def test_provider_explicit_base_url_beats_settings(monkeypatch) -> None:
 def test_provider_settings_api_key_used_for_gateway(monkeypatch) -> None:
     """网关场景下 settings 的 api_key 优先于 OPENAI_API_KEY env。"""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
-    config = Config(llm=LlmConfig(base_url="http://vllm:8000/v1",
-                                  api_key="sk-from-settings"))
+    config = Config(llm=LlmConfig(base_url="http://vllm:8000/v1", api_key="sk-from-settings"))
 
     provider = build_llm_provider(config=config)
     assert type(provider).__name__ == "OpenAiClient"
@@ -191,8 +191,7 @@ def test_merge_llm_section_project_overrides_home() -> None:
     """project 的 llm 显式设置覆盖 home；未设置的字段保留 home。"""
     from mcc_config import merge
 
-    home = Config(llm=LlmConfig(base_url="http://home:8000/v1",
-                                api_key="sk-home"))
+    home = Config(llm=LlmConfig(base_url="http://home:8000/v1", api_key="sk-home"))
     project = Config(llm=LlmConfig(base_url="http://proj:9000/v1"))
 
     merged = merge(home, project)
@@ -209,10 +208,15 @@ def test_settings_json_llm_section_roundtrip(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     project = tmp_path / "proj"
     (project / ".mcc").mkdir(parents=True)
-    (project / ".mcc" / "settings.json").write_text(json.dumps({
-        "model": {"main": "test-model"},
-        "llm": {"base_url": "http://gw:8000/v1", "api_key": "sk-json"},
-    }), encoding="utf-8")
+    (project / ".mcc" / "settings.json").write_text(
+        json.dumps(
+            {
+                "model": {"main": "test-model"},
+                "llm": {"base_url": "http://gw:8000/v1", "api_key": "sk-json"},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     config = asyncio.run(load(project))
     assert config.llm.base_url == "http://gw:8000/v1"
@@ -256,9 +260,7 @@ def test_merge_generic_fields_project_overrides(field_name: str) -> None:
     project = Config.model_validate({field_name: {"enabled": False}})
     merged = merge(home, project)
     proj_val = getattr(project, field_name)
-    assert getattr(merged, field_name) == proj_val, (
-        f"{field_name}: project override lost"
-    )
+    assert getattr(merged, field_name) == proj_val, f"{field_name}: project override lost"
 
 
 def test_merge_generic_fields_default_keeps_home() -> None:

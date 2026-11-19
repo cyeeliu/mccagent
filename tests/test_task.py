@@ -248,9 +248,7 @@ class TestTools:
         assert "Unblocked" in out.content
 
     @pytest.mark.asyncio
-    async def test_complete_task_tool_no_unblock(
-        self, store: TaskStore, ctx: ToolContext
-    ) -> None:
+    async def test_complete_task_tool_no_unblock(self, store: TaskStore, ctx: ToolContext) -> None:
         t = store.create("solo")
         store.claim(t.id, owner="test")
         tool = CompleteTaskTool(store)
@@ -269,8 +267,12 @@ class TestTools:
         ]
         names = [t.name for t in tools]
         assert names == [
-            "create_task", "update_task", "list_tasks",
-            "get_task", "claim_task", "complete_task",
+            "create_task",
+            "update_task",
+            "list_tasks",
+            "get_task",
+            "claim_task",
+            "complete_task",
         ]
         for t in tools:
             assert isinstance(t.input_schema(), dict)
@@ -416,9 +418,7 @@ class TestTaskStateMachine:
         "terminal",
         [TaskStatus.COMPLETED.value, TaskStatus.CANCELLED.value],
     )
-    def test_terminal_no_outgoing(
-        self, store: TaskStore, terminal: str
-    ) -> None:
+    def test_terminal_no_outgoing(self, store: TaskStore, terminal: str) -> None:
         t = store.create("work")
         store.claim(t.id, owner="agent-1")
         if terminal == TaskStatus.COMPLETED.value:
@@ -455,9 +455,7 @@ class TestTaskStateMachine:
 class TestLegacyCompat:
     """P1-04: 旧数据兼容 — 缺少新字段的 JSON 能正确加载。"""
 
-    def test_load_legacy_missing_new_fields(
-        self, store: TaskStore, tmp_path: Path
-    ) -> None:
+    def test_load_legacy_missing_new_fields(self, store: TaskStore, tmp_path: Path) -> None:
         legacy = {
             "id": "task_11223344",
             "subject": "legacy",
@@ -478,9 +476,7 @@ class TestLegacyCompat:
         assert task.result_ref is None
         assert task.version == 0
 
-    def test_load_legacy_in_progress(
-        self, store: TaskStore, tmp_path: Path
-    ) -> None:
+    def test_load_legacy_in_progress(self, store: TaskStore, tmp_path: Path) -> None:
         legacy = {
             "id": "task_11223344",
             "subject": "legacy",
@@ -496,9 +492,7 @@ class TestLegacyCompat:
         assert task.status == TaskStatus.IN_PROGRESS.value
         assert task.owner == "agent-1"
 
-    def test_save_roundtrip_preserves_new_fields(
-        self, store: TaskStore
-    ) -> None:
+    def test_save_roundtrip_preserves_new_fields(self, store: TaskStore) -> None:
         t = store.create("roundtrip")
         store.claim(t.id, owner="agent-1")
         store.fail(t.id, owner="agent-1", error="test error")
@@ -603,9 +597,7 @@ class TestClaimAtomicityAndOwner:
         with pytest.raises(ValueError, match="owned by"):
             store.renew_lease(t.id, owner="agent-2")
 
-    def test_renew_lease_non_in_progress_rejected(
-        self, store: TaskStore
-    ) -> None:
+    def test_renew_lease_non_in_progress_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
         with pytest.raises(ValueError, match="cannot renew lease"):
             store.renew_lease(t.id, owner="agent-1")
@@ -617,9 +609,7 @@ class TestClaimAtomicityAndOwner:
         re_claimed = store.claim(t.id, owner="agent-2")
         assert re_claimed.owner_agent_id == "agent-2"
 
-    def test_reclaim_before_lease_expired_rejected(
-        self, store: TaskStore
-    ) -> None:
+    def test_reclaim_before_lease_expired_rejected(self, store: TaskStore) -> None:
         t = store.create("work")
         store.claim(t.id, owner="agent-1", lease_seconds=300.0)
         with pytest.raises(ValueError, match="in_progress"):
@@ -632,9 +622,7 @@ class TestClaimAtomicityAndOwner:
         retried = store.retry(t.id)
         assert retried.lease_expires_at is None
 
-    def test_concurrent_claim_only_one_succeeds(
-        self, store: TaskStore
-    ) -> None:
+    def test_concurrent_claim_only_one_succeeds(self, store: TaskStore) -> None:
         import threading
 
         t = store.create("shared work")
@@ -650,10 +638,7 @@ class TestClaimAtomicityAndOwner:
                 with lock:
                     results.append(False)
 
-        threads = [
-            threading.Thread(target=try_claim, args=(f"agent-{i}",))
-            for i in range(10)
-        ]
+        threads = [threading.Thread(target=try_claim, args=(f"agent-{i}",)) for i in range(10)]
         for th in threads:
             th.start()
         for th in threads:
@@ -662,9 +647,7 @@ class TestClaimAtomicityAndOwner:
         assert results.count(True) == 1
         assert results.count(False) == 9
 
-    def test_load_legacy_missing_lease(
-        self, store: TaskStore, tmp_path: Path
-    ) -> None:
+    def test_load_legacy_missing_lease(self, store: TaskStore, tmp_path: Path) -> None:
         legacy = {
             "id": "task_11223344",
             "subject": "legacy",

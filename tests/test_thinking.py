@@ -104,10 +104,12 @@ class TestAnthropicThinking:
         assert result is None
 
     def test_parse_content_blocks_thinking(self) -> None:
-        blocks = _parse_content_blocks([
-            {"type": "thinking", "thinking": "thought process"},
-            {"type": "text", "text": "answer"},
-        ])
+        blocks = _parse_content_blocks(
+            [
+                {"type": "thinking", "thinking": "thought process"},
+                {"type": "text", "text": "answer"},
+            ]
+        )
         assert len(blocks) == 2
         assert isinstance(blocks[0], ThinkingBlock)
         assert blocks[0].text == "thought process"
@@ -142,7 +144,7 @@ class TestAnthropicThinking:
             "event: content_block_delta\n"
             'data: {"delta": {"type": "text_delta", "text": "answer"}}\n\n'
             "event: message_stop\n"
-            'data: {}\n\n'
+            "data: {}\n\n"
         )
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -191,10 +193,12 @@ def _oai_req() -> CompleteRequest:
 
 class TestOpenAiReasoning:
     def test_parse_oai_content_reasoning(self) -> None:
-        blocks = _parse_oai_content({
-            "reasoning_content": "step by step",
-            "content": "final answer",
-        })
+        blocks = _parse_oai_content(
+            {
+                "reasoning_content": "step by step",
+                "content": "final answer",
+            }
+        )
         assert len(blocks) == 2
         assert isinstance(blocks[0], ThinkingBlock)
         assert blocks[0].text == "step by step"
@@ -211,14 +215,30 @@ class TestOpenAiReasoning:
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                content=_sse([
-                    {"choices": [{"delta": {
-                        "reasoning_content": "thinking...",
-                    }, "finish_reason": None}]},
-                    {"choices": [{"delta": {
-                        "content": "answer",
-                    }, "finish_reason": "stop"}]},
-                ]),
+                content=_sse(
+                    [
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "reasoning_content": "thinking...",
+                                    },
+                                    "finish_reason": None,
+                                }
+                            ]
+                        },
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "content": "answer",
+                                    },
+                                    "finish_reason": "stop",
+                                }
+                            ]
+                        },
+                    ]
+                ),
             )
 
         client = _oai_client_with(httpx.MockTransport(handler))
@@ -236,16 +256,39 @@ class TestOpenAiReasoning:
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                content=_sse([
-                    {"choices": [{"delta": {
-                        "reasoning_content": "need to call tool",
-                    }, "finish_reason": None}]},
-                    {"choices": [{"delta": {
-                        "tool_calls": [{"index": 0, "id": "c1",
-                                        "function": {"name": "run_bash",
-                                                     "arguments": '{"command":"ls"}'}}],
-                    }, "finish_reason": "tool_calls"}]},
-                ]),
+                content=_sse(
+                    [
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "reasoning_content": "need to call tool",
+                                    },
+                                    "finish_reason": None,
+                                }
+                            ]
+                        },
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "tool_calls": [
+                                            {
+                                                "index": 0,
+                                                "id": "c1",
+                                                "function": {
+                                                    "name": "run_bash",
+                                                    "arguments": '{"command":"ls"}',
+                                                },
+                                            }
+                                        ],
+                                    },
+                                    "finish_reason": "tool_calls",
+                                }
+                            ]
+                        },
+                    ]
+                ),
             )
 
         client = _oai_client_with(httpx.MockTransport(handler))
@@ -302,12 +345,8 @@ class TestAgentLoopThinking:
         assert len(agent.history) >= 2
         assistant_msg = agent.history[1]
         assert assistant_msg.role == Role.assistant
-        thinking_blocks = [
-            b for b in assistant_msg.content if isinstance(b, ThinkingBlock)
-        ]
-        text_blocks = [
-            b for b in assistant_msg.content if isinstance(b, TextBlock)
-        ]
+        thinking_blocks = [b for b in assistant_msg.content if isinstance(b, ThinkingBlock)]
+        text_blocks = [b for b in assistant_msg.content if isinstance(b, TextBlock)]
         assert len(thinking_blocks) == 1
         assert thinking_blocks[0].text == "reasoning"
         assert len(text_blocks) == 1
@@ -336,9 +375,7 @@ class TestAgentLoopThinking:
         await agent.run_streaming("hi", queue)
 
         assistant_msg = agent.history[1]
-        assert not any(
-            isinstance(b, ThinkingBlock) for b in assistant_msg.content
-        )
+        assert not any(isinstance(b, ThinkingBlock) for b in assistant_msg.content)
 
     @pytest.mark.asyncio
     async def test_thinking_config_passthrough(self, ctx, registry) -> None:
@@ -460,8 +497,7 @@ class TestHistoryEventsThinking:
         ]
         events = history_events(history)
         types_in_order = [
-            type(e).__name__ for e in events
-            if isinstance(e, (ThinkingDelta, TextDelta))
+            type(e).__name__ for e in events if isinstance(e, (ThinkingDelta, TextDelta))
         ]
         assert types_in_order == ["ThinkingDelta", "TextDelta"]
 

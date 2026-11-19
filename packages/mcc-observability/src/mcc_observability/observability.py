@@ -104,11 +104,27 @@ class JsonFormatter(logging.Formatter):
         }
         for key, value in record_dict.items():
             if key in payload or key in (
-                "args", "msg", "exc_info", "exc_text", "stack_info",
-                "created", "msecs", "relativeCreated", "levelname",
-                "levelno", "pathname", "filename", "module", "lineno",
-                "funcName", "process", "processName", "thread",
-                "threadName", "name", "taskName",
+                "args",
+                "msg",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "process",
+                "processName",
+                "thread",
+                "threadName",
+                "name",
+                "taskName",
             ):
                 continue
             payload[key] = value
@@ -162,16 +178,18 @@ class Metrics:
         ]
         histograms = []
         for (name, labels), values in sorted(self._histograms.items()):
-            histograms.append({
-                "name": name,
-                "labels": dict(labels),
-                "count": len(values),
-                "sum": sum(values),
-                "min": min(values),
-                "max": max(values),
-                "p50": _percentile(values, 0.5),
-                "p95": _percentile(values, 0.95),
-            })
+            histograms.append(
+                {
+                    "name": name,
+                    "labels": dict(labels),
+                    "count": len(values),
+                    "sum": sum(values),
+                    "min": min(values),
+                    "max": max(values),
+                    "p50": _percentile(values, 0.5),
+                    "p95": _percentile(values, 0.95),
+                }
+            )
         gauges = [
             {"name": name, "labels": dict(labels), "value": value}
             for (name, labels), value in sorted(self._gauges.items())
@@ -231,28 +249,29 @@ class ObservabilitySink:
             attempt=attempt,
         )
         m = self._metrics
-        m.counter("agent_llm_calls_total", model=model,
-                  stop_reason=stop_reason or "unknown")
-        m.counter("agent_llm_tokens_total", model=model, kind="input",
-                  amount=float(input_tokens))
-        m.counter("agent_llm_tokens_total", model=model, kind="output",
-                  amount=float(output_tokens))
+        m.counter("agent_llm_calls_total", model=model, stop_reason=stop_reason or "unknown")
+        m.counter("agent_llm_tokens_total", model=model, kind="input", amount=float(input_tokens))
+        m.counter("agent_llm_tokens_total", model=model, kind="output", amount=float(output_tokens))
         if cache_read_tokens:
-            m.counter("agent_llm_tokens_total", model=model, kind="cache_read",
-                      amount=float(cache_read_tokens))
+            m.counter(
+                "agent_llm_tokens_total",
+                model=model,
+                kind="cache_read",
+                amount=float(cache_read_tokens),
+            )
         if cache_write_tokens:
-            m.counter("agent_llm_tokens_total", model=model, kind="cache_write",
-                      amount=float(cache_write_tokens))
+            m.counter(
+                "agent_llm_tokens_total",
+                model=model,
+                kind="cache_write",
+                amount=float(cache_write_tokens),
+            )
         m.histogram("agent_llm_latency_ms", float(latency_ms), model=model)
         total_in = cache_read_tokens + input_tokens
         if total_in > 0:
-            m.histogram(
-                "agent_cache_hit_rate", cache_read_tokens / total_in, model=model
-            )
+            m.histogram("agent_cache_hit_rate", cache_read_tokens / total_in, model=model)
 
-    def tool_call(
-        self, *, tool: str, latency_ms: int, is_error: bool
-    ) -> None:
+    def tool_call(self, *, tool: str, latency_ms: int, is_error: bool) -> None:
         """记录一次工具执行。"""
         self._log(
             "tool call completed",
@@ -261,9 +280,7 @@ class ObservabilitySink:
             latency_ms=latency_ms,
             is_error=is_error,
         )
-        self._metrics.counter(
-            "agent_tool_calls_total", tool=tool, is_error=is_error
-        )
+        self._metrics.counter("agent_tool_calls_total", tool=tool, is_error=is_error)
         self._metrics.histogram("agent_tool_duration_ms", float(latency_ms), tool=tool)
 
     def permission(self, *, category: str, decision: str) -> None:
@@ -287,7 +304,8 @@ class ObservabilitySink:
         )
         self._metrics.counter("agent_loop_iterations_total")
         self._metrics.histogram(
-            "agent_loop_iterations", float(iteration),
+            "agent_loop_iterations",
+            float(iteration),
             session_hash=str(hash(self._session_id) % 10000),
         )
 

@@ -278,10 +278,7 @@ class PlanStore:
     async def list_pending(self) -> list[PlanRequest]:
         """列出所有 pending plan 请求。"""
         async with self._lock:
-            return [
-                req for req in self._requests.values()
-                if req.status == PlanStatus.PENDING
-            ]
+            return [req for req in self._requests.values() if req.status == PlanStatus.PENDING]
 
 
 __all__ = ["PlanError", "PlanRequest", "PlanStatus", "PlanStore"]

@@ -99,8 +99,7 @@ def write_report_md(batch: BatchResult, batch_dir: Path, *, title: str) -> Path:
         if flaky:
             lines += [
                 "",
-                "> 不稳定 case 是 harness 迭代最值得排查的对象："
-                "同一任务多次运行结果不同。",
+                "> 不稳定 case 是 harness 迭代最值得排查的对象：同一任务多次运行结果不同。",
             ]
 
     lines += ["", "## 失败理由", ""]
@@ -151,9 +150,7 @@ def _attempt_files(runs_dir: Path, case_id: str) -> list[tuple[int, Path]]:
     return sorted(found, key=lambda pair: pair[0])
 
 
-async def rebuild(
-    batch_dir: Path, judge: JudgeScorer | None = None
-) -> BatchResult:
+async def rebuild(batch_dir: Path, judge: JudgeScorer | None = None) -> BatchResult:
     """对已存轨迹与产物重评分（不重新执行 Agent）。
 
     每 case 可能有多份采样轨迹（-a<attempt> 后缀），逐份重评，
@@ -173,36 +170,41 @@ async def rebuild(
         attempts = _attempt_files(runs_dir, case.case_id) if runs_dir.is_dir() else []
         if not attempts:
             results.append(
-                CaseResult(case_id=case.case_id, status="error", score=None,
-                           reason="trace file missing")
+                CaseResult(
+                    case_id=case.case_id, status="error", score=None, reason="trace file missing"
+                )
             )
             continue
 
         for attempt, trace_path in attempts:
             events = load_trace_events(trace_path)
-            finished = next(
-                (ev for ev in reversed(events) if isinstance(ev, RunFinished)), None
-            )
+            finished = next((ev for ev in reversed(events) if isinstance(ev, RunFinished)), None)
             if not events:
                 results.append(
-                    CaseResult(case_id=case.case_id, status="error", score=None,
-                               reason="trace file empty", attempt=attempt)
+                    CaseResult(
+                        case_id=case.case_id,
+                        status="error",
+                        score=None,
+                        reason="trace file empty",
+                        attempt=attempt,
+                    )
                 )
                 continue
             if finished and finished.status in ("error", "timeout"):
                 results.append(
-                    CaseResult(case_id=case.case_id, status=finished.status,
-                               score=None, attempt=attempt,
-                               reason=finished.reason
-                               or f"execution terminated as {finished.status}")
+                    CaseResult(
+                        case_id=case.case_id,
+                        status=finished.status,
+                        score=None,
+                        attempt=attempt,
+                        reason=finished.reason or f"execution terminated as {finished.status}",
+                    )
                 )
                 continue
             snap = snapshot_from_events(events)
             judge_results = None
             if judge is not None:
-                judge_results = await judge.prescore(
-                    " ".join(snap.text_outputs), case.expectations
-                )
+                judge_results = await judge.prescore(" ".join(snap.text_outputs), case.expectations)
             scored = await asyncio.to_thread(
                 score_case,
                 snap,

@@ -80,16 +80,19 @@ class TestEventAdapterSequence:
 
 
 class TestEventAdapterTypeMapping:
-    @pytest.mark.parametrize("event,expected_type", [
-        (ToolCallStart(id="t1", name="bash", args_preview="ls"), RuntimeEventType.TOOL_STARTED),
-        (ToolCallEnd(id="t1", output="done", is_error=False), RuntimeEventType.TOOL_COMPLETED),
-        (ToolCallEnd(id="t1", output="err", is_error=True), RuntimeEventType.TOOL_COMPLETED),
-        (TurnEnd(cost_usd=0.01), RuntimeEventType.TASK_PROGRESS),
-        (Error(text="boom"), RuntimeEventType.TASK_FAILED),
-        (UserEcho(text="hi"), RuntimeEventType.TASK_PROGRESS),
-        (TextDelta(text="chunk"), RuntimeEventType.TASK_PROGRESS),
-        (Notice(text="note"), RuntimeEventType.TASK_PROGRESS),
-    ])
+    @pytest.mark.parametrize(
+        "event,expected_type",
+        [
+            (ToolCallStart(id="t1", name="bash", args_preview="ls"), RuntimeEventType.TOOL_STARTED),
+            (ToolCallEnd(id="t1", output="done", is_error=False), RuntimeEventType.TOOL_COMPLETED),
+            (ToolCallEnd(id="t1", output="err", is_error=True), RuntimeEventType.TOOL_COMPLETED),
+            (TurnEnd(cost_usd=0.01), RuntimeEventType.TASK_PROGRESS),
+            (Error(text="boom"), RuntimeEventType.TASK_FAILED),
+            (UserEcho(text="hi"), RuntimeEventType.TASK_PROGRESS),
+            (TextDelta(text="chunk"), RuntimeEventType.TASK_PROGRESS),
+            (Notice(text="note"), RuntimeEventType.TASK_PROGRESS),
+        ],
+    )
     def test_event_type_mapping(self, event, expected_type):
         adapter = EventAdapter(runtime_id="rt-1", agent_id="agent-1")
         result = adapter.adapt(event)

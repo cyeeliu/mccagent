@@ -162,8 +162,7 @@ class TestCircuitBreaker:
 
     def test_half_open_after_timeout_then_closes_on_success(self) -> None:
         clock = FakeClock()
-        breaker = CircuitBreaker(failure_threshold=2, reset_timeout=30.0,
-                                 clock=clock)
+        breaker = CircuitBreaker(failure_threshold=2, reset_timeout=30.0, clock=clock)
         breaker.record_failure()
         breaker.record_failure()
         assert breaker.is_open
@@ -174,8 +173,7 @@ class TestCircuitBreaker:
 
     def test_half_open_failure_reopens(self) -> None:
         clock = FakeClock()
-        breaker = CircuitBreaker(failure_threshold=2, reset_timeout=30.0,
-                                 clock=clock)
+        breaker = CircuitBreaker(failure_threshold=2, reset_timeout=30.0, clock=clock)
         breaker.record_failure()
         breaker.record_failure()
         clock.advance(31.0)
@@ -313,10 +311,7 @@ class _SlowProvider:
 
 def _make_agent(llm, ctx, **kw):
     registry = ToolRegistry()
-    builder = (
-        AgentLoopBuilder(llm, registry, ctx)
-        .model("claude-haiku-4-5-20251001")
-    )
+    builder = AgentLoopBuilder(llm, registry, ctx).model("claude-haiku-4-5-20251001")
     for method, value in kw.items():
         builder = getattr(builder, method)(value)
     return builder.build()
@@ -332,9 +327,7 @@ def _collect_notices(queue: asyncio.Queue) -> list[str]:
 
 
 class TestAgentLoopReliability:
-    async def test_retry_recovers_from_transient_failures(
-        self, ctx: ToolContext
-    ) -> None:
+    async def test_retry_recovers_from_transient_failures(self, ctx: ToolContext) -> None:
         inner = MockLlm([single_text_turn("done")])
         provider = _SequenceFailProvider(2, inner)
         policy = RetryPolicy(jitter=False, base_delay=0.01)
@@ -344,8 +337,7 @@ class TestAgentLoopReliability:
         assert run.final_text == "done"
         assert provider.calls == 3
         notices = _collect_notices(queue)
-        assert any("attempt 1/4" in n and "server error (503)" in n
-                   for n in notices)
+        assert any("attempt 1/4" in n and "server error (503)" in n for n in notices)
 
     async def test_retry_after_header_respected(self, ctx: ToolContext) -> None:
         provider = _RateLimitedProvider()
@@ -358,9 +350,7 @@ class TestAgentLoopReliability:
         assert time.monotonic() - t0 >= 0.04
         assert provider.calls == 2
 
-    async def test_non_retryable_fails_immediately(
-        self, ctx: ToolContext
-    ) -> None:
+    async def test_non_retryable_fails_immediately(self, ctx: ToolContext) -> None:
         class BadRequestProvider:
             calls = 0
 
@@ -382,9 +372,7 @@ class TestAgentLoopReliability:
         breaker = CircuitBreaker(failure_threshold=2)
         breaker.record_failure()
         breaker.record_failure()
-        agent = _make_agent(
-            provider, ctx, retry_policy=RetryPolicy(), circuit_breaker=breaker
-        )
+        agent = _make_agent(provider, ctx, retry_policy=RetryPolicy(), circuit_breaker=breaker)
         queue: asyncio.Queue = asyncio.Queue()
         with pytest.raises(CircuitOpenError):
             await agent.run_streaming("hi", queue)
@@ -395,9 +383,7 @@ class TestAgentLoopReliability:
         provider = _SequenceFailProvider(2, inner)
         breaker = CircuitBreaker(failure_threshold=3)
         policy = RetryPolicy(jitter=False, base_delay=0.01)
-        agent = _make_agent(
-            provider, ctx, retry_policy=policy, circuit_breaker=breaker
-        )
+        agent = _make_agent(provider, ctx, retry_policy=policy, circuit_breaker=breaker)
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("hi", queue)
         assert not breaker.is_open
@@ -409,8 +395,7 @@ class TestAgentLoopReliability:
             [
                 ToolUseStart(id="t1", name="noop"),
                 ToolUseInputDelta(partial_json="{}"),
-                MessageStop(stop_reason="tool_use",
-                            usage=Usage(input_tokens=1, output_tokens=1)),
+                MessageStop(stop_reason="tool_use", usage=Usage(input_tokens=1, output_tokens=1)),
             ],
             single_text_turn("done"),
         ]
@@ -441,9 +426,12 @@ class TestReliabilityConfig:
 
     def test_merge_project_overrides(self) -> None:
         home = Config()
-        project = Config(reliability=ReliabilityConfig(
-            circuit_failure_threshold=5, rpm=60,
-        ))
+        project = Config(
+            reliability=ReliabilityConfig(
+                circuit_failure_threshold=5,
+                rpm=60,
+            )
+        )
         merged = merge(home, project)
         assert merged.reliability.circuit_failure_threshold == 5
         assert merged.reliability.rpm == 60

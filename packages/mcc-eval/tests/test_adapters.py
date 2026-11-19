@@ -103,12 +103,16 @@ def test_translator_max_iterations_keeps_cost_and_turns() -> None:
     """
     t = _Translator(_req())
     # 三轮 LLM 调用各带用量；无任何 TurnEnd（异常中断路径）
-    for i, (inp, out, cost) in enumerate([(900, 80, 0.004), (1500, 300, 0.012),
-                                          (2000, 90, 0.007)]):
+    for i, (inp, out, cost) in enumerate([(900, 80, 0.004), (1500, 300, 0.012), (2000, 90, 0.007)]):
         t.translate(TextDelta(text=f"turn {i}"))
-        t.translate(LlmUsageEvent(
-            iteration=i + 1, input_tokens=inp, output_tokens=out, cost_usd=cost,
-        ))
+        t.translate(
+            LlmUsageEvent(
+                iteration=i + 1,
+                input_tokens=inp,
+                output_tokens=out,
+                cost_usd=cost,
+            )
+        )
     t.translate(ErrorEvent(text="exceeded max_iterations=20"))
 
     finished = t.run_finished()
@@ -122,10 +126,8 @@ def test_translator_turn_end_overrides_accumulated_cost() -> None:
     """正常结束（有 TurnEnd）时以会话累计值覆盖逐轮累加。"""
     t = _Translator(_req())
     t.translate(TextDelta(text="hi"))
-    t.translate(LlmUsageEvent(iteration=1, input_tokens=100, output_tokens=20,
-                              cost_usd=0.5))
-    t.translate(LlmUsageEvent(iteration=2, input_tokens=100, output_tokens=20,
-                              cost_usd=0.7))
+    t.translate(LlmUsageEvent(iteration=1, input_tokens=100, output_tokens=20, cost_usd=0.5))
+    t.translate(LlmUsageEvent(iteration=2, input_tokens=100, output_tokens=20, cost_usd=0.7))
     t.translate(TurnEnd(cost_usd=1.2))  # AgentLoop 的会话累计值
 
     finished = t.run_finished()
@@ -138,10 +140,15 @@ def test_translator_llm_usage_carries_tokens() -> None:
     """AgentLoop 的 LlmUsage 事件转译为轨迹 llm_usage：token 权威来源。"""
     t = _Translator(_req())
     # 空产出轮：usage 前没有任何事件，补发 llm_request 一并输出
-    out = t.translate(LlmUsageEvent(
-        iteration=0, input_tokens=1520, output_tokens=310,
-        cache_read_input_tokens=64, cost_usd=0.0123,
-    ))
+    out = t.translate(
+        LlmUsageEvent(
+            iteration=0,
+            input_tokens=1520,
+            output_tokens=310,
+            cache_read_input_tokens=64,
+            cost_usd=0.0123,
+        )
+    )
     assert [type(e) for e in out] == [LlmRequest, LlmUsage]
     assert out[0].turn == 0
     usage = out[1]
@@ -153,9 +160,14 @@ def test_translator_llm_usage_carries_tokens() -> None:
     # 有产出的轮：llm_request 已发过，usage 单独输出且归到 turn=1
     first = t.translate(TextDelta(text="hi"))  # 触发 llm_request（turn=1）
     assert first[0].turn == 1
-    nxt = t.translate(LlmUsageEvent(
-        iteration=1, input_tokens=900, output_tokens=80, cost_usd=0.004,
-    ))
+    nxt = t.translate(
+        LlmUsageEvent(
+            iteration=1,
+            input_tokens=900,
+            output_tokens=80,
+            cost_usd=0.004,
+        )
+    )
     assert [type(e) for e in nxt] == [LlmUsage]
     assert nxt[0].turn == 1
 
@@ -309,15 +321,13 @@ def test_mcc_adapter_bash_env_is_sanitized(tmp_path: Path) -> None:
     from mcc_llm import MessageStop, ToolUseInputDelta, ToolUseStart
     from mcc_llm.mock import MockLlm
 
-    probe = _json.dumps({
-        "command": "which python 2>/dev/null; echo HOME=$HOME; "
-                   "echo VENV=$VIRTUAL_ENV"
-    })
+    probe = _json.dumps(
+        {"command": "which python 2>/dev/null; echo HOME=$HOME; echo VENV=$VIRTUAL_ENV"}
+    )
     turn = [
         ToolUseStart(id="probe", name="run_bash"),
         ToolUseInputDelta(partial_json=probe),
-        MessageStop(stop_reason="tool_use",
-                    usage=Usage(input_tokens=10, output_tokens=5)),
+        MessageStop(stop_reason="tool_use", usage=Usage(input_tokens=10, output_tokens=5)),
     ]
     adapter = MccAdapter(llm=MockLlm([turn, single_text_turn("done")]))
     events = _drain(adapter, _req(work_dir=str(tmp_path)))
@@ -325,6 +335,6 @@ def test_mcc_adapter_bash_env_is_sanitized(tmp_path: Path) -> None:
     results = [e for e in events if isinstance(e, ToolResult)]
     assert results, "工具结果未产生"
     out = results[0].output
-    assert ".venv" not in out          # harness venv PATH 不泄漏
-    assert "VENV=" in out              # 环境变量被白名单剥离后为空
+    assert ".venv" not in out  # harness venv PATH 不泄漏
+    assert "VENV=" in out  # 环境变量被白名单剥离后为空
     assert str(tmp_path / ".sandbox-home") in out  # HOME 重定向生效

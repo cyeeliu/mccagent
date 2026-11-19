@@ -21,33 +21,41 @@ from .base import RuntimeMode, RuntimeStatus
 
 AgentState = RuntimeStatus
 
-_TERMINAL_STATES: frozenset[AgentState] = frozenset({
-    AgentState.COMPLETED,
-    AgentState.FAILED,
-    AgentState.CANCELLED,
-    AgentState.TIMEOUT,
-    AgentState.BUDGET_EXCEEDED,
-    AgentState.SHUTDOWN,
-})
-
-_EPHEMERAL_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
-    AgentState.CREATED: frozenset({
-        AgentState.RUNNING,
-        AgentState.CANCELLED,
-        AgentState.FAILED,
-    }),
-    AgentState.RUNNING: frozenset({
-        AgentState.PAUSED,
+_TERMINAL_STATES: frozenset[AgentState] = frozenset(
+    {
         AgentState.COMPLETED,
         AgentState.FAILED,
         AgentState.CANCELLED,
         AgentState.TIMEOUT,
         AgentState.BUDGET_EXCEEDED,
-    }),
-    AgentState.PAUSED: frozenset({
-        AgentState.RUNNING,
-        AgentState.CANCELLED,
-    }),
+        AgentState.SHUTDOWN,
+    }
+)
+
+_EPHEMERAL_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
+    AgentState.CREATED: frozenset(
+        {
+            AgentState.RUNNING,
+            AgentState.CANCELLED,
+            AgentState.FAILED,
+        }
+    ),
+    AgentState.RUNNING: frozenset(
+        {
+            AgentState.PAUSED,
+            AgentState.COMPLETED,
+            AgentState.FAILED,
+            AgentState.CANCELLED,
+            AgentState.TIMEOUT,
+            AgentState.BUDGET_EXCEEDED,
+        }
+    ),
+    AgentState.PAUSED: frozenset(
+        {
+            AgentState.RUNNING,
+            AgentState.CANCELLED,
+        }
+    ),
     AgentState.COMPLETED: frozenset(),
     AgentState.FAILED: frozenset(),
     AgentState.CANCELLED: frozenset(),
@@ -56,98 +64,136 @@ _EPHEMERAL_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
 }
 
 _PERSISTENT_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
-    AgentState.CREATED: frozenset({
-        AgentState.STARTING,
-        AgentState.SHUTDOWN,
-    }),
-    AgentState.STARTING: frozenset({
-        AgentState.IDLE,
-        AgentState.RUNNING,
-        AgentState.FAILED,
-        AgentState.SHUTDOWN,
-    }),
-    AgentState.IDLE: frozenset({
-        AgentState.RUNNING,
-        AgentState.SHUTDOWN,
-    }),
-    AgentState.RUNNING: frozenset({
-        AgentState.IDLE,
-        AgentState.PAUSED,
-        AgentState.COMPLETED,
-        AgentState.FAILED,
-        AgentState.CANCELLED,
-        AgentState.TIMEOUT,
-        AgentState.BUDGET_EXCEEDED,
-        AgentState.STOPPING,
-    }),
-    AgentState.PAUSED: frozenset({
-        AgentState.RUNNING,
-        AgentState.STOPPING,
-        AgentState.SHUTDOWN,
-    }),
-    AgentState.COMPLETED: frozenset({
-        AgentState.IDLE,
-        AgentState.STOPPING,
-    }),
-    AgentState.FAILED: frozenset({
-        AgentState.IDLE,
-        AgentState.STOPPING,
-    }),
-    AgentState.CANCELLED: frozenset({
-        AgentState.IDLE,
-        AgentState.STOPPING,
-    }),
-    AgentState.TIMEOUT: frozenset({
-        AgentState.IDLE,
-        AgentState.STOPPING,
-    }),
-    AgentState.BUDGET_EXCEEDED: frozenset({
-        AgentState.STOPPING,
-    }),
-    AgentState.STOPPING: frozenset({
-        AgentState.SHUTDOWN,
-    }),
+    AgentState.CREATED: frozenset(
+        {
+            AgentState.STARTING,
+            AgentState.SHUTDOWN,
+        }
+    ),
+    AgentState.STARTING: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.RUNNING,
+            AgentState.FAILED,
+            AgentState.SHUTDOWN,
+        }
+    ),
+    AgentState.IDLE: frozenset(
+        {
+            AgentState.RUNNING,
+            AgentState.SHUTDOWN,
+        }
+    ),
+    AgentState.RUNNING: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.PAUSED,
+            AgentState.COMPLETED,
+            AgentState.FAILED,
+            AgentState.CANCELLED,
+            AgentState.TIMEOUT,
+            AgentState.BUDGET_EXCEEDED,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.PAUSED: frozenset(
+        {
+            AgentState.RUNNING,
+            AgentState.STOPPING,
+            AgentState.SHUTDOWN,
+        }
+    ),
+    AgentState.COMPLETED: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.FAILED: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.CANCELLED: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.TIMEOUT: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.BUDGET_EXCEEDED: frozenset(
+        {
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.STOPPING: frozenset(
+        {
+            AgentState.SHUTDOWN,
+        }
+    ),
     AgentState.SHUTDOWN: frozenset(),
 }
 
 _INTERACTIVE_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
-    AgentState.CREATED: frozenset({
-        AgentState.IDLE,
-        AgentState.RUNNING,
-        AgentState.SHUTDOWN,
-    }),
-    AgentState.IDLE: frozenset({
-        AgentState.RUNNING,
-        AgentState.STOPPING,
-        AgentState.SHUTDOWN,
-    }),
-    AgentState.RUNNING: frozenset({
-        AgentState.IDLE,
-        AgentState.COMPLETED,
-        AgentState.FAILED,
-        AgentState.CANCELLED,
-        AgentState.TIMEOUT,
-        AgentState.STOPPING,
-    }),
-    AgentState.COMPLETED: frozenset({
-        AgentState.IDLE,
-        AgentState.STOPPING,
-    }),
-    AgentState.FAILED: frozenset({
-        AgentState.IDLE,
-        AgentState.STOPPING,
-    }),
-    AgentState.CANCELLED: frozenset({
-        AgentState.IDLE,
-        AgentState.STOPPING,
-    }),
-    AgentState.TIMEOUT: frozenset({
-        AgentState.IDLE,
-        AgentState.STOPPING,
-    }),
-    AgentState.STOPPING: frozenset({
-        AgentState.SHUTDOWN,
-    }),
+    AgentState.CREATED: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.RUNNING,
+            AgentState.SHUTDOWN,
+        }
+    ),
+    AgentState.IDLE: frozenset(
+        {
+            AgentState.RUNNING,
+            AgentState.STOPPING,
+            AgentState.SHUTDOWN,
+        }
+    ),
+    AgentState.RUNNING: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.COMPLETED,
+            AgentState.FAILED,
+            AgentState.CANCELLED,
+            AgentState.TIMEOUT,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.COMPLETED: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.FAILED: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.CANCELLED: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.TIMEOUT: frozenset(
+        {
+            AgentState.IDLE,
+            AgentState.STOPPING,
+        }
+    ),
+    AgentState.STOPPING: frozenset(
+        {
+            AgentState.SHUTDOWN,
+        }
+    ),
     AgentState.SHUTDOWN: frozenset(),
 }
 
@@ -227,9 +273,7 @@ class AgentStateMachine:
         self._agent_id = agent_id
         self._state = initial_state
         self._mode = mode
-        self._transitions = (
-            transitions if transitions is not None else _DEFAULT_TRANSITIONS[mode]
-        )
+        self._transitions = transitions if transitions is not None else _DEFAULT_TRANSITIONS[mode]
         self._history: list[StateTransition] = []
         self._subscribers: list[Callable[[StateTransition], None]] = []
         self._guards: dict[tuple[AgentState, AgentState], list[TransitionGuard]] = {}

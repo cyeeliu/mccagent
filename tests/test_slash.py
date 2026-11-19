@@ -230,9 +230,7 @@ class TestModelCommand:
         "cmd, expected",
         [("/model claude-x", "claude-x"), ("/model main claude-y", "claude-y")],
     )
-    async def test_main_switch_sets_model_update(
-        self, home: Path, cmd: str, expected: str
-    ) -> None:
+    async def test_main_switch_sets_model_update(self, home: Path, cmd: str, expected: str) -> None:
         registry = build_default_registry()
         result = await registry.dispatch(cmd, _source(slash_registry=registry))
         assert result is not None
@@ -285,9 +283,7 @@ class TestConfigCommand:
     async def test_set_whitelisted(self, home: Path) -> None:
         registry = build_default_registry()
         source = _source(slash_registry=registry)
-        result = await registry.dispatch(
-            "/config set budget.max_usd_per_session 5.5", source
-        )
+        result = await registry.dispatch("/config set budget.max_usd_per_session 5.5", source)
         assert result is not None and result.text is not None
         assert "5.5" in result.text
         assert read_home_settings()["budget"]["max_usd_per_session"] == 5.5
@@ -324,17 +320,13 @@ class TestConfigCommand:
 
     async def test_set_invalid_type(self, home: Path) -> None:
         registry = build_default_registry()
-        result = await registry.dispatch(
-            "/config set budget.max_usd_per_session abc", _source()
-        )
+        result = await registry.dispatch("/config set budget.max_usd_per_session abc", _source())
         assert result is not None and result.text is not None
         assert "不是合法" in result.text
 
     async def test_set_api_key_masked_in_reply(self, home: Path) -> None:
         registry = build_default_registry()
-        result = await registry.dispatch(
-            "/config set llm.api_key sk-secret-value-9999", _source()
-        )
+        result = await registry.dispatch("/config set llm.api_key sk-secret-value-9999", _source())
         assert result is not None and result.text is not None
         assert "sk-secret-value-9999" not in result.text
         assert read_home_settings()["llm"]["api_key"] == "sk-secret-value-9999"
@@ -401,9 +393,7 @@ class TestEventSourceIntegration:
 
         ctx = ToolContext(cwd=Path(tempfile.mkdtemp()), session_id="t", depth=0)
         agent = (
-            AgentLoopBuilder(llm, ToolRegistry(), ctx)
-            .model("claude-haiku-4-5-20251001")
-            .build()
+            AgentLoopBuilder(llm, ToolRegistry(), ctx).model("claude-haiku-4-5-20251001").build()
         )
         return AgentEventSource(
             agent,
@@ -458,9 +448,7 @@ class TestEventSourceIntegration:
 
     async def test_goal_set_prompt_continues_to_agent(self) -> None:
         controller = GoalController(evaluator=None)
-        source, llm = self._build(
-            registry=build_default_registry(), goal=controller
-        )
+        source, llm = self._build(registry=build_default_registry(), goal=controller)
         events = [e async for e in source.run("/goal finish the task")]
         assert llm.call_count == 1
         texts = [e.text for e in events if hasattr(e, "text")]
@@ -557,9 +545,7 @@ class TestSkillsCompletion:
     def test_skill_prefix_filter(self, prefix: str, expected: list[str]) -> None:
         from mcc_tui.completions import make_provider
 
-        provider = make_provider(
-            [], skill_items=[("code-review", ""), ("debug-fix", "")]
-        )
+        provider = make_provider([], skill_items=[("code-review", ""), ("debug-fix", "")])
         inserts = [item.insert for item in provider(prefix)]
         assert inserts == expected
 
@@ -612,18 +598,14 @@ def _write_session(home: Path, sid: str, turns: int = 1, title: str | None = Non
         status="completed",
         title=title,
     )
-    (day / f"{sid}.meta.json").write_text(
-        meta.model_dump_json(indent=2), encoding="utf-8"
-    )
+    (day / f"{sid}.meta.json").write_text(meta.model_dump_json(indent=2), encoding="utf-8")
 
     lines: list[str] = []
     for i in range(turns):
         snapshot = TurnSnapshot(
             ts=datetime.now(UTC),
             iteration=i,
-            request_messages=[
-                Message(role=Role.user, content=[TextBlock(text=f"turn {i}")])
-            ],
+            request_messages=[Message(role=Role.user, content=[TextBlock(text=f"turn {i}")])],
             assistant_blocks=[TextBlock(text=f"reply {i}")],
             usage=Usage(),
             model="test-model",
@@ -682,9 +664,7 @@ class TestResumeCommand:
 
     async def test_resume_unknown_id(self, home: Path) -> None:
         registry = build_default_registry()
-        result = await registry.dispatch(
-            "/resume nosuchid", _source(slash_registry=registry)
-        )
+        result = await registry.dispatch("/resume nosuchid", _source(slash_registry=registry))
         assert result is not None and result.text is not None
         assert "错误" in result.text
 
@@ -772,9 +752,7 @@ class TestResumeSelectionFlow:
 
         ctx = ToolContext(cwd=Path(tempfile.mkdtemp()), session_id="t", depth=0)
         agent = (
-            AgentLoopBuilder(llm, ToolRegistry(), ctx)
-            .model("claude-haiku-4-5-20251001")
-            .build()
+            AgentLoopBuilder(llm, ToolRegistry(), ctx).model("claude-haiku-4-5-20251001").build()
         )
         return AgentEventSource(
             agent,
@@ -807,9 +785,7 @@ class TestResumeSelectionFlow:
         async for ev in source.run("/resume"):
             events.append(ev)
             if isinstance(ev, SelectionRequest):
-                sel_queue.put_nowait(
-                    SelectionDecision(request_id=ev.id, value="abc12345")
-                )
+                sel_queue.put_nowait(SelectionDecision(request_id=ev.id, value="abc12345"))
         assert any(isinstance(e, SelectionRequest) for e in events)
         notices = [e for e in events if isinstance(e, Notice)]
         assert any("已恢复" in e.text for e in notices)
@@ -829,9 +805,7 @@ class TestResumeSelectionFlow:
         async for ev in source.run("/resume"):
             events.append(ev)
             if isinstance(ev, SelectionRequest):
-                sel_queue.put_nowait(
-                    SelectionDecision(request_id=ev.id, value=None)
-                )
+                sel_queue.put_nowait(SelectionDecision(request_id=ev.id, value=None))
         assert any(isinstance(e, SelectionRequest) for e in events)
         assert any(isinstance(e, TurnEnd) for e in events)
         from mcc_core import Notice
@@ -859,11 +833,8 @@ class TestResumeSelectionFlow:
         async for ev in source.run("/resume"):
             events.append(ev)
             if isinstance(ev, SelectionRequest):
-                sel_queue.put_nowait(
-                    SelectionDecision(request_id=ev.id, value="abc12345")
-                )
-        assert any(isinstance(e, SessionChanged) and e.session_id == "abc12345"
-                   for e in events)
+                sel_queue.put_nowait(SelectionDecision(request_id=ev.id, value="abc12345"))
+        assert any(isinstance(e, SessionChanged) and e.session_id == "abc12345" for e in events)
         assert any(isinstance(e, UserEcho) for e in events)
         assert any(isinstance(e, TextDelta) for e in events)
         assert source.session_short_id == "abc12345"
@@ -910,15 +881,22 @@ class TestTeamSlashCommand:
         task_store = TaskStore(tmp_path / ".tasks")
         dispatcher = TaskDispatcher(TaskStoreAdapter(task_store), coord)
         orch = TeamOrchestrator(
-            registry=agent_reg, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coord,
+            registry=agent_reg,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coord,
             dispatcher=dispatcher,
         )
         mgr = TeammateManager(
             llm=MockLlm([single_text_turn("done")]),
-            registry=tool_reg, bus=bus, plan_store=plan_store,
-            base_dir=tmp_path, coordinator=coord,
-            agent_registry=agent_reg, orchestrator=orch,
+            registry=tool_reg,
+            bus=bus,
+            plan_store=plan_store,
+            base_dir=tmp_path,
+            coordinator=coord,
+            agent_registry=agent_reg,
+            orchestrator=orch,
         )
         source = _source(
             slash_registry=registry,
@@ -953,18 +931,28 @@ class TestTeamSlashCommand:
         task_store = TaskStore(tmp_path / ".tasks")
         dispatcher = TaskDispatcher(TaskStoreAdapter(task_store), coord)
         orch = TeamOrchestrator(
-            registry=agent_reg, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coord,
+            registry=agent_reg,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coord,
             dispatcher=dispatcher,
         )
-        llm = MockLlm([
-            single_text_turn("initial done"),
-            single_text_turn("task completed"),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("initial done"),
+                single_text_turn("task completed"),
+            ]
+        )
         mgr = TeammateManager(
-            llm=llm, registry=tool_reg, bus=bus, plan_store=plan_store,
-            base_dir=tmp_path, coordinator=coord,
-            agent_registry=agent_reg, orchestrator=orch,
+            llm=llm,
+            registry=tool_reg,
+            bus=bus,
+            plan_store=plan_store,
+            base_dir=tmp_path,
+            coordinator=coord,
+            agent_registry=agent_reg,
+            orchestrator=orch,
         )
         source = _source(
             slash_registry=registry,

@@ -156,9 +156,7 @@ async def test_shell_hook_deny(tmp_path: Path):
 async def test_shell_hook_env_vars(tmp_path: Path):
     script = tmp_path / "check_env.sh"
     script.write_text(
-        "#!/usr/bin/env bash\n"
-        'echo "tool=$MCC_TOOL_NAME type=$MCC_HOOK_TYPE"\n'
-        "exit 0\n"
+        '#!/usr/bin/env bash\necho "tool=$MCC_TOOL_NAME type=$MCC_HOOK_TYPE"\nexit 0\n'
     )
     os.chmod(script, 0o755)
 
@@ -181,9 +179,7 @@ async def test_shell_hook_timeout(tmp_path: Path):
     os.chmod(script, 0o755)
 
     hook = ShellHook(HookType.PRE_TOOL, script, timeout=0.1)
-    result = await hook.run(
-        HookContext(hook_type=HookType.PRE_TOOL, cwd=tmp_path)
-    )
+    result = await hook.run(HookContext(hook_type=HookType.PRE_TOOL, cwd=tmp_path))
     assert "hook error" in result.message
 
 
@@ -215,10 +211,12 @@ async def test_pre_tool_hook_blocks(ctx, registry, tmp_path):
     hooks = HookRegistry()
     hooks.add_python(HookType.PRE_TOOL, block_hook)
 
-    llm = MockLlm([
-        _tool_turn("t1", "run_bash", {"command": "echo hi"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "run_bash", {"command": "echo hi"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = AgentLoopBuilder(llm, registry, ctx).hooks(hooks).build()
 
     events = []
@@ -242,10 +240,12 @@ async def test_pre_tool_hook_modifies_input(ctx, registry, tmp_path):
     hooks = HookRegistry()
     hooks.add_python(HookType.PRE_TOOL, modify_hook)
 
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "original.txt", "content": "original"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "original.txt", "content": "original"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = AgentLoopBuilder(llm, registry, ctx).hooks(hooks).build()
 
     queue: asyncio.Queue = asyncio.Queue()
@@ -271,10 +271,12 @@ async def test_post_tool_hook_modifies_output(ctx, registry):
     test_file = ctx.cwd / "test.txt"
     test_file.write_text("original content")
 
-    llm = MockLlm([
-        _tool_turn("t1", "read_file", {"path": "test.txt"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "read_file", {"path": "test.txt"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = AgentLoopBuilder(llm, registry, ctx).hooks(hooks).build()
 
     events = []
@@ -347,10 +349,12 @@ async def test_lifecycle_hooks_multi_turn(ctx, registry, tmp_path):
     hooks = HookRegistry()
     hooks.add_python(HookType.ON_TURN_START, turn_start_hook)
 
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "a.txt", "content": "A"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "a.txt", "content": "A"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = AgentLoopBuilder(llm, registry, ctx).hooks(hooks).build()
 
     queue: asyncio.Queue = asyncio.Queue()
@@ -367,10 +371,12 @@ async def test_ask_sends_permission_request_event(ctx, registry):
     from mcc_config import PermissionConfig
 
     checker = PermissionChecker(PermissionConfig(mode="default"))
-    llm = MockLlm([
-        _tool_turn("t1", "run_bash", {"command": "echo hi"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "run_bash", {"command": "echo hi"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = AgentLoopBuilder(llm, registry, ctx).permission(checker).build()
 
     events = []
@@ -407,10 +413,12 @@ async def test_shell_hook_integration_pre_tool(ctx, registry, tmp_path):
     hooks = HookRegistry()
     hooks.add_shell(HookType.PRE_TOOL, script)
 
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "out.txt", "content": "x"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "out.txt", "content": "x"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = AgentLoopBuilder(llm, registry, ctx).hooks(hooks).build()
 
     queue: asyncio.Queue = asyncio.Queue()
@@ -485,10 +493,12 @@ async def test_shell_hook_matcher_skips_in_agent_loop(ctx, registry, tmp_path):
     hooks = HookRegistry()
     hooks.add_shell(HookType.PRE_TOOL, script, matcher="run_bash")
 
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "out.txt", "content": "x"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "out.txt", "content": "x"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = AgentLoopBuilder(llm, registry, ctx).hooks(hooks).build()
 
     queue: asyncio.Queue = asyncio.Queue()
@@ -585,11 +595,13 @@ async def test_config_hooks_end_to_end(ctx, registry, tmp_path, monkeypatch):
     hook_registry = _build_hooks(config, tmp_path)
     assert hook_registry is not None
 
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "out.txt", "content": "x"}),
-        _tool_turn("t2", "read_file", {"path": "out.txt"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "out.txt", "content": "x"}),
+            _tool_turn("t2", "read_file", {"path": "out.txt"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = AgentLoopBuilder(llm, registry, ctx).hooks(hook_registry).build()
 
     queue: asyncio.Queue = asyncio.Queue()

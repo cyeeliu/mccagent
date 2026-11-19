@@ -49,9 +49,7 @@ class GlobTool:
         spec = load_gitignore(root)
         return await asyncio.to_thread(self._find, root, pattern, spec)
 
-    def _find(
-        self, root: Path, pattern: str, spec: Any
-    ) -> ToolOutput:
+    def _find(self, root: Path, pattern: str, spec: Any) -> ToolOutput:
         entries: list[tuple[float, Path]] = []
         try:
             matched = list(root.glob(pattern))

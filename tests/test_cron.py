@@ -373,9 +373,7 @@ class TestFormatCronDelivery:
         assert "run tests" in text
 
     def test_format_empty(self) -> None:
-        assert format_cron_delivery([]) == (
-            "<cron_delivery>\n</cron_delivery>"
-        )
+        assert format_cron_delivery([]) == ("<cron_delivery>\n</cron_delivery>")
 
 
 # -- 工具 --
@@ -385,9 +383,7 @@ class TestCronTools:
     async def test_schedule_tool(self, tmp_path: Path) -> None:
         sched = CronScheduler()
         tool = ScheduleCronTool(sched)
-        out = await tool.execute(
-            {"cron": "0 9 * * *", "prompt": "run tests"}, _ctx(tmp_path)
-        )
+        out = await tool.execute({"cron": "0 9 * * *", "prompt": "run tests"}, _ctx(tmp_path))
         assert out.content.startswith("Scheduled cron_")
         assert "0 9 * * *" in out.content
         assert len(await sched.list_jobs()) == 1
@@ -472,12 +468,10 @@ class TestAgentLoopInjection:
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("hi", queue)
         cron_msgs = [
-            m for m in agent.history
+            m
+            for m in agent.history
             if m.role.value == "user"
-            and any(
-                "<cron_delivery>" in getattr(b, "text", "")
-                for b in m.content
-            )
+            and any("<cron_delivery>" in getattr(b, "text", "") for b in m.content)
         ]
         assert len(cron_msgs) == 1
 
@@ -496,9 +490,7 @@ class TestAgentLoopInjection:
                 notices.append(ev)
         assert any("<cron_delivery>" in n.text for n in notices)
 
-    async def test_one_shot_acknowledged_after_injection(
-        self, ctx: ToolContext
-    ) -> None:
+    async def test_one_shot_acknowledged_after_injection(self, ctx: ToolContext) -> None:
         sched = CronScheduler()
         await sched.schedule("* * * * *", "x", recurring=False)
         await sched.poll(datetime.now())
@@ -526,9 +518,7 @@ class TestAgentLoopInjection:
         queue: asyncio.Queue = asyncio.Queue()
         await agent.run_streaming("hi", queue)
         assert not any(
-            "<cron_delivery>" in getattr(b, "text", "")
-            for m in agent.history
-            for b in m.content
+            "<cron_delivery>" in getattr(b, "text", "") for m in agent.history for b in m.content
         )
 
 
@@ -639,9 +629,7 @@ class TestPermissionMode:
     async def test_old_format_defaults_interactive(self, tmp_path: Path) -> None:
         path = tmp_path / ".cron_jobs.json"
         path.write_text(
-            json.dumps(
-                [{"id": "cron_old", "cron": "0 9 * * *", "prompt": "x"}]
-            ),
+            json.dumps([{"id": "cron_old", "cron": "0 9 * * *", "prompt": "x"}]),
             encoding="utf-8",
         )
         sched = CronScheduler(durable_path=path)
@@ -668,9 +656,7 @@ class TestCronToolsPermissionMode:
     async def test_schedule_tool_default_mode(self, tmp_path: Path) -> None:
         sched = CronScheduler()
         tool = ScheduleCronTool(sched)
-        await tool.execute(
-            {"cron": "0 9 * * *", "prompt": "x"}, _ctx(tmp_path)
-        )
+        await tool.execute({"cron": "0 9 * * *", "prompt": "x"}, _ctx(tmp_path))
         jobs = await sched.list_jobs()
         assert jobs[0].permission_mode == "interactive"
 

@@ -127,7 +127,7 @@ def register_agents(orchestrator: TeamOrchestrator, count: int = 2) -> list[str]
     for i, aid in enumerate(ids):
         orchestrator.register_agent(
             agent_id=aid,
-            agent_name=f"worker-{i+1}",
+            agent_name=f"worker-{i + 1}",
             capabilities=frozenset({"code_generation"}),
         )
     return ids
@@ -262,15 +262,18 @@ class TestTeamPolicy:
         assert policy.heartbeat_interval_secs > 0
         assert policy.task_lease_secs > 0
 
-    @pytest.mark.parametrize("field,value", [
-        ("max_agents", 0),
-        ("max_agents", -1),
-        ("max_concurrent_tasks", 0),
-        ("heartbeat_interval_secs", 0),
-        ("heartbeat_interval_secs", -1),
-        ("task_lease_secs", 0),
-        ("task_lease_secs", -1),
-    ])
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("max_agents", 0),
+            ("max_agents", -1),
+            ("max_concurrent_tasks", 0),
+            ("heartbeat_interval_secs", 0),
+            ("heartbeat_interval_secs", -1),
+            ("task_lease_secs", 0),
+            ("task_lease_secs", -1),
+        ],
+    )
     def test_invalid_policy_raises(self, field, value):
         with pytest.raises(OrchestratorError):
             TeamPolicy(**{field: value})
@@ -306,7 +309,10 @@ class TestCreateTeam:
 
     def test_create_team_with_tags(self, orchestrator):
         team = orchestrator.create_team(
-            "t", "beta", "lead", tags=frozenset({"production", "critical"}),
+            "t",
+            "beta",
+            "lead",
+            tags=frozenset({"production", "critical"}),
         )
         assert "production" in team.tags
 
@@ -487,11 +493,17 @@ class TestCompleteTask:
         task_list = sorted(run.task_ids)
         agent_list = sorted(run.agent_ids)
         await orchestrator.complete_task(
-            run.run_id, agent_list[0], task_list[0], summary="done A",
+            run.run_id,
+            agent_list[0],
+            task_list[0],
+            summary="done A",
         )
         assert run.status == TeamRunStatus.RUNNING
         await orchestrator.complete_task(
-            run.run_id, agent_list[1], task_list[1], summary="done B",
+            run.run_id,
+            agent_list[1],
+            task_list[1],
+            summary="done B",
         )
         assert run.status == TeamRunStatus.COMPLETED
         assert run.finished_at is not None
@@ -503,10 +515,16 @@ class TestCompleteTask:
         task_list = sorted(run.task_ids)
         agent_list = sorted(run.agent_ids)
         await orchestrator.complete_task(
-            run.run_id, agent_list[0], task_list[0], summary="done A",
+            run.run_id,
+            agent_list[0],
+            task_list[0],
+            summary="done A",
         )
         await orchestrator.complete_task(
-            run.run_id, agent_list[1], task_list[1], error="boom",
+            run.run_id,
+            agent_list[1],
+            task_list[1],
+            error="boom",
         )
         assert run.status == TeamRunStatus.FAILED
         assert "failed" in (run.error or "")
@@ -648,7 +666,10 @@ class TestCollectResults:
         agent_list = sorted(run.agent_ids)
         await orchestrator.complete_task(run.run_id, agent_list[0], task_list[0])
         await orchestrator.complete_task(
-            run.run_id, agent_list[1], task_list[1], error="fail",
+            run.run_id,
+            agent_list[1],
+            task_list[1],
+            error="fail",
         )
         result = await orchestrator.collect_results(run.run_id)
         assert result.completed_count == 1
@@ -679,7 +700,10 @@ class TestEndToEnd:
         for i, tid in enumerate(task_list):
             aid = task_agent_map[tid]
             await orch.complete_task(
-                run.run_id, aid, tid, summary=f"模块{i+1}完成",
+                run.run_id,
+                aid,
+                tid,
+                summary=f"模块{i + 1}完成",
             )
         assert run.status == TeamRunStatus.COMPLETED
         prog = orch.progress(run.run_id)
@@ -696,10 +720,16 @@ class TestEndToEnd:
         task_agent_map = {a.task_id: a.agent_id for a in run.assignments}
         task_list = sorted(run.task_ids)
         await orch.complete_task(
-            run.run_id, task_agent_map[task_list[0]], task_list[0], summary="ok",
+            run.run_id,
+            task_agent_map[task_list[0]],
+            task_list[0],
+            summary="ok",
         )
         await orch.complete_task(
-            run.run_id, task_agent_map[task_list[1]], task_list[1], error="执行失败",
+            run.run_id,
+            task_agent_map[task_list[1]],
+            task_list[1],
+            error="执行失败",
         )
         assert run.status == TeamRunStatus.FAILED
         prog = orch.progress(run.run_id)
@@ -811,30 +841,42 @@ class TestCapabilityScheduler:
     """CapabilityScheduler 默认实现。"""
 
     async def test_schedule_by_capability(self, registry):
-        registry.register(AgentDescriptor(
-            agent_id="a1",
-            agent_name="coder",
-            capabilities=frozenset({"code_generation"}),
-        ))
-        registry.register(AgentDescriptor(
-            agent_id="a2",
-            agent_name="reviewer",
-            capabilities=frozenset({"code_review"}),
-        ))
+        registry.register(
+            AgentDescriptor(
+                agent_id="a1",
+                agent_name="coder",
+                capabilities=frozenset({"code_generation"}),
+            )
+        )
+        registry.register(
+            AgentDescriptor(
+                agent_id="a2",
+                agent_name="reviewer",
+                capabilities=frozenset({"code_review"}),
+            )
+        )
         scheduler = CapabilityScheduler()
-        tasks = [SchedulableTask(
-            task_id="t1",
-            spec=TaskSpec(subject="write", required_capabilities=frozenset({"code_generation"})),
-        )]
+        tasks = [
+            SchedulableTask(
+                task_id="t1",
+                spec=TaskSpec(
+                    subject="write", required_capabilities=frozenset({"code_generation"})
+                ),
+            )
+        ]
         assignments = await scheduler.schedule(tasks, registry)
         assert len(assignments) == 1
         assert assignments[0].agent_id == "a1"
         assert assignments[0].task_id == "t1"
 
     async def test_schedule_no_capability_any_agent(self, registry):
-        registry.register(AgentDescriptor(
-            agent_id="a1", agent_name="worker", capabilities=frozenset(),
-        ))
+        registry.register(
+            AgentDescriptor(
+                agent_id="a1",
+                agent_name="worker",
+                capabilities=frozenset(),
+            )
+        )
         scheduler = CapabilityScheduler()
         tasks = [SchedulableTask(task_id="t1", spec=TaskSpec(subject="generic"))]
         assignments = await scheduler.schedule(tasks, registry)
@@ -848,17 +890,27 @@ class TestCapabilityScheduler:
         assert assignments == []
 
     async def test_schedule_exclude_agents(self, registry):
-        registry.register(AgentDescriptor(
-            agent_id="a1", agent_name="w1", capabilities=frozenset({"code"}),
-        ))
-        registry.register(AgentDescriptor(
-            agent_id="a2", agent_name="w2", capabilities=frozenset({"code"}),
-        ))
+        registry.register(
+            AgentDescriptor(
+                agent_id="a1",
+                agent_name="w1",
+                capabilities=frozenset({"code"}),
+            )
+        )
+        registry.register(
+            AgentDescriptor(
+                agent_id="a2",
+                agent_name="w2",
+                capabilities=frozenset({"code"}),
+            )
+        )
         scheduler = CapabilityScheduler()
-        tasks = [SchedulableTask(
-            task_id="t1",
-            spec=TaskSpec(subject="task", required_capabilities=frozenset({"code"})),
-        )]
+        tasks = [
+            SchedulableTask(
+                task_id="t1",
+                spec=TaskSpec(subject="task", required_capabilities=frozenset({"code"})),
+            )
+        ]
         assignments = await scheduler.schedule(tasks, registry, exclude_agents=frozenset({"a1"}))
         assert assignments[0].agent_id == "a2"
         assert assignments[0].task_id == "t1"
@@ -868,7 +920,8 @@ class TestSchedulableTaskAssociation:
     """P1-07: Task ID 与 Assignment 关联不应依赖数组索引。"""
 
     async def test_skipped_task_does_not_shift_task_id(
-        self, orchestrator_with_tasks,
+        self,
+        orchestrator_with_tasks,
     ):
         """第一个 Task 无 Agent 匹配、第二个有匹配时，
         Assignment 的 task_id 必须对应第二个 Task。"""
@@ -905,7 +958,8 @@ class TestSchedulableTaskAssociation:
         assert task.subject == "review code"
 
     async def test_scheduler_reorder_preserves_task_id(
-        self, orchestrator_with_tasks,
+        self,
+        orchestrator_with_tasks,
     ):
         """Scheduler 任意重排输入时，Assignment 的 task_id 仍正确关联。"""
         orch = orchestrator_with_tasks
@@ -937,14 +991,18 @@ class TestSchedulableTaskAssociation:
             assert task.subject == assignment.task_spec.subject
 
     async def test_capability_scheduler_preserves_task_id_on_skip(
-        self, registry,
+        self,
+        registry,
     ):
         """CapabilityScheduler 跳过无匹配任务时，
         已分配任务的 task_id 不受影响。"""
-        registry.register(AgentDescriptor(
-            agent_id="a1", agent_name="coder",
-            capabilities=frozenset({"code_generation"}),
-        ))
+        registry.register(
+            AgentDescriptor(
+                agent_id="a1",
+                agent_name="coder",
+                capabilities=frozenset({"code_generation"}),
+            )
+        )
         scheduler = CapabilityScheduler()
         tasks = [
             SchedulableTask(
@@ -984,6 +1042,7 @@ class TestProtocolConformance:
 
     def test_simple_result_collector_is_collector(self, orchestrator):
         from mcc_harness import SimpleResultCollector
+
         collector = SimpleResultCollector(orchestrator)
         assert isinstance(collector, ResultCollector)
 
@@ -996,7 +1055,8 @@ class TestRegisterAgent:
 
     def test_register_agent_basic(self, orchestrator):
         reg = orchestrator.register_agent(
-            "a1", "worker-1",
+            "a1",
+            "worker-1",
             capabilities=frozenset({"code"}),
         )
         assert reg.agent_id == "a1"
@@ -1004,14 +1064,16 @@ class TestRegisterAgent:
 
     def test_register_agent_with_mode(self, orchestrator):
         reg = orchestrator.register_agent(
-            "a1", "ephemeral",
+            "a1",
+            "ephemeral",
             mode=RuntimeMode.EPHEMERAL,
         )
         assert reg.descriptor.mode == RuntimeMode.EPHEMERAL
 
     def test_register_agent_in_registry(self, orchestrator):
         orchestrator.register_agent(
-            "a1", "worker",
+            "a1",
+            "worker",
             capabilities=frozenset({"code_generation"}),
         )
         found = orchestrator.registry.find_by_capability("code_generation")
@@ -1234,7 +1296,10 @@ class TestOrchestratorExecutionLoop:
 
         class TimedDispatcher(FakeDispatcher):
             async def wait_for_result(
-                self, handle: TaskHandle, *, timeout: float | None = None,
+                self,
+                handle: TaskHandle,
+                *,
+                timeout: float | None = None,
             ) -> RuntimeEvent:
                 execution_log.append((handle.runtime_id, asyncio.get_event_loop().time()))
                 await asyncio.sleep(0.05)
@@ -1242,8 +1307,11 @@ class TestOrchestratorExecutionLoop:
 
         dispatcher = TimedDispatcher()
         orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
             dispatcher=dispatcher,
         )
         agent_ids = register_agents(orch, 2)
@@ -1281,8 +1349,11 @@ class TestOrchestratorExecutionLoop:
             },
         )
         orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
             dispatcher=dispatcher,
         )
         agent_ids = register_agents(orch, 1)
@@ -1420,8 +1491,11 @@ class TestOrchestratorExecutionLoop:
                 return []
 
         orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
             dispatcher=FakeDispatcher(),
             planner=EmptyPlanner(),
         )
@@ -1482,13 +1556,18 @@ class TestOrchestratorDagDependencyPolicy:
         dispatcher.set_failure("rt-1", "base-boom")
         dispatcher.set_success("rt-2", "dep-ok")
         orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
             dispatcher=dispatcher,
-            planner=_DagPlanner([
-                TaskSpec(subject="base", description="base task"),
-                TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
-            ]),
+            planner=_DagPlanner(
+                [
+                    TaskSpec(subject="base", description="base task"),
+                    TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
+                ]
+            ),
         )
         agent_ids = register_agents(orch, 2)
         team = make_team(orch)
@@ -1518,13 +1597,18 @@ class TestOrchestratorDagDependencyPolicy:
         dispatcher.set_success("rt-1", "base-ok")
         dispatcher.set_success("rt-2", "dep-ok")
         orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
             dispatcher=dispatcher,
-            planner=_DagPlanner([
-                TaskSpec(subject="base", description="base task"),
-                TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
-            ]),
+            planner=_DagPlanner(
+                [
+                    TaskSpec(subject="base", description="base task"),
+                    TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
+                ]
+            ),
         )
         agent_ids = register_agents(orch, 2)
         team = make_team(orch)
@@ -1551,16 +1635,22 @@ class TestOrchestratorDagDependencyPolicy:
         dispatcher = FakeDispatcher()
         dispatcher.set_success("rt-1", "dep-ok")
         orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
             dispatcher=dispatcher,
-            planner=_DagPlanner([
-                TaskSpec(
-                    subject="base", description="base",
-                    required_capabilities=frozenset({"nonexistent"}),
-                ),
-                TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
-            ]),
+            planner=_DagPlanner(
+                [
+                    TaskSpec(
+                        subject="base",
+                        description="base",
+                        required_capabilities=frozenset({"nonexistent"}),
+                    ),
+                    TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
+                ]
+            ),
         )
         agent_ids = register_agents(orch, 1)
         team = make_team(orch)
@@ -1587,13 +1677,18 @@ class TestOrchestratorDagDependencyPolicy:
         dispatcher.set_success("rt-2", "dep-ok")
         policy = TeamPolicy(dependency_policy=DependencyPolicy.ALL_TERMINAL)
         orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
             dispatcher=dispatcher,
-            planner=_DagPlanner([
-                TaskSpec(subject="base", description="base task"),
-                TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
-            ]),
+            planner=_DagPlanner(
+                [
+                    TaskSpec(subject="base", description="base task"),
+                    TaskSpec(subject="dependent", description="dep", blocked_by=("base",)),
+                ]
+            ),
         )
         agent_ids = register_agents(orch, 2)
         team = orch.create_team("team-1", "alpha", "lead-1", policy=policy)
@@ -1622,17 +1717,23 @@ class TestOrchestratorDagDependencyPolicy:
         dispatcher.set_success("rt-3", "final-ok")
         policy = TeamPolicy(dependency_policy=DependencyPolicy.ANY_SUCCESS)
         orch = TeamOrchestrator(
-            registry=registry, bus=bus, plan_store=plan_store,
-            task_store=task_store, coordinator=coordinator,
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            task_store=task_store,
+            coordinator=coordinator,
             dispatcher=dispatcher,
-            planner=_DagPlanner([
-                TaskSpec(subject="dep-a", description="dep a"),
-                TaskSpec(subject="dep-b", description="dep b"),
-                TaskSpec(
-                    subject="final", description="final",
-                    blocked_by=("dep-a", "dep-b"),
-                ),
-            ]),
+            planner=_DagPlanner(
+                [
+                    TaskSpec(subject="dep-a", description="dep a"),
+                    TaskSpec(subject="dep-b", description="dep b"),
+                    TaskSpec(
+                        subject="final",
+                        description="final",
+                        blocked_by=("dep-a", "dep-b"),
+                    ),
+                ]
+            ),
         )
         agent_ids = register_agents(orch, 3)
         team = orch.create_team("team-1", "alpha", "lead-1", policy=policy)
@@ -1665,20 +1766,17 @@ class TestOrchestratorNoLegacyRuntimePath:
 
     def test_no_submit_task_call(self, orchestrator_source: str):
         assert ".submit_task(" not in orchestrator_source, (
-            "TeamOrchestrator 仍直接调用 Runtime.submit_task，"
-            "应改用 TaskDispatcher.dispatch"
+            "TeamOrchestrator 仍直接调用 Runtime.submit_task，应改用 TaskDispatcher.dispatch"
         )
 
     def test_no_wait_task_call(self, orchestrator_source: str):
         assert ".wait_task(" not in orchestrator_source, (
-            "TeamOrchestrator 仍直接调用 Runtime.wait_task，"
-            "应改用 TaskDispatcher.wait_for_result"
+            "TeamOrchestrator 仍直接调用 Runtime.wait_task，应改用 TaskDispatcher.wait_for_result"
         )
 
     def test_no_extract_error_method(self, orchestrator_source: str):
         assert "_extract_error" not in orchestrator_source, (
-            "TeamOrchestrator 仍保留 _extract_error 辅助方法，"
-            "该方法是旧路径专属逻辑，应已删除"
+            "TeamOrchestrator 仍保留 _extract_error 辅助方法，该方法是旧路径专属逻辑，应已删除"
         )
 
 
@@ -1784,20 +1882,30 @@ class TestOrchestratorCollectFromTaskStore:
         for a in run.assignments:
             if a.task_id == sorted(run.task_ids)[0]:
                 await orch.complete_task(
-                    run.run_id, a.agent_id, a.task_id, summary="ok",
+                    run.run_id,
+                    a.agent_id,
+                    a.task_id,
+                    summary="ok",
                 )
             else:
                 await orch.complete_task(
-                    run.run_id, a.agent_id, a.task_id, error="失败",
+                    run.run_id,
+                    a.agent_id,
+                    a.task_id,
+                    error="失败",
                 )
         task_list = sorted(run.task_ids)
 
         # 直接篡改 run.results 内存副本，模拟状态分叉
         run.results[0] = dataclasses.replace(
-            run.results[0], status="completed", error=None,
+            run.results[0],
+            status="completed",
+            error=None,
         )
         run.results[1] = dataclasses.replace(
-            run.results[1], status="completed", error=None,
+            run.results[1],
+            status="completed",
+            error=None,
         )
 
         result = await orch.collect_results(run.run_id)
@@ -1820,11 +1928,17 @@ class TestOrchestratorCollectFromTaskStore:
         for a in run.assignments:
             if a.task_id == sorted(run.task_ids)[0]:
                 await orch.complete_task(
-                    run.run_id, a.agent_id, a.task_id, summary="ok",
+                    run.run_id,
+                    a.agent_id,
+                    a.task_id,
+                    summary="ok",
                 )
             else:
                 await orch.complete_task(
-                    run.run_id, a.agent_id, a.task_id, error="失败",
+                    run.run_id,
+                    a.agent_id,
+                    a.task_id,
+                    error="失败",
                 )
 
         # 篡改内存副本
@@ -1845,12 +1959,14 @@ class TestOrchestratorCollectFromTaskStore:
         run = await orch.start(team, "任务一")
         a = run.assignments[0]
         await orch.complete_task(
-            run.run_id, a.agent_id, a.task_id,
-            summary="详细摘要", cost_usd=0.42,
+            run.run_id,
+            a.agent_id,
+            a.task_id,
+            summary="详细摘要",
+            cost_usd=0.42,
         )
 
         result = await orch.collect_results(run.run_id)
         r = result.results[0]
         assert r.summary == "详细摘要"
         assert r.cost_usd == 0.42
-

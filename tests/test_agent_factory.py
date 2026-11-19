@@ -69,7 +69,9 @@ class TestDefaultAgentFactory:
         factory = DefaultAgentFactory()
         builder = _StubBuilder()
         runtime = factory.build_interactive_runtime_v2(
-            builder, session_id="s1", agent_id="main",
+            builder,
+            session_id="s1",
+            agent_id="main",
         )
         assert isinstance(runtime, InteractiveRuntimeV2)
         assert runtime.agent_id == "main"
@@ -85,7 +87,9 @@ class TestDefaultAgentFactory:
         factory = DefaultAgentFactory()
         agent = _StubAgentLoop()
         runtime = factory.create_interactive_runtime(
-            agent, session_id="s2", agent_id="sub",
+            agent,
+            session_id="s2",
+            agent_id="sub",
         )
         assert runtime.agent is agent
         assert runtime.session_id == "s2"
@@ -94,7 +98,9 @@ class TestDefaultAgentFactory:
         factory = DefaultAgentFactory()
         agent = _StubAgentLoop()
         executor = factory.create_executor(
-            agent, runtime_id="r1", agent_id="a1",
+            agent,
+            runtime_id="r1",
+            agent_id="a1",
         )
         assert executor.runtime_id == "r1"
         assert executor.agent_id == "a1"
@@ -110,12 +116,18 @@ class TestDefaultAgentFactory:
         agent_loop = _StubAgentLoop()
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None, agent_loop=agent_loop,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+            agent_loop=agent_loop,
         )
         factory = DefaultAgentFactory(session)
         definition = AgentDefinition(
-            agent_id="a1", name="test", role="test",
+            agent_id="a1",
+            name="test",
+            role="test",
             description="test agent",
             model_profile=ModelProfile(model_id="m1"),
             runtime_kind=RuntimeKind.INTERACTIVE,
@@ -134,12 +146,18 @@ class TestDefaultAgentFactory:
         agent_loop = _StubAgentLoop()
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None, agent_loop=agent_loop,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+            agent_loop=agent_loop,
         )
         factory = DefaultAgentFactory(session)
         definition = AgentDefinition(
-            agent_id="a2", name="task-agent", role="worker",
+            agent_id="a2",
+            name="task-agent",
+            role="worker",
             description="task agent",
             model_profile=ModelProfile(model_id="m1"),
             runtime_kind=RuntimeKind.TASK,
@@ -159,13 +177,19 @@ class TestDefaultAgentFactory:
         bus = object()
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None,
-            teammate=teammate, bus=bus,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+            teammate=teammate,
+            bus=bus,
         )
         factory = DefaultAgentFactory(session)
         definition = AgentDefinition(
-            agent_id="a3", name="persistent-agent", role="teammate",
+            agent_id="a3",
+            name="persistent-agent",
+            role="teammate",
             description="persistent agent",
             model_profile=ModelProfile(model_id="m1"),
             runtime_kind=RuntimeKind.PERSISTENT,
@@ -181,12 +205,17 @@ class TestDefaultAgentFactory:
 
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
         )
         factory = DefaultAgentFactory(session)
         definition = AgentDefinition(
-            agent_id="a4", name="remote", role="remote",
+            agent_id="a4",
+            name="remote",
+            role="remote",
             description="remote agent",
             model_profile=ModelProfile(model_id="m1"),
             runtime_kind=RuntimeKind.REMOTE,
@@ -200,7 +229,9 @@ class TestDefaultAgentFactory:
 
         factory = DefaultAgentFactory()
         definition = AgentDefinition(
-            agent_id="a1", name="test", role="test",
+            agent_id="a1",
+            name="test",
+            role="test",
             description="test agent",
             model_profile=ModelProfile(model_id="m1"),
         )
@@ -209,19 +240,25 @@ class TestDefaultAgentFactory:
 
     @pytest.mark.asyncio
     async def test_create_interactive_without_agent_loop_raises(
-        self, tmp_path,
+        self,
+        tmp_path,
     ) -> None:
         from mcc_core import ToolContext
         from mcc_core.runtime import AgentDefinition, ModelProfile
 
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
         )
         factory = DefaultAgentFactory(session)
         definition = AgentDefinition(
-            agent_id="a1", name="test", role="test",
+            agent_id="a1",
+            name="test",
+            role="test",
             description="test agent",
             model_profile=ModelProfile(model_id="m1"),
         )
@@ -230,7 +267,8 @@ class TestDefaultAgentFactory:
 
     @pytest.mark.asyncio
     async def test_create_persistent_without_teammate_raises(
-        self, tmp_path,
+        self,
+        tmp_path,
     ) -> None:
         from mcc_core import ToolContext
         from mcc_core.runtime import AgentDefinition, ModelProfile
@@ -238,12 +276,17 @@ class TestDefaultAgentFactory:
 
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
         )
         factory = DefaultAgentFactory(session)
         definition = AgentDefinition(
-            agent_id="a1", name="test", role="test",
+            agent_id="a1",
+            name="test",
+            role="test",
             description="test agent",
             model_profile=ModelProfile(model_id="m1"),
             runtime_kind=RuntimeKind.PERSISTENT,
@@ -253,7 +296,8 @@ class TestDefaultAgentFactory:
 
     @pytest.mark.asyncio
     async def test_create_with_explicit_session_overrides_default(
-        self, tmp_path,
+        self,
+        tmp_path,
     ) -> None:
         from mcc_core import ToolContext
         from mcc_core.runtime import AgentDefinition, ModelProfile
@@ -262,17 +306,24 @@ class TestDefaultAgentFactory:
         agent_loop = _StubAgentLoop()
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         explicit_session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None, agent_loop=agent_loop,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+            agent_loop=agent_loop,
         )
         factory = DefaultAgentFactory()
         definition = AgentDefinition(
-            agent_id="a1", name="test", role="test",
+            agent_id="a1",
+            name="test",
+            role="test",
             description="test agent",
             model_profile=ModelProfile(model_id="m1"),
         )
         runtime = await factory.create(
-            definition, session_context=explicit_session,
+            definition,
+            session_context=explicit_session,
         )
         assert isinstance(runtime, InteractiveRuntimeV2)
 
@@ -322,8 +373,11 @@ class TestSessionContext:
 
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
         )
         assert session.agent_loop is None
         assert session.teammate is None
@@ -337,9 +391,14 @@ class TestSessionContext:
         teammate = _StubTeammate()
         bus = object()
         session = SessionContext(
-            llm=None, registry=None, tool_context=ctx,
-            work_dir=tmp_path, config=None,
-            agent_loop=agent_loop, teammate=teammate, bus=bus,
+            llm=None,
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+            agent_loop=agent_loop,
+            teammate=teammate,
+            bus=bus,
         )
         assert session.agent_loop is agent_loop
         assert session.teammate is teammate

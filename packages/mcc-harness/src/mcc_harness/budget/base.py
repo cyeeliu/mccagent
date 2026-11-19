@@ -45,10 +45,7 @@ class BudgetExceededError(ValueError):
         self.limit = limit
         self.agent_id = agent_id
         agent_part = f" (agent={agent_id})" if agent_id else ""
-        super().__init__(
-            f"budget exceeded{agent_part}: "
-            f"{dimension.value} {consumed} > {limit}"
-        )
+        super().__init__(f"budget exceeded{agent_part}: {dimension.value} {consumed} > {limit}")
 
 
 class BudgetPolicyError(ValueError):
@@ -76,17 +73,13 @@ class BudgetPolicy:
             (BudgetDimension.CONCURRENCY, self.max_concurrency),
         ]:
             if val is not None and val < 0:
-                raise BudgetPolicyError(
-                    f"{dim.value} limit must be non-negative, got {val}"
-                )
+                raise BudgetPolicyError(f"{dim.value} limit must be non-negative, got {val}")
         for dim, val in [
             (BudgetDimension.COST_USD, self.max_cost_usd),
             (BudgetDimension.DURATION_SECS, self.max_duration_secs),
         ]:
             if val is not None and val < 0:
-                raise BudgetPolicyError(
-                    f"{dim.value} limit must be non-negative, got {val}"
-                )
+                raise BudgetPolicyError(f"{dim.value} limit must be non-negative, got {val}")
 
     @property
     def is_unlimited(self) -> bool:
@@ -140,17 +133,11 @@ class UsageEvent:
         if self.tokens < 0:
             raise BudgetPolicyError(f"tokens must be non-negative, got {self.tokens}")
         if self.cost_usd < 0:
-            raise BudgetPolicyError(
-                f"cost_usd must be non-negative, got {self.cost_usd}"
-            )
+            raise BudgetPolicyError(f"cost_usd must be non-negative, got {self.cost_usd}")
         if self.duration_secs < 0:
-            raise BudgetPolicyError(
-                f"duration_secs must be non-negative, got {self.duration_secs}"
-            )
+            raise BudgetPolicyError(f"duration_secs must be non-negative, got {self.duration_secs}")
         if self.iterations < 0:
-            raise BudgetPolicyError(
-                f"iterations must be non-negative, got {self.iterations}"
-            )
+            raise BudgetPolicyError(f"iterations must be non-negative, got {self.iterations}")
 
 
 @dataclass(frozen=True)
@@ -209,9 +196,7 @@ class BudgetSnapshot:
             (self.policy.max_iterations, self.consumed_iterations),
             (self.policy.max_concurrency, self.active_concurrency),
         ]
-        return any(
-            limit is not None and consumed > limit for limit, consumed in checks
-        )
+        return any(limit is not None and consumed > limit for limit, consumed in checks)
 
     def to_dict(self) -> dict[str, int | float | None | str | list[str]]:
         """序列化为字典，用于日志和恢复。"""

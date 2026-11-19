@@ -132,17 +132,13 @@ def model_price_per_1m(model: str) -> tuple[float, float]:
 def price_usd(model: str, usage: Usage) -> float:
     """根据模型定价与 token 用量计算 USD 成本。"""
     in_m, out_m = model_price_per_1m(model)
-    return (usage.input_tokens / 1_000_000.0) * in_m + (
-        usage.output_tokens / 1_000_000.0
-    ) * out_m
+    return (usage.input_tokens / 1_000_000.0) * in_m + (usage.output_tokens / 1_000_000.0) * out_m
 
 
 def cache_hit_rate(usage: Usage) -> float:
     """缓存命中率 = cache_read / (input + cache_read + cache_creation)。"""
     total_input = (
-        usage.input_tokens
-        + usage.cache_read_input_tokens
-        + usage.cache_creation_input_tokens
+        usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
     )
     if total_input <= 0:
         return 0.0
@@ -201,14 +197,10 @@ def permission_request_for(tool_name: str, input: dict[str, Any]) -> PermissionR
         case "spawn_subagent":
             return PermissionRequest(
                 category="Subagent",
-                action=BashAction(
-                    cmd=f"spawn_subagent {input.get('preset', '')}".strip()
-                ),
+                action=BashAction(cmd=f"spawn_subagent {input.get('preset', '')}".strip()),
             )
         case _:
-            return PermissionRequest(
-                category="Bash", action=BashAction(cmd=tool_name)
-            )
+            return PermissionRequest(category="Bash", action=BashAction(cmd=tool_name))
 
 
 class AgentLoop:
@@ -356,9 +348,7 @@ class AgentLoop:
             )
         return "\n\n".join(parts)
 
-    async def _summarize_history(
-        self, system: str, messages: list[Message]
-    ) -> str:
+    async def _summarize_history(self, system: str, messages: list[Message]) -> str:
         """压缩管线的模型摘要步骤：非流式调用，取纯文本。"""
         req = CompleteRequest(
             model=self.summarize_model or self.model,
@@ -367,9 +357,7 @@ class AgentLoop:
             system=system,
         )
         resp = await self.llm.complete(req)
-        text = "\n".join(
-            b.text for b in resp.content if isinstance(b, TextBlock)
-        )
+        text = "\n".join(b.text for b in resp.content if isinstance(b, TextBlock))
         return text.strip() or "(empty summary)"
 
     async def run_streaming(
@@ -419,21 +407,12 @@ class AgentLoop:
                     while not instruction_queue.empty():
                         pending.append(instruction_queue.get_nowait())
                     if pending:
-                        combined = "\n".join(
-                            f"[instruction] {i}" for i in pending
-                        )
+                        combined = "\n".join(f"[instruction] {i}" for i in pending)
                         messages.append(Message.user(combined))
-                        await tx.put(
-                            Notice(
-                                text=f"[injected {len(pending)} "
-                                f"instruction(s)]"
-                            )
-                        )
+                        await tx.put(Notice(text=f"[injected {len(pending)} instruction(s)]"))
 
                 if pause_event is not None and not pause_event.is_set():
-                    await tx.put(
-                        Notice(text="[paused] waiting for resume")
-                    )
+                    await tx.put(Notice(text="[paused] waiting for resume"))
                     await pause_event.wait()
                     await tx.put(Notice(text="[resumed]"))
 
@@ -452,9 +431,7 @@ class AgentLoop:
                 reactive_used = False
                 while True:
                     if self.compactor is not None:
-                        messages, report = await self.compactor.prepare(
-                            messages, user_input
-                        )
+                        messages, report = await self.compactor.prepare(messages, user_input)
                         if report.notable:
                             await tx.put(Notice(text=report.describe()))
                     request_snapshot = list(messages)
@@ -469,17 +446,15 @@ class AgentLoop:
                     )
 
                     try:
-                        blocks, stop_reason, turn_usage = (
-                            await self._call_with_retry(req, tx)
-                        )
+                        blocks, stop_reason, turn_usage = await self._call_with_retry(req, tx)
                         break
                     except Exception as e:
-                        if (self.compactor is not None
-                                and not reactive_used
-                                and is_too_long_error(str(e))):
-                            messages = await self.compactor.reactive_compact(
-                                messages, user_input
-                            )
+                        if (
+                            self.compactor is not None
+                            and not reactive_used
+                            and is_too_long_error(str(e))
+                        ):
+                            messages = await self.compactor.reactive_compact(messages, user_input)
                             reactive_used = True
                             await tx.put(
                                 Notice(
@@ -498,16 +473,11 @@ class AgentLoop:
                         input_tokens=turn_usage.input_tokens,
                         output_tokens=turn_usage.output_tokens,
                         cache_read_input_tokens=turn_usage.cache_read_input_tokens,
-                        cache_creation_input_tokens=(
-                            turn_usage.cache_creation_input_tokens
-                        ),
+                        cache_creation_input_tokens=(turn_usage.cache_creation_input_tokens),
                         cost_usd=turn_cost,
                     )
                 )
-                if (
-                    self.max_cost_per_turn > 0
-                    and turn_cost > self.max_cost_per_turn
-                ):
+                if self.max_cost_per_turn > 0 and turn_cost > self.max_cost_per_turn:
                     await tx.put(
                         Notice(
                             text=f"Turn {iteration} cost ${turn_cost:.4} "
@@ -523,32 +493,18 @@ class AgentLoop:
                         input_tokens=turn_usage.input_tokens,
                         output_tokens=turn_usage.output_tokens,
                         cache_read_input_tokens=turn_usage.cache_read_input_tokens,
-                        cache_creation_input_tokens=(
-                            turn_usage.cache_creation_input_tokens
-                        ),
+                        cache_creation_input_tokens=(turn_usage.cache_creation_input_tokens),
                         cost_usd=turn_cost,
                     )
                 )
                 messages.append(Message(role=Role.assistant, content=blocks))
 
                 if stop_reason in ("end_turn", "stop_sequence", None):
-                    final_text = "\n".join(
-                        b.text for b in blocks if isinstance(b, TextBlock)
-                    )
+                    final_text = "\n".join(b.text for b in blocks if isinstance(b, TextBlock))
                     if self.goal is not None:
-                        decision = await self.goal.evaluate_after_turn(
-                            messages
-                        )
-                        cond = (
-                            self.goal.active.condition
-                            if self.goal.active
-                            else ""
-                        )
-                        iters = (
-                            self.goal.active.iterations
-                            if self.goal.active
-                            else 0
-                        )
+                        decision = await self.goal.evaluate_after_turn(messages)
+                        cond = self.goal.active.condition if self.goal.active else ""
+                        iters = self.goal.active.iterations if self.goal.active else 0
                         await tx.put(
                             GoalStatus(
                                 action=decision.action,
@@ -557,10 +513,7 @@ class AgentLoop:
                                 iterations=iters,
                             )
                         )
-                        if (
-                            decision.action == "block"
-                            and self.goal.active is not None
-                        ):
+                        if decision.action == "block" and self.goal.active is not None:
                             await self._record_turn(
                                 tx,
                                 iteration,
@@ -598,9 +551,7 @@ class AgentLoop:
                             depth=self.ctx.depth,
                             cwd=self.ctx.cwd,
                         )
-                        for hr in await self.hooks.run_hooks(
-                            HookType.ON_TURN_END, ctx
-                        ):
+                        for hr in await self.hooks.run_hooks(HookType.ON_TURN_END, ctx):
                             if hr.message:
                                 await tx.put(Notice(text=hr.message))
                     await tx.put(TurnEnd(cost_usd=total_cost))
@@ -624,18 +575,14 @@ class AgentLoop:
                         iteration,
                         request_snapshot,
                         blocks,
-                        [
-                            (b.tool_use_id, b.content, b.is_error)
-                            for b in tool_results
-                        ],
+                        [(b.tool_use_id, b.content, b.is_error) for b in tool_results],
                         turn_usage,
                         turn_cost,
                     )
                     # 模型主动请求压缩：本批工具结果已闭合（记录完整、
                     # 无孤立结果）再摘要——顺序不对会让模型重复副作用
                     if self.compactor is not None and any(
-                        isinstance(b, ToolUseBlock) and b.name == "compact"
-                        for b in blocks
+                        isinstance(b, ToolUseBlock) and b.name == "compact" for b in blocks
                     ):
                         report = CompactionReport()
                         messages = await self.compactor.compact_history(
@@ -644,28 +591,19 @@ class AgentLoop:
                         if report.summarized:
                             await tx.put(
                                 Notice(
-                                    text="context compacted: history summarized "
-                                    "(model-requested)"
+                                    text="context compacted: history summarized (model-requested)"
                                 )
                             )
                     if self.todo is not None:
                         used_todo = any(
-                            isinstance(b, ToolUseBlock) and b.name == "todo_write"
-                            for b in blocks
+                            isinstance(b, ToolUseBlock) and b.name == "todo_write" for b in blocks
                         )
                         if used_todo:
                             rounds_since_todo = 0
                         else:
                             rounds_since_todo += 1
-                        if (
-                            rounds_since_todo >= self.todo_reminder_interval
-                            and self.todo.has_items
-                        ):
-                            messages.append(
-                                Message.user(
-                                    "<reminder>Update your todos.</reminder>"
-                                )
-                            )
+                        if rounds_since_todo >= self.todo_reminder_interval and self.todo.has_items:
+                            messages.append(Message.user("<reminder>Update your todos.</reminder>"))
                             rounds_since_todo = 0
                 else:
                     if self.hooks:
@@ -702,9 +640,7 @@ class AgentLoop:
         last = finalized[-1]
         if last.role != Role.assistant:
             return finalized
-        pending_ids = [
-            b.id for b in last.content if isinstance(b, ToolUseBlock)
-        ]
+        pending_ids = [b.id for b in last.content if isinstance(b, ToolUseBlock)]
         if not pending_ids:
             return finalized
         finalized.append(
@@ -868,11 +804,7 @@ class AgentLoop:
         每次工具调用前走权限检查与 pre-tool hooks，
         调用后走 post-tool hooks。
         """
-        calls = [
-            (b.id, b.name, b.input)
-            for b in blocks
-            if isinstance(b, ToolUseBlock)
-        ]
+        calls = [(b.id, b.name, b.input) for b in blocks if isinstance(b, ToolUseBlock)]
 
         async def run_one(
             tool_id: str, tool_name: str, tool_input: dict[str, Any]
@@ -961,16 +893,16 @@ class AgentLoop:
                 if self.security_policy.redact_output:
                     content, hits = scan_tool_output(content)
                     if hits:
-                        await tx.put(Notice(
-                            text=f"[security] {tool_name} output redacted: "
-                            f"{', '.join(hits)}"
-                        ))
+                        await tx.put(
+                            Notice(
+                                text=f"[security] {tool_name} output redacted: {', '.join(hits)}"
+                            )
+                        )
                         if self.observability is not None:
                             self.observability.event_counter(
                                 "agent_security_redactions_total", tool=tool_name
                             )
-                if (self.security_policy.untrusted_wrap
-                        and tool_name.startswith("mcp__")):
+                if self.security_policy.untrusted_wrap and tool_name.startswith("mcp__"):
                     content = wrap_untrusted(tool_name, content)
 
             if self.hooks:
@@ -1035,9 +967,7 @@ class AgentLoop:
 class AgentLoopBuilder:
     """AgentLoop 构建器。"""
 
-    def __init__(
-        self, llm: LlmProvider, registry: ToolRegistry, ctx: ToolContext
-    ) -> None:
+    def __init__(self, llm: LlmProvider, registry: ToolRegistry, ctx: ToolContext) -> None:
         self._llm = llm
         self._registry = registry
         self._ctx = ctx
@@ -1131,9 +1061,7 @@ class AgentLoopBuilder:
         self._compactor = c
         return self
 
-    def permission_responses(
-        self, q: asyncio.Queue[PermissionDecision]
-    ) -> AgentLoopBuilder:
+    def permission_responses(self, q: asyncio.Queue[PermissionDecision]) -> AgentLoopBuilder:
         self._permission_responses = q
         return self
 

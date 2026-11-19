@@ -39,18 +39,21 @@ def _snap(**overrides) -> TraceSnapshot:
         ([{"type": "no_tool_errors", "weight": 1.0}], "passed"),
         ([{"type": "output_contains", "pattern": "PASSED", "weight": 1.0}], "passed"),
         ([{"type": "output_contains", "pattern": "missing", "weight": 1.0}], "failed"),
-        ([{"type": "tool_called", "tool": "bash", "args_regex": "pytest", "weight": 1.0}],
-         "passed"),
+        (
+            [{"type": "tool_called", "tool": "bash", "args_regex": "pytest", "weight": 1.0}],
+            "passed",
+        ),
         ([{"type": "tool_called", "tool": "grep", "weight": 1.0}], "failed"),
-        ([{"type": "tool_call_count", "tool": "bash", "min": 1, "max": 2, "weight": 1.0}],
-         "passed"),
+        (
+            [{"type": "tool_call_count", "tool": "bash", "min": 1, "max": 2, "weight": 1.0}],
+            "passed",
+        ),
         ([{"type": "tool_call_count", "tool": "bash", "min": 5, "weight": 1.0}], "failed"),
-        ([{"type": "tool_called", "tool": "bash", "after_tool": "edit", "weight": 1.0}],
-         "passed"),
+        ([{"type": "tool_called", "tool": "bash", "after_tool": "edit", "weight": 1.0}], "passed"),
     ],
-    ids=lambda v: (v[0]["type"] + "-" + str(v[0].get("tool", "")))
-    if isinstance(v, list)
-    else str(v),
+    ids=lambda v: (
+        (v[0]["type"] + "-" + str(v[0].get("tool", ""))) if isinstance(v, list) else str(v)
+    ),
 )
 def test_assertion_expectations(expectations, expected_status) -> None:
     result = score_assertions(_snap(), expectations)
@@ -95,11 +98,13 @@ def test_tool_error_fails_no_tool_errors() -> None:
 
 def test_output_contains_regex_mode() -> None:
     snap = _snap(text_outputs=["error E404: not found"])
-    ok = score_assertions(snap, [{"type": "output_contains", "pattern": r"E\d+",
-                                  "regex": True, "weight": 1.0}])
+    ok = score_assertions(
+        snap, [{"type": "output_contains", "pattern": r"E\d+", "regex": True, "weight": 1.0}]
+    )
     assert ok.status == "passed"
-    miss = score_assertions(snap, [{"type": "output_contains", "pattern": r"W\d+",
-                                    "regex": True, "weight": 1.0}])
+    miss = score_assertions(
+        snap, [{"type": "output_contains", "pattern": r"W\d+", "regex": True, "weight": 1.0}]
+    )
     assert miss.status == "failed"
 
 
@@ -144,8 +149,7 @@ def test_execution_check_isolated_from_env_pythonpath(tmp_path, monkeypatch) -> 
     """-I 隔离环境注入：作弊模块放 PYTHONPATH 也 import 不到。"""
     cheater = tmp_path / "cheater"
     cheater.mkdir()
-    (cheater / "solution.py").write_text("def double(x):\n    return 0\n",
-                                         encoding="utf-8")
+    (cheater / "solution.py").write_text("def double(x):\n    return 0\n", encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(cheater))
     check = "from solution import double as candidate\nassert candidate(3) == 6\n"
     ok, _ = run_execution_check(tmp_path, check)
@@ -185,8 +189,7 @@ def test_score_case_falls_back_to_assertions_without_check(tmp_path) -> None:
 def _loop_snap(repeats: int) -> TraceSnapshot:
     """构造连续 repeats 次相同调用的快照。"""
     calls = [
-        ToolCall(seq=i, turn=0, call_id=f"c{i}", tool_name="read_file",
-                 args={"path": "a.py"})
+        ToolCall(seq=i, turn=0, call_id=f"c{i}", tool_name="read_file", args={"path": "a.py"})
         for i in range(repeats)
     ]
     return TraceSnapshot(tool_calls=calls)
@@ -208,15 +211,17 @@ def test_no_loops_detection(repeats: int, max_repeat: int, ok: bool) -> None:
 def test_no_loops_allows_interleaved_repeats() -> None:
     """相同调用被其他调用隔开不算循环（A B A B A 不触发）。"""
     calls = [
-        ToolCall(seq=i, turn=0, call_id=f"c{i}",
-                 tool_name="read_file" if i % 2 == 0 else "grep",
-                 args={"path": "a.py"} if i % 2 == 0 else {"pattern": "x"})
+        ToolCall(
+            seq=i,
+            turn=0,
+            call_id=f"c{i}",
+            tool_name="read_file" if i % 2 == 0 else "grep",
+            args={"path": "a.py"} if i % 2 == 0 else {"pattern": "x"},
+        )
         for i in range(5)
     ]
     snap = TraceSnapshot(tool_calls=calls)
-    result = score_assertions(
-        snap, [{"type": "no_loops", "max_repeat": 3, "weight": 1.0}]
-    )
+    result = score_assertions(snap, [{"type": "no_loops", "max_repeat": 3, "weight": 1.0}])
     assert result.status == "passed"
 
 
@@ -226,9 +231,7 @@ def test_no_loops_allows_interleaved_repeats() -> None:
 )
 def test_cost_budget(cost: float, max_usd: float, ok: bool) -> None:
     snap = TraceSnapshot(cost_usd=cost)
-    result = score_assertions(
-        snap, [{"type": "cost_budget", "max_usd": max_usd, "weight": 1.0}]
-    )
+    result = score_assertions(snap, [{"type": "cost_budget", "max_usd": max_usd, "weight": 1.0}])
     assert (result.status == "passed") is ok
     assert "cost $" in result.reason
 
@@ -260,8 +263,15 @@ def test_turns_budget(turns: int, max_turns: int, ok: bool) -> None:
         "/usr/bin/python3: No module named pytest",
         "Traceback ... ModuleNotFoundError: No module named 'astropy'",
     ],
-    ids=["runbash-timeout", "git-timeout", "resolve-host", "network-unreachable",
-         "conn-reset", "no-pytest", "no-astropy"],
+    ids=[
+        "runbash-timeout",
+        "git-timeout",
+        "resolve-host",
+        "network-unreachable",
+        "conn-reset",
+        "no-pytest",
+        "no-astropy",
+    ],
 )
 def test_classify_infra_errors(output: str) -> None:
     """网络不可达 / 超时 / 依赖未预置归 infra——环境问题不记 Agent 头上。"""
@@ -286,20 +296,24 @@ def test_classify_agent_errors(output: str) -> None:
 
 
 def _snap_with_errors(outputs: list[tuple[str, bool]]) -> TraceSnapshot:
-    return TraceSnapshot(tool_results=[
-        ToolResult(seq=i, call_id=f"c{i}", output=text, is_error=err)
-        for i, (text, err) in enumerate(outputs)
-    ])
+    return TraceSnapshot(
+        tool_results=[
+            ToolResult(seq=i, call_id=f"c{i}", output=text, is_error=err)
+            for i, (text, err) in enumerate(outputs)
+        ]
+    )
 
 
 def test_no_tool_errors_ignores_infra_by_default() -> None:
     """默认 ignore_infra=True：纯环境故障（用户实测的 clone 超时 +
     ModuleNotFoundError）不再扣过程分，details 标注被忽略的样例。"""
-    snap = _snap_with_errors([
-        ("command timed out after 300s: git clone …", True),
-        ("/usr/bin/python3: No module named pytest", True),
-        ("ok output", False),
-    ])
+    snap = _snap_with_errors(
+        [
+            ("command timed out after 300s: git clone …", True),
+            ("/usr/bin/python3: No module named pytest", True),
+            ("ok output", False),
+        ]
+    )
     result = score_assertions(snap, [{"type": "no_tool_errors", "weight": 1.0}])
     assert result.status == "passed"
     assert result.score == 1.0
@@ -309,10 +323,12 @@ def test_no_tool_errors_ignores_infra_by_default() -> None:
 
 def test_no_tool_errors_fails_on_agent_errors() -> None:
     """Agent 操作失误照常扣分；混合时附 infra 被忽略的计数。"""
-    snap = _snap_with_errors([
-        ("command timed out after 300s: git clone …", True),
-        ("exit 1\nSyntaxError: invalid syntax", True),
-    ])
+    snap = _snap_with_errors(
+        [
+            ("command timed out after 300s: git clone …", True),
+            ("exit 1\nSyntaxError: invalid syntax", True),
+        ]
+    )
     result = score_assertions(snap, [{"type": "no_tool_errors", "weight": 1.0}])
     assert result.status == "failed"
     assert result.score == 0.0
@@ -324,9 +340,11 @@ def test_no_tool_errors_fails_on_agent_errors() -> None:
 
 def test_no_tool_errors_count_infra_when_disabled() -> None:
     """ignore_infra=False：环境错误也计（显式要求全算的语义）。"""
-    snap = _snap_with_errors([
-        ("command timed out after 300s: git clone …", True),
-    ])
+    snap = _snap_with_errors(
+        [
+            ("command timed out after 300s: git clone …", True),
+        ]
+    )
     result = score_assertions(
         snap, [{"type": "no_tool_errors", "ignore_infra": False, "weight": 1.0}]
     )

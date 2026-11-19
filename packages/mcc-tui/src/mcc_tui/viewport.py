@@ -55,9 +55,7 @@ class InputViewport:
             result.append("")
         return result
 
-    def cursor_visible_pos(
-        self, text: str, cursor: int
-    ) -> tuple[int, int]:
+    def cursor_visible_pos(self, text: str, cursor: int) -> tuple[int, int]:
         """返回光标在可见区域中的 (行, 显示列) 位置。"""
         line_no, col = self._cursor_to_line_col(text, cursor)
         vis_row = line_no - self.scroll_y

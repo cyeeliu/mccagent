@@ -380,14 +380,11 @@ class AgentApplication:
 
         lines = [
             f"TeamRun {result.run_id} — {result.status.value}",
-            f"完成: {result.completed_count}/{result.total_count}, "
-            f"失败: {result.failed_count}",
+            f"完成: {result.completed_count}/{result.total_count}, 失败: {result.failed_count}",
         ]
         for r in result.results:
             marker = "✓" if r.status == "completed" else "✗"
-            lines.append(
-                f"  {marker} {r.agent_id}: {r.summary or r.error or ''}"
-            )
+            lines.append(f"  {marker} {r.agent_id}: {r.summary or r.error or ''}")
         return "\n".join(lines)
 
     async def consume_lead_inbox(self) -> list[Any]:

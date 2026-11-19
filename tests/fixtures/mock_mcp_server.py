@@ -93,18 +93,19 @@ def main() -> None:
                 result = HANDLERS[method](msg.get("params", {}))
                 if req_id is not None:
                     sys.stdout.write(
-                        json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result})
-                        + "\n"
+                        json.dumps({"jsonrpc": "2.0", "id": req_id, "result": result}) + "\n"
                     )
                     sys.stdout.flush()
             except Exception as e:
                 if req_id is not None:
                     sys.stdout.write(
-                        json.dumps({
-                            "jsonrpc": "2.0",
-                            "id": req_id,
-                            "error": {"code": -32603, "message": str(e)},
-                        })
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "error": {"code": -32603, "message": str(e)},
+                            }
+                        )
                         + "\n"
                     )
                     sys.stdout.flush()

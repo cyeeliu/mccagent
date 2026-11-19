@@ -390,12 +390,15 @@ def _make_selection_app(n: int) -> tuple[App, object]:
     return app, handles
 
 
-@pytest.mark.parametrize("key,expected_index,expected_scroll", [
-    (Key.home, 0, 0),
-    (Key.end, 11, 5),
-    (Key.page_down, 7, 1),
-    (Key.page_up, 0, 0),
-])
+@pytest.mark.parametrize(
+    "key,expected_index,expected_scroll",
+    [
+        (Key.home, 0, 0),
+        (Key.end, 11, 5),
+        (Key.page_down, 7, 1),
+        (Key.page_up, 0, 0),
+    ],
+)
 def test_selection_nav_keys(key, expected_index, expected_scroll):
     """Home/End/PageUp/PageDown 在选择浮层中正确定位并滚动。"""
     from mcc_tui import _handle_key
@@ -450,9 +453,7 @@ def test_selection_panel_height_stable():
         panel = _selection_panel(app, 80)
         line_counts.append(panel.renderable.plain.count("\n"))
 
-    assert len(set(line_counts)) == 1, (
-        f"面板行数随滚动变化: {line_counts}"
-    )
+    assert len(set(line_counts)) == 1, f"面板行数随滚动变化: {line_counts}"
     assert line_counts[0] == _COMP_MAX_ROWS + 2
 
 
@@ -468,38 +469,47 @@ def test_selection_panel_no_indicators_when_fits():
     assert plain.count("\n") == n
 
 
-@pytest.mark.parametrize("tool_name,arg_field,arg_value,expected", [
-    ("spawn_subagent", "preset", "code_explorer", "code_explorer"),
-    ("spawn_subagent", "preset", "test_runner", "test_runner"),
-    ("spawn_teammate", "name", "worker1", "worker1"),
-    ("send_teammate_message", "name", "worker1", "worker1"),
-    ("read_file", "path", "foo.py", ""),
-    ("run_bash", "cmd", "ls", ""),
-])
+@pytest.mark.parametrize(
+    "tool_name,arg_field,arg_value,expected",
+    [
+        ("spawn_subagent", "preset", "code_explorer", "code_explorer"),
+        ("spawn_subagent", "preset", "test_runner", "test_runner"),
+        ("spawn_teammate", "name", "worker1", "worker1"),
+        ("send_teammate_message", "name", "worker1", "worker1"),
+        ("read_file", "path", "foo.py", ""),
+        ("run_bash", "cmd", "ls", ""),
+    ],
+)
 def test_agent_name_extraction(tool_name, arg_field, arg_value, expected):
     """各种工具的 ToolCallStart 提取 agent_name。"""
     app = App(session_short_id="test")
-    app.apply_event(ToolCallStart(
-        id="call-1",
-        name=tool_name,
-        args_preview=json.dumps({arg_field: arg_value}),
-    ))
+    app.apply_event(
+        ToolCallStart(
+            id="call-1",
+            name=tool_name,
+            args_preview=json.dumps({arg_field: arg_value}),
+        )
+    )
     assert app.items[-1].agent_name == expected
 
 
 def test_subagent_tool_result_inherits_agent_name():
     """ToolCallEnd 对应 spawn_subagent 时 tool_result 继承 agent_name。"""
     app = App(session_short_id="test")
-    app.apply_event(ToolCallStart(
-        id="call-1",
-        name="spawn_subagent",
-        args_preview='{"preset": "code_explorer", "task": "find files"}',
-    ))
-    app.apply_event(ToolCallEnd(
-        id="call-1",
-        output="[subagent=code_explorer tokens=100in/50out]\n找到 3 个文件",
-        is_error=False,
-    ))
+    app.apply_event(
+        ToolCallStart(
+            id="call-1",
+            name="spawn_subagent",
+            args_preview='{"preset": "code_explorer", "task": "find files"}',
+        )
+    )
+    app.apply_event(
+        ToolCallEnd(
+            id="call-1",
+            output="[subagent=code_explorer tokens=100in/50out]\n找到 3 个文件",
+            is_error=False,
+        )
+    )
     result_item = [it for it in app.items if it.kind == "tool_result"][0]
     assert result_item.agent_name == "code_explorer"
 

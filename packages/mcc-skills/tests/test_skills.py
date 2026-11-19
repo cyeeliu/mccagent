@@ -90,7 +90,8 @@ class TestSkillLoader:
     def test_triggers_model_requires_parsed(self, tmp_path):
         root = tmp_path / "skills"
         _write_skill(
-            root, "x",
+            root,
+            "x",
             "---\nname: x\ndescription: d\ntriggers:\n  - /review\n  - review this\n"
             "model: claude-opus\nrequires_tools:\n  - read_file\n  - run_bash\n---\nbody",
         )

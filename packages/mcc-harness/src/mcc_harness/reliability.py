@@ -123,15 +123,13 @@ class CircuitBreaker:
             return
         if self._half_open:
             raise CircuitOpenError(
-                f"circuit half-open: probe in progress, "
-                f"retry after {self.reset_timeout}s"
+                f"circuit half-open: probe in progress, retry after {self.reset_timeout}s"
             )
         if self._clock() - self._opened_at >= self.reset_timeout:
             self._half_open = True
             return
         raise CircuitOpenError(
-            f"circuit open (failures={self._failures}, "
-            f"retry after {self.reset_timeout}s)"
+            f"circuit open (failures={self._failures}, retry after {self.reset_timeout}s)"
         )
 
     def record_success(self) -> None:
@@ -166,9 +164,7 @@ class ThrottledLlm:
     ) -> None:
         self._inner = inner
         self._min_interval = 60.0 / rpm if rpm > 0 else 0.0
-        self._sem = (
-            asyncio.Semaphore(max_concurrency) if max_concurrency > 0 else None
-        )
+        self._sem = asyncio.Semaphore(max_concurrency) if max_concurrency > 0 else None
         self._lock = asyncio.Lock()
         self._last_sent = 0.0
 
@@ -219,17 +215,13 @@ class InjectedFailure(AgentError):
 
     def __init__(self, status_code: int = 503) -> None:
         super().__init__(f"injected failure ({status_code})")
-        self.response = type(
-            "_Resp", (), {"status_code": status_code, "headers": {}}
-        )()
+        self.response = type("_Resp", (), {"status_code": status_code, "headers": {}})()
 
 
 class FlakyProvider:
     """按概率注入 503 失败，验证重试/熔断行为。seed 固定可复现。"""
 
-    def __init__(
-        self, inner: Any, failure_rate: float, seed: int | None = None
-    ) -> None:
+    def __init__(self, inner: Any, failure_rate: float, seed: int | None = None) -> None:
         self._inner = inner
         self._rate = failure_rate
         self._rng = random.Random(seed)

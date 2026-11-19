@@ -72,9 +72,7 @@ class RecordingLlm:
         self.events.append("start")
         await asyncio.sleep(self.delay)
         yield TextDelta(text="ok")
-        yield MessageStop(
-            stop_reason="end_turn", usage=Usage(input_tokens=1, output_tokens=1)
-        )
+        yield MessageStop(stop_reason="end_turn", usage=Usage(input_tokens=1, output_tokens=1))
         self.events.append("end")
 
 
@@ -166,9 +164,7 @@ class TestSpawnSubagentToolContract:
     async def test_depth_limit(self, registry, ctx):
         tool = _tool(MockLlm([]), registry, max_depth=3)
         deep = ToolContext(cwd=ctx.cwd, session_id="s", depth=3)
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "t"}, deep
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "t"}, deep)
         assert out.is_error
         assert "depth limit" in out.content
 
@@ -197,13 +193,10 @@ class TestSpawnSubagentToolContract:
             [single_text_turn("found entrypoint", Usage(input_tokens=7, output_tokens=3))]
         )
         tool = _tool(llm, registry)
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "find entrypoint"}, ctx
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "find entrypoint"}, ctx)
         assert not out.is_error
         assert (
-            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]"
-            in out.content
+            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]" in out.content
         )
         assert "found entrypoint" in out.content
 
@@ -213,9 +206,7 @@ class TestSpawnSubagentToolContract:
 
 class TestSubagentRunner:
     async def test_summary_usage_and_reason(self, registry, ctx):
-        llm = MockLlm(
-            [single_text_turn("结论", Usage(input_tokens=100, output_tokens=50))]
-        )
+        llm = MockLlm([single_text_turn("结论", Usage(input_tokens=100, output_tokens=50))])
         runner = SubagentRunner(llm, registry)
         result = await runner.run(default_presets()["summarizer"], "任务", ctx)
         assert result.name == "summarizer"
@@ -257,9 +248,7 @@ class TestSubagentRunner:
         (tmp_path / "x.txt").write_text("hi", encoding="utf-8")
         turn1 = [
             ToolUseStart(id="s1", name="spawn_subagent"),
-            ToolUseInputDelta(
-                partial_json=json.dumps({"preset": "summarizer", "task": "x"})
-            ),
+            ToolUseInputDelta(partial_json=json.dumps({"preset": "summarizer", "task": "x"})),
             MessageStop(stop_reason="tool_use", usage=Usage()),
         ]
         llm = MockLlm([turn1, single_text_turn("child done")])
@@ -272,9 +261,7 @@ class TestSubagentRunner:
         (tmp_path / "note.txt").write_text("payload", encoding="utf-8")
         turn1 = [
             ToolUseStart(id="r1", name="read_file"),
-            ToolUseInputDelta(
-                partial_json=json.dumps({"path": "note.txt"})
-            ),
+            ToolUseInputDelta(partial_json=json.dumps({"path": "note.txt"})),
             MessageStop(stop_reason="tool_use", usage=Usage()),
         ]
         llm = MockLlm([turn1, single_text_turn("read: payload")])
@@ -391,9 +378,7 @@ class TestSubagentLifecycle:
 
     async def test_completed_returns_real_usage(self, registry, ctx):
         """成功路径：status=COMPLETED, usage 为真实值, cost_usd > 0。"""
-        llm = MockLlm(
-            [single_text_turn("done", Usage(input_tokens=100, output_tokens=50))]
-        )
+        llm = MockLlm([single_text_turn("done", Usage(input_tokens=100, output_tokens=50))])
         runner = SubagentRunner(llm, registry)
         result = await runner.run(default_presets()["summarizer"], "task", ctx)
         assert result.status == SubagentStatus.COMPLETED
@@ -553,9 +538,7 @@ class TestSubagentLifecycle:
         hooks = HookRegistry()
         hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
 
-        runner = SubagentRunner(
-            MockLlm([single_text_turn("ok")]), registry, hooks=hooks
-        )
+        runner = SubagentRunner(MockLlm([single_text_turn("ok")]), registry, hooks=hooks)
         await runner.run(default_presets()["summarizer"], "task", ctx)
         assert len(hook_calls) == 1
 
@@ -567,9 +550,7 @@ class TestSubagentLifecycle:
         assert result.started_at > 0
         assert result.finished_at >= result.started_at
 
-    async def test_hook_context_carries_cost_and_is_error(
-        self, registry, ctx
-    ):
+    async def test_hook_context_carries_cost_and_is_error(self, registry, ctx):
         """Hook context 携带 cost_usd 和 is_error 标志。"""
         hook_calls: list = []
 
@@ -580,9 +561,7 @@ class TestSubagentLifecycle:
         hooks = HookRegistry()
         hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
 
-        llm = MockLlm(
-            [single_text_turn("done", Usage(input_tokens=100, output_tokens=50))]
-        )
+        llm = MockLlm([single_text_turn("done", Usage(input_tokens=100, output_tokens=50))])
         runner = SubagentRunner(llm, registry, hooks=hooks)
         result = await runner.run(default_presets()["summarizer"], "task", ctx)
         assert len(hook_calls) == 1
@@ -599,9 +578,7 @@ class TestSubagentLifecycle:
             (SubagentStatus.BUDGET_EXCEEDED, True),
         ],
     )
-    async def test_is_error_flag_per_status(
-        self, registry, ctx, status, expected_is_error
-    ):
+    async def test_is_error_flag_per_status(self, registry, ctx, status, expected_is_error):
         """各终止路径的 Hook context.is_error 正确反映成功/失败。"""
         hook_calls: list = []
 
@@ -613,14 +590,15 @@ class TestSubagentLifecycle:
         hooks.add_python(HookType.ON_SUBAGENT_STOP, on_stop)
 
         if status == SubagentStatus.COMPLETED:
-            runner = SubagentRunner(
-                MockLlm([single_text_turn("ok")]), registry, hooks=hooks
-            )
+            runner = SubagentRunner(MockLlm([single_text_turn("ok")]), registry, hooks=hooks)
             await runner.run(default_presets()["summarizer"], "task", ctx)
         elif status == SubagentStatus.TIMEOUT:
             spec = SubagentSpec(
-                name="slow", system="s", model="claude-haiku-4-5",
-                tools=[], timeout_secs=0.05,
+                name="slow",
+                system="s",
+                model="claude-haiku-4-5",
+                tools=[],
+                timeout_secs=0.05,
             )
             runner = SubagentRunner(SlowLlm(), registry, hooks=hooks)
             await runner.run(spec, "task", ctx)
@@ -629,14 +607,15 @@ class TestSubagentLifecycle:
             await runner.run(default_presets()["summarizer"], "task", ctx)
         elif status == SubagentStatus.BUDGET_EXCEEDED:
             spec = SubagentSpec(
-                name="big", system="s", model="claude-haiku-4-5",
-                tools=["read_file"], budget_tokens=1_000,
+                name="big",
+                system="s",
+                model="claude-haiku-4-5",
+                tools=["read_file"],
+                budget_tokens=1_000,
             )
             turn1 = [
                 ToolUseStart(id="r1", name="read_file"),
-                ToolUseInputDelta(
-                    partial_json=json.dumps({"path": "whatever.txt"})
-                ),
+                ToolUseInputDelta(partial_json=json.dumps({"path": "whatever.txt"})),
                 MessageStop(
                     stop_reason="tool_use",
                     usage=Usage(input_tokens=1_000_000, output_tokens=0),
@@ -652,8 +631,11 @@ class TestSubagentLifecycle:
     async def test_tool_output_unknown_tokens_on_timeout(self, registry, ctx):
         """超时时工具输出 tokens=unknown（usage 未知）。"""
         spec = SubagentSpec(
-            name="slowpoke", system="s", model="claude-haiku-4-5",
-            tools=[], timeout_secs=0.05,
+            name="slowpoke",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            timeout_secs=0.05,
         )
         tool = _tool(SlowLlm(), registry, {"slowpoke": spec})
         out = await tool.execute({"preset": "slowpoke", "task": "t"}, ctx)
@@ -663,13 +645,9 @@ class TestSubagentLifecycle:
 
     async def test_tool_output_status_on_success(self, registry, ctx):
         """成功时工具输出含 status=succeeded。"""
-        llm = MockLlm(
-            [single_text_turn("result", Usage(input_tokens=5, output_tokens=3))]
-        )
+        llm = MockLlm([single_text_turn("result", Usage(input_tokens=5, output_tokens=3))])
         tool = _tool(llm, registry)
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "t"}, ctx
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "t"}, ctx)
         assert not out.is_error
         assert "status=succeeded" in out.content
 
@@ -682,18 +660,14 @@ class TestConcurrency:
         events: list = []
         runner = SubagentRunner(RecordingLlm(events), registry, concurrency=1)
         spec = default_presets()["summarizer"]
-        await asyncio.gather(
-            runner.run(spec, "a", ctx), runner.run(spec, "b", ctx)
-        )
+        await asyncio.gather(runner.run(spec, "a", ctx), runner.run(spec, "b", ctx))
         assert events == ["start", "end", "start", "end"]
 
     async def test_concurrency_two_overlaps(self, registry, ctx):
         events: list = []
         runner = SubagentRunner(RecordingLlm(events), registry, concurrency=2)
         spec = default_presets()["summarizer"]
-        await asyncio.gather(
-            runner.run(spec, "a", ctx), runner.run(spec, "b", ctx)
-        )
+        await asyncio.gather(runner.run(spec, "a", ctx), runner.run(spec, "b", ctx))
         assert events[:2] == ["start", "start"]
 
 
@@ -702,36 +676,24 @@ class TestConcurrency:
 
 class TestSpawnPermission:
     def test_request_mapping(self):
-        req = permission_request_for(
-            "spawn_subagent", {"preset": "code_explorer", "task": "t"}
-        )
+        req = permission_request_for("spawn_subagent", {"preset": "code_explorer", "task": "t"})
         assert req.category == "Subagent"
         assert req.action.cmd == "spawn_subagent code_explorer"
 
     def test_default_allows_spawn(self):
         checker = PermissionChecker(PermissionConfig())
-        req = permission_request_for(
-            "spawn_subagent", {"preset": "code_explorer", "task": "t"}
-        )
+        req = permission_request_for("spawn_subagent", {"preset": "code_explorer", "task": "t"})
         assert isinstance(checker.check(req), Allow)
 
     def test_deny_all_spawns(self):
         checker = PermissionChecker(PermissionConfig(deny=["Bash(spawn_subagent:*)"]))
-        req = permission_request_for(
-            "spawn_subagent", {"preset": "code_explorer", "task": "t"}
-        )
+        req = permission_request_for("spawn_subagent", {"preset": "code_explorer", "task": "t"})
         assert isinstance(checker.check(req), Deny)
 
     def test_deny_specific_preset_only(self):
-        checker = PermissionChecker(
-            PermissionConfig(deny=["Bash(spawn_subagent test_runner:*)"])
-        )
-        blocked = permission_request_for(
-            "spawn_subagent", {"preset": "test_runner", "task": "t"}
-        )
-        allowed = permission_request_for(
-            "spawn_subagent", {"preset": "code_explorer", "task": "t"}
-        )
+        checker = PermissionChecker(PermissionConfig(deny=["Bash(spawn_subagent test_runner:*)"]))
+        blocked = permission_request_for("spawn_subagent", {"preset": "test_runner", "task": "t"})
+        allowed = permission_request_for("spawn_subagent", {"preset": "code_explorer", "task": "t"})
         assert isinstance(checker.check(blocked), Deny)
         assert isinstance(checker.check(allowed), Allow)
 
@@ -748,9 +710,7 @@ class TestFanOutE2E:
             turn1.append(ToolUseStart(id=f"sp{i}", name="spawn_subagent"))
             turn1.append(
                 ToolUseInputDelta(
-                    partial_json=json.dumps(
-                        {"preset": "code_explorer", "task": task}
-                    )
+                    partial_json=json.dumps({"preset": "code_explorer", "task": task})
                 )
             )
         turn1.append(MessageStop(stop_reason="tool_use", usage=Usage()))
@@ -791,9 +751,7 @@ def _write_turn(path: str = "out.txt", content: str = "x"):
     """构造一个 write_file 工具调用轮次。"""
     return [
         ToolUseStart(id="w1", name="write_file"),
-        ToolUseInputDelta(
-            partial_json=json.dumps({"path": path, "content": content})
-        ),
+        ToolUseInputDelta(partial_json=json.dumps({"path": path, "content": content})),
         MessageStop(stop_reason="tool_use", usage=Usage(input_tokens=10, output_tokens=5)),
     ]
 
@@ -805,7 +763,8 @@ class TestPermissionChannel:
         """委托范围内的请求自动允许，不进入 pending。"""
         ch = PermissionChannel("a1", auto_allow=frozenset({"Write"}))
         ev = PermissionRequestEvent(
-            id=42, message="write_file: confirmation required",
+            id=42,
+            message="write_file: confirmation required",
             tool_name="write_file",
             tool_input={"path": "x.txt", "content": "y"},
         )
@@ -823,7 +782,8 @@ class TestPermissionChannel:
         """委托范围外的请求进入 pending 等外部响应。"""
         ch = PermissionChannel("a1", auto_allow=frozenset({"Read"}))
         ev = PermissionRequestEvent(
-            id=99, message="write_file: confirmation required",
+            id=99,
+            message="write_file: confirmation required",
             tool_name="write_file",
             tool_input={"path": "x.txt", "content": "y"},
         )
@@ -863,21 +823,27 @@ class TestPermissionChannel:
 class TestSubagentPermissionChannel:
     """子代理权限审批通道集成测试。"""
 
-    async def test_auto_allow_write_executes(
-        self, registry, ctx, tmp_path
-    ):
+    async def test_auto_allow_write_executes(self, registry, ctx, tmp_path):
         """auto_allow={"Write"} 时子代理的 write_file 自动允许。"""
         spec = SubagentSpec(
-            name="writer", system="s", model="claude-haiku-4-5",
-            tools=["write_file"], max_iterations=2, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="writer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["write_file"],
+            max_iterations=2,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            _write_turn(str(tmp_path / "out.txt"), "hello"),
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                _write_turn(str(tmp_path / "out.txt"), "hello"),
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             permission_auto_allow=frozenset({"Write"}),
             permission_timeout_secs=5,
@@ -891,16 +857,24 @@ class TestSubagentPermissionChannel:
     async def test_no_channel_denies_write(self, registry, ctx, tmp_path):
         """无 auto_allow 且无外部响应时 write_file 超时拒绝。"""
         spec = SubagentSpec(
-            name="writer", system="s", model="claude-haiku-4-5",
-            tools=["write_file"], max_iterations=2, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="writer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["write_file"],
+            max_iterations=2,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            _write_turn(str(tmp_path / "out.txt"), "hello"),
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                _write_turn(str(tmp_path / "out.txt"), "hello"),
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             permission_auto_allow=frozenset(),
             permission_timeout_secs=0.3,
@@ -912,16 +886,24 @@ class TestSubagentPermissionChannel:
     async def test_external_allow_via_channel(self, registry, ctx, tmp_path):
         """外部通过 channel.respond() 允许子代理的 write_file。"""
         spec = SubagentSpec(
-            name="writer", system="s", model="claude-haiku-4-5",
-            tools=["write_file"], max_iterations=2, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="writer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["write_file"],
+            max_iterations=2,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            _write_turn(str(tmp_path / "out.txt"), "hello"),
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                _write_turn(str(tmp_path / "out.txt"), "hello"),
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             permission_timeout_secs=5,
         )
@@ -929,9 +911,7 @@ class TestSubagentPermissionChannel:
 
         async def responder():
             req = await asyncio.wait_for(channel.pending.get(), timeout=5)
-            await channel.respond(
-                PermissionDecision(request_id=req.request_id, action="allow")
-            )
+            await channel.respond(PermissionDecision(request_id=req.request_id, action="allow"))
 
         resp_task = asyncio.create_task(responder())
         result = await runner.run(spec, "write file", ctx, channel=channel)
@@ -942,16 +922,24 @@ class TestSubagentPermissionChannel:
     async def test_external_deny_via_channel(self, registry, ctx, tmp_path):
         """外部通过 channel.respond() 拒绝子代理的 write_file。"""
         spec = SubagentSpec(
-            name="writer", system="s", model="claude-haiku-4-5",
-            tools=["write_file"], max_iterations=2, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="writer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["write_file"],
+            max_iterations=2,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            _write_turn(str(tmp_path / "out.txt"), "hello"),
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                _write_turn(str(tmp_path / "out.txt"), "hello"),
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             permission_timeout_secs=5,
         )
@@ -959,9 +947,7 @@ class TestSubagentPermissionChannel:
 
         async def responder():
             req = await asyncio.wait_for(channel.pending.get(), timeout=5)
-            await channel.respond(
-                PermissionDecision(request_id=req.request_id, action="deny")
-            )
+            await channel.respond(PermissionDecision(request_id=req.request_id, action="deny"))
 
         resp_task = asyncio.create_task(responder())
         result = await runner.run(spec, "write file", ctx, channel=channel)
@@ -969,21 +955,27 @@ class TestSubagentPermissionChannel:
         assert result.status == SubagentStatus.COMPLETED
         assert not (tmp_path / "out.txt").exists()
 
-    async def test_permission_timeout_default_deny(
-        self, registry, ctx, tmp_path
-    ):
+    async def test_permission_timeout_default_deny(self, registry, ctx, tmp_path):
         """审批超时后默认拒绝。"""
         spec = SubagentSpec(
-            name="writer", system="s", model="claude-haiku-4-5",
-            tools=["write_file"], max_iterations=2, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="writer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["write_file"],
+            max_iterations=2,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            _write_turn(str(tmp_path / "out.txt"), "hello"),
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                _write_turn(str(tmp_path / "out.txt"), "hello"),
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             permission_timeout_secs=0.3,
         )
@@ -992,32 +984,41 @@ class TestSubagentPermissionChannel:
         assert result.status == SubagentStatus.COMPLETED
         assert not (tmp_path / "out.txt").exists()
 
-    async def test_concurrent_channels_no_cross_talk(
-        self, registry, ctx, tmp_path
-    ):
+    async def test_concurrent_channels_no_cross_talk(self, registry, ctx, tmp_path):
         """两个并发子代理的权限请求互不串线。"""
         spec = SubagentSpec(
-            name="writer", system="s", model="claude-haiku-4-5",
-            tools=["write_file"], max_iterations=2, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="writer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["write_file"],
+            max_iterations=2,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm1 = MockLlm([
-            _write_turn(str(tmp_path / "a.txt"), "a"),
-            single_text_turn("a-done", Usage(input_tokens=5, output_tokens=3)),
-        ])
-        llm2 = MockLlm([
-            _write_turn(str(tmp_path / "b.txt"), "b"),
-            single_text_turn("b-done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm1 = MockLlm(
+            [
+                _write_turn(str(tmp_path / "a.txt"), "a"),
+                single_text_turn("a-done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
+        llm2 = MockLlm(
+            [
+                _write_turn(str(tmp_path / "b.txt"), "b"),
+                single_text_turn("b-done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         ch1 = PermissionChannel("agent-1", auto_allow=frozenset({"Write"}))
         ch2 = PermissionChannel("agent-2", auto_allow=frozenset({"Write"}))
 
         runner1 = SubagentRunner(
-            llm1, registry,
+            llm1,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
         )
         runner2 = SubagentRunner(
-            llm2, registry,
+            llm2,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
         )
         r1, r2 = await asyncio.gather(
@@ -1038,16 +1039,24 @@ class TestSubagentPermissionChannel:
     async def test_audit_in_result(self, registry, ctx, tmp_path):
         """SubagentResult 携带权限审计日志。"""
         spec = SubagentSpec(
-            name="writer", system="s", model="claude-haiku-4-5",
-            tools=["write_file"], max_iterations=2, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="writer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=["write_file"],
+            max_iterations=2,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            _write_turn(str(tmp_path / "out.txt"), "hello"),
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                _write_turn(str(tmp_path / "out.txt"), "hello"),
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             permission_auto_allow=frozenset({"Write"}),
         )
@@ -1058,29 +1067,32 @@ class TestSubagentPermissionChannel:
         assert entry.decision == "auto_allow"
         assert entry.category == "Write"
 
-    async def test_read_auto_allowed_by_default(
-        self, registry, ctx, tmp_path
-    ):
+    async def test_read_auto_allowed_by_default(self, registry, ctx, tmp_path):
         """Read 类别在 PermissionChecker 中默认 Allow，不触发通道。"""
         spec = SubagentSpec(
-            name="reader", system="s", model="claude-haiku-4-5",
+            name="reader",
+            system="s",
+            model="claude-haiku-4-5",
             tools=["read_file", "list_dir", "grep"],
-            max_iterations=2, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            max_iterations=2,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
         turn1 = [
             ToolUseStart(id="r1", name="read_file"),
-            ToolUseInputDelta(
-                partial_json=json.dumps({"path": str(tmp_path / "x.txt")})
-            ),
+            ToolUseInputDelta(partial_json=json.dumps({"path": str(tmp_path / "x.txt")})),
             MessageStop(stop_reason="tool_use", usage=Usage(input_tokens=10, output_tokens=5)),
         ]
-        llm = MockLlm([
-            turn1,
-            single_text_turn("read-done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                turn1,
+                single_text_turn("read-done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             permission_timeout_secs=5,
         )
@@ -1141,29 +1153,31 @@ class TestBudgetLedger:
     async def test_is_exceeded_false(self):
         ledger = BudgetLedger(total_tokens=100_000)
         await ledger.allocate("agent-1", 50_000)
-        await ledger.report(
-            "agent-1", "m", Usage(input_tokens=10, output_tokens=5), 0.0, 1.0
-        )
+        await ledger.report("agent-1", "m", Usage(input_tokens=10, output_tokens=5), 0.0, 1.0)
         assert not await ledger.is_exceeded()
 
     async def test_is_exceeded_true(self):
         ledger = BudgetLedger(total_tokens=100)
         await ledger.allocate("agent-1", 100)
-        await ledger.report(
-            "agent-1", "m", Usage(input_tokens=80, output_tokens=50), 0.0, 1.0
-        )
+        await ledger.report("agent-1", "m", Usage(input_tokens=80, output_tokens=50), 0.0, 1.0)
         assert await ledger.is_exceeded()
 
     async def test_summary_by_agent(self):
         ledger = BudgetLedger(total_tokens=1_000_000)
         await ledger.allocate("agent-1", 100_000)
         await ledger.report(
-            "agent-1", "claude-haiku-4-5",
-            Usage(input_tokens=100, output_tokens=50), 0.001, 1.0,
+            "agent-1",
+            "claude-haiku-4-5",
+            Usage(input_tokens=100, output_tokens=50),
+            0.001,
+            1.0,
         )
         await ledger.report(
-            "agent-1", "claude-haiku-4-5",
-            Usage(input_tokens=200, output_tokens=100), 0.002, 2.0,
+            "agent-1",
+            "claude-haiku-4-5",
+            Usage(input_tokens=200, output_tokens=100),
+            0.002,
+            2.0,
         )
         summary = await ledger.summary_by_agent()
         assert "agent-1" in summary
@@ -1177,12 +1191,18 @@ class TestBudgetLedger:
         await ledger.allocate("agent-1", 100_000)
         await ledger.allocate("agent-2", 100_000)
         await ledger.report(
-            "agent-1", "claude-haiku-4-5",
-            Usage(input_tokens=100, output_tokens=50), 0.001, 1.0,
+            "agent-1",
+            "claude-haiku-4-5",
+            Usage(input_tokens=100, output_tokens=50),
+            0.001,
+            1.0,
         )
         await ledger.report(
-            "agent-2", "claude-haiku-4-5",
-            Usage(input_tokens=200, output_tokens=100), 0.002, 2.0,
+            "agent-2",
+            "claude-haiku-4-5",
+            Usage(input_tokens=200, output_tokens=100),
+            0.002,
+            2.0,
         )
         summary = await ledger.summary_by_model()
         assert "claude-haiku-4-5" in summary
@@ -1194,7 +1214,11 @@ class TestBudgetLedger:
         ledger = BudgetLedger(total_tokens=1_000_000)
         await ledger.allocate("agent-1", 100_000)
         await ledger.report(
-            "agent-1", "m", Usage(input_tokens=10, output_tokens=5), 0.01, 0.5,
+            "agent-1",
+            "m",
+            Usage(input_tokens=10, output_tokens=5),
+            0.01,
+            0.5,
         )
         records = ledger.records()
         assert len(records) == 1
@@ -1206,27 +1230,19 @@ class TestBudgetAllocation:
     """BudgetAllocation 单元测试。"""
 
     def test_remaining_tokens(self):
-        alloc = BudgetAllocation(
-            agent_id="a", allocated_tokens=1000, consumed_tokens=300
-        )
+        alloc = BudgetAllocation(agent_id="a", allocated_tokens=1000, consumed_tokens=300)
         assert alloc.remaining_tokens == 700
 
     def test_remaining_tokens_floor_zero(self):
-        alloc = BudgetAllocation(
-            agent_id="a", allocated_tokens=1000, consumed_tokens=1500
-        )
+        alloc = BudgetAllocation(agent_id="a", allocated_tokens=1000, consumed_tokens=1500)
         assert alloc.remaining_tokens == 0
 
     def test_is_exceeded_false(self):
-        alloc = BudgetAllocation(
-            agent_id="a", allocated_tokens=1000, consumed_tokens=500
-        )
+        alloc = BudgetAllocation(agent_id="a", allocated_tokens=1000, consumed_tokens=500)
         assert not alloc.is_exceeded
 
     def test_is_exceeded_true(self):
-        alloc = BudgetAllocation(
-            agent_id="a", allocated_tokens=1000, consumed_tokens=1001
-        )
+        alloc = BudgetAllocation(agent_id="a", allocated_tokens=1000, consumed_tokens=1001)
         assert alloc.is_exceeded
 
 
@@ -1240,39 +1256,41 @@ class TestTokenBudgetToUsd:
         assert usd == pytest.approx(expected)
 
     def test_custom_ratio(self):
-        usd = token_budget_to_usd(
-            1_000_000, "claude-haiku-4-5", input_ratio=0.5
-        )
+        usd = token_budget_to_usd(1_000_000, "claude-haiku-4-5", input_ratio=0.5)
         in_m, out_m = 0.80, 4.0
         expected = in_m * 0.5 + out_m * 0.5
         assert usd == pytest.approx(expected)
 
     def test_ratio_affects_result(self):
         usd_07 = token_budget_to_usd(1_000_000, "claude-haiku-4-5")
-        usd_03 = token_budget_to_usd(
-            1_000_000, "claude-haiku-4-5", input_ratio=0.3
-        )
+        usd_03 = token_budget_to_usd(1_000_000, "claude-haiku-4-5", input_ratio=0.3)
         assert usd_03 > usd_07
 
 
 class TestSubagentBudgetLedger:
     """SubagentRunner + BudgetLedger 集成测试。"""
 
-    async def test_ledger_tracks_consumption(
-        self, registry, ctx, tmp_path
-    ):
+    async def test_ledger_tracks_consumption(self, registry, ctx, tmp_path):
         """子代理完成后，账本记录实际消耗。"""
         spec = SubagentSpec(
-            name="worker", system="s", model="claude-haiku-4-5",
-            tools=[], max_iterations=1, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="worker",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            max_iterations=1,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            single_text_turn("done", Usage(input_tokens=100, output_tokens=50)),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("done", Usage(input_tokens=100, output_tokens=50)),
+            ]
+        )
         ledger = BudgetLedger(total_tokens=100_000)
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             budget_ledger=ledger,
         )
@@ -1284,22 +1302,28 @@ class TestSubagentBudgetLedger:
         assert len(records) == 1
         assert records[0].model == "claude-haiku-4-5"
 
-    async def test_budget_exhausted_returns_budget_exceeded(
-        self, registry, ctx
-    ):
+    async def test_budget_exhausted_returns_budget_exceeded(self, registry, ctx):
         """预算耗尽时返回 BUDGET_EXCEEDED。"""
         spec = SubagentSpec(
-            name="worker", system="s", model="claude-haiku-4-5",
-            tools=[], max_iterations=1, max_tokens=256,
-            budget_tokens=50_000, timeout_secs=10,
+            name="worker",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            max_iterations=1,
+            max_tokens=256,
+            budget_tokens=50_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         ledger = BudgetLedger(total_tokens=60_000)
         await ledger.allocate("other-agent", 50_000)
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             budget_ledger=ledger,
         )
@@ -1307,34 +1331,48 @@ class TestSubagentBudgetLedger:
         assert result.status == SubagentStatus.BUDGET_EXCEEDED
         assert "budget exhausted" in result.summary
 
-    async def test_concurrent_subagents_share_budget(
-        self, registry, ctx, tmp_path
-    ):
+    async def test_concurrent_subagents_share_budget(self, registry, ctx, tmp_path):
         """并发子代理共享同一预算账本，总分配不超过上限。"""
         spec1 = SubagentSpec(
-            name="worker-a", system="s", model="claude-haiku-4-5",
-            tools=[], max_iterations=1, max_tokens=256,
-            budget_tokens=30_000, timeout_secs=10,
+            name="worker-a",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            max_iterations=1,
+            max_tokens=256,
+            budget_tokens=30_000,
+            timeout_secs=10,
         )
         spec2 = SubagentSpec(
-            name="worker-b", system="s", model="claude-haiku-4-5",
-            tools=[], max_iterations=1, max_tokens=256,
-            budget_tokens=30_000, timeout_secs=10,
+            name="worker-b",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            max_iterations=1,
+            max_tokens=256,
+            budget_tokens=30_000,
+            timeout_secs=10,
         )
-        llm1 = MockLlm([
-            single_text_turn("a", Usage(input_tokens=100, output_tokens=50)),
-        ])
-        llm2 = MockLlm([
-            single_text_turn("b", Usage(input_tokens=200, output_tokens=100)),
-        ])
+        llm1 = MockLlm(
+            [
+                single_text_turn("a", Usage(input_tokens=100, output_tokens=50)),
+            ]
+        )
+        llm2 = MockLlm(
+            [
+                single_text_turn("b", Usage(input_tokens=200, output_tokens=100)),
+            ]
+        )
         ledger = BudgetLedger(total_tokens=50_000)
         runner1 = SubagentRunner(
-            llm1, registry,
+            llm1,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             budget_ledger=ledger,
         )
         runner2 = SubagentRunner(
-            llm2, registry,
+            llm2,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             budget_ledger=ledger,
         )
@@ -1347,21 +1385,27 @@ class TestSubagentBudgetLedger:
         consumed = await ledger.total_consumed_tokens()
         assert consumed == 150
 
-    async def test_release_reclaims_after_completion(
-        self, registry, ctx
-    ):
+    async def test_release_reclaims_after_completion(self, registry, ctx):
         """子代理完成后释放分配，额度可复用。"""
         spec = SubagentSpec(
-            name="worker", system="s", model="claude-haiku-4-5",
-            tools=[], max_iterations=1, max_tokens=256,
-            budget_tokens=40_000, timeout_secs=10,
+            name="worker",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            max_iterations=1,
+            max_tokens=256,
+            budget_tokens=40_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         ledger = BudgetLedger(total_tokens=50_000)
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
             budget_ledger=ledger,
         )
@@ -1374,15 +1418,23 @@ class TestSubagentBudgetLedger:
     async def test_no_ledger_works_as_before(self, registry, ctx):
         """无账本时行为与之前一致。"""
         spec = SubagentSpec(
-            name="worker", system="s", model="claude-haiku-4-5",
-            tools=[], max_iterations=1, max_tokens=256,
-            budget_tokens=10_000, timeout_secs=10,
+            name="worker",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            max_iterations=1,
+            max_tokens=256,
+            budget_tokens=10_000,
+            timeout_secs=10,
         )
-        llm = MockLlm([
-            single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("done", Usage(input_tokens=5, output_tokens=3)),
+            ]
+        )
         runner = SubagentRunner(
-            llm, registry,
+            llm,
+            registry,
             permission=PermissionChecker(PermissionConfig()),
         )
         result = await runner.run(spec, "say done", ctx)
@@ -1400,7 +1452,9 @@ def _tool_with_coordinator(llm, registry, presets=None, max_depth=3, **runner_kw
     runner = SubagentRunner(llm, registry, **runner_kwargs)
     coordinator = RuntimeCoordinator()
     return SpawnSubagentTool(
-        runner, presets or default_presets(), max_depth,
+        runner,
+        presets or default_presets(),
+        max_depth,
         coordinator=coordinator,
     ), coordinator
 
@@ -1410,17 +1464,12 @@ class TestSpawnSubagentToolViaRuntime:
 
     async def test_runtime_path_success(self, registry, ctx):
         """通过 runtime 路径执行成功，输出格式与直接路径一致。"""
-        llm = MockLlm(
-            [single_text_turn("found it", Usage(input_tokens=7, output_tokens=3))]
-        )
+        llm = MockLlm([single_text_turn("found it", Usage(input_tokens=7, output_tokens=3))])
         tool, coordinator = _tool_with_coordinator(llm, registry)
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "find it"}, ctx
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "find it"}, ctx)
         assert not out.is_error
         assert (
-            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]"
-            in out.content
+            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]" in out.content
         )
         assert "found it" in out.content
 
@@ -1429,12 +1478,13 @@ class TestSpawnSubagentToolViaRuntime:
         from mcc_llm.mock import single_text_turn
 
         spec = SubagentSpec(
-            name="failer", system="s", model="claude-haiku-4-5",
-            tools=[], timeout_secs=0.05,
+            name="failer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            timeout_secs=0.05,
         )
-        tool, coordinator = _tool_with_coordinator(
-            SlowLlm(), registry, {"failer": spec}
-        )
+        tool, coordinator = _tool_with_coordinator(SlowLlm(), registry, {"failer": spec})
         out = await tool.execute({"preset": "failer", "task": "t"}, ctx)
         assert out.is_error
         assert "status=timed_out" in out.content
@@ -1445,34 +1495,29 @@ class TestSpawnSubagentToolViaRuntime:
         tool, coordinator = _tool_with_coordinator(llm, registry)
         assert coordinator.count == 0
 
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "t"}, ctx
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "t"}, ctx)
         assert not out.is_error
         assert coordinator.count == 0
 
     async def test_runtime_path_unknown_tokens_on_timeout(self, registry, ctx):
         """超时时 runtime 路径输出 tokens=unknown。"""
         spec = SubagentSpec(
-            name="slowpoke", system="s", model="claude-haiku-4-5",
-            tools=[], timeout_secs=0.05,
+            name="slowpoke",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            timeout_secs=0.05,
         )
-        tool, coordinator = _tool_with_coordinator(
-            SlowLlm(), registry, {"slowpoke": spec}
-        )
+        tool, coordinator = _tool_with_coordinator(SlowLlm(), registry, {"slowpoke": spec})
         out = await tool.execute({"preset": "slowpoke", "task": "t"}, ctx)
         assert out.is_error
         assert "tokens=unknown" in out.content
 
     async def test_runtime_path_depth_limit(self, registry, ctx):
         """runtime 路径也遵守深度限制。"""
-        tool, coordinator = _tool_with_coordinator(
-            MockLlm([]), registry, max_depth=3
-        )
+        tool, coordinator = _tool_with_coordinator(MockLlm([]), registry, max_depth=3)
         deep = ToolContext(cwd=ctx.cwd, session_id="s", depth=3)
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "t"}, deep
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "t"}, deep)
         assert out.is_error
         assert "depth limit" in out.content
 
@@ -1490,35 +1535,27 @@ class TestSpawnSubagentToolViaRuntime:
         assert out.is_error
         assert "required" in out.content
 
-    async def test_runtime_and_direct_paths_produce_same_format(
-        self, registry, ctx
-    ):
+    async def test_runtime_and_direct_paths_produce_same_format(self, registry, ctx):
         """两条路径对相同输入产生相同格式的输出。"""
-        llm_direct = MockLlm(
-            [single_text_turn("result", Usage(input_tokens=5, output_tokens=3))]
-        )
+        llm_direct = MockLlm([single_text_turn("result", Usage(input_tokens=5, output_tokens=3))])
         tool_direct = _tool(llm_direct, registry)
-        out_direct = await tool_direct.execute(
-            {"preset": "summarizer", "task": "t"}, ctx
-        )
+        out_direct = await tool_direct.execute({"preset": "summarizer", "task": "t"}, ctx)
 
-        llm_runtime = MockLlm(
-            [single_text_turn("result", Usage(input_tokens=5, output_tokens=3))]
-        )
+        llm_runtime = MockLlm([single_text_turn("result", Usage(input_tokens=5, output_tokens=3))])
         tool_runtime, _ = _tool_with_coordinator(llm_runtime, registry)
-        out_runtime = await tool_runtime.execute(
-            {"preset": "summarizer", "task": "t"}, ctx
-        )
+        out_runtime = await tool_runtime.execute({"preset": "summarizer", "task": "t"}, ctx)
 
         assert out_direct.content == out_runtime.content
         assert out_direct.is_error == out_runtime.is_error
 
     async def test_concurrent_via_runtime_no_cross_talk(self, registry, ctx):
         """多个子代理通过 runtime 并发执行不串线。"""
-        llm = MockLlm([
-            single_text_turn("alpha", Usage(input_tokens=1, output_tokens=1)),
-            single_text_turn("beta", Usage(input_tokens=2, output_tokens=2)),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("alpha", Usage(input_tokens=1, output_tokens=1)),
+                single_text_turn("beta", Usage(input_tokens=2, output_tokens=2)),
+            ]
+        )
         tool, coordinator = _tool_with_coordinator(llm, registry)
         results = await asyncio.gather(
             tool.execute({"preset": "summarizer", "task": "a"}, ctx),
@@ -1546,7 +1583,9 @@ class TestSpawnSubagentToolViaRuntime:
 
         async def run_and_observe():
             tool = SpawnSubagentTool(
-                runner, default_presets(), coordinator=coordinator,
+                runner,
+                default_presets(),
+                coordinator=coordinator,
             )
             await asyncio.gather(
                 tool.execute({"preset": "summarizer", "task": "t"}, ctx),
@@ -1562,29 +1601,25 @@ class TestSpawnSubagentToolViaTaskRuntime:
 
     async def test_v2_path_success(self, registry, ctx):
         """V2 路径执行成功，输出格式与 V1 一致。"""
-        llm = MockLlm(
-            [single_text_turn("found it", Usage(input_tokens=7, output_tokens=3))]
-        )
+        llm = MockLlm([single_text_turn("found it", Usage(input_tokens=7, output_tokens=3))])
         tool, coordinator = _tool_with_coordinator(llm, registry)
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "find it"}, ctx
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "find it"}, ctx)
         assert not out.is_error
         assert (
-            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]"
-            in out.content
+            "[subagent=summarizer status=succeeded tokens=7in/3out reason=end_turn]" in out.content
         )
         assert "found it" in out.content
 
     async def test_v2_path_error_status(self, registry, ctx):
         """异常时 V2 路径返回 error 状态。"""
         spec = SubagentSpec(
-            name="failer", system="s", model="claude-haiku-4-5",
-            tools=[], timeout_secs=0.05,
+            name="failer",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            timeout_secs=0.05,
         )
-        tool, coordinator = _tool_with_coordinator(
-            SlowLlm(), registry, {"failer": spec}
-        )
+        tool, coordinator = _tool_with_coordinator(SlowLlm(), registry, {"failer": spec})
         out = await tool.execute({"preset": "failer", "task": "t"}, ctx)
         assert out.is_error
         assert "status=timed_out" in out.content
@@ -1595,52 +1630,47 @@ class TestSpawnSubagentToolViaTaskRuntime:
         tool, coordinator = _tool_with_coordinator(llm, registry)
         assert coordinator.count == 0
 
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "t"}, ctx
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "t"}, ctx)
         assert not out.is_error
         assert coordinator.count == 0
 
     async def test_v2_path_unknown_tokens_on_timeout(self, registry, ctx):
         """超时时 V2 路径输出 tokens=unknown。"""
         spec = SubagentSpec(
-            name="slowpoke", system="s", model="claude-haiku-4-5",
-            tools=[], timeout_secs=0.05,
+            name="slowpoke",
+            system="s",
+            model="claude-haiku-4-5",
+            tools=[],
+            timeout_secs=0.05,
         )
-        tool, coordinator = _tool_with_coordinator(
-            SlowLlm(), registry, {"slowpoke": spec}
-        )
+        tool, coordinator = _tool_with_coordinator(SlowLlm(), registry, {"slowpoke": spec})
         out = await tool.execute({"preset": "slowpoke", "task": "t"}, ctx)
         assert out.is_error
         assert "tokens=unknown" in out.content
 
     async def test_v2_path_depth_limit(self, registry, ctx):
         """V2 路径也遵守深度限制。"""
-        tool, coordinator = _tool_with_coordinator(
-            MockLlm([]), registry, max_depth=3
-        )
+        tool, coordinator = _tool_with_coordinator(MockLlm([]), registry, max_depth=3)
         deep = ToolContext(cwd=ctx.cwd, session_id="s", depth=3)
-        out = await tool.execute(
-            {"preset": "summarizer", "task": "t"}, deep
-        )
+        out = await tool.execute({"preset": "summarizer", "task": "t"}, deep)
         assert out.is_error
         assert "depth limit" in out.content
 
     async def test_v2_path_unknown_preset(self, registry, ctx):
         """V2 路径也校验 preset。"""
-        tool, coordinator = _tool_with_coordinator(
-            MockLlm([]), registry
-        )
+        tool, coordinator = _tool_with_coordinator(MockLlm([]), registry)
         out = await tool.execute({"preset": "nope", "task": "t"}, ctx)
         assert out.is_error
         assert "unknown preset" in out.content
 
     async def test_v2_concurrent_no_cross_talk(self, registry, ctx):
         """多个子代理通过 V2 路径并发执行不串线。"""
-        llm = MockLlm([
-            single_text_turn("alpha", Usage(input_tokens=1, output_tokens=1)),
-            single_text_turn("beta", Usage(input_tokens=2, output_tokens=2)),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("alpha", Usage(input_tokens=1, output_tokens=1)),
+                single_text_turn("beta", Usage(input_tokens=2, output_tokens=2)),
+            ]
+        )
         tool, coordinator = _tool_with_coordinator(llm, registry)
         results = await asyncio.gather(
             tool.execute({"preset": "summarizer", "task": "a"}, ctx),
@@ -1666,7 +1696,8 @@ class TestSubagentExecutor:
                 from mcc_harness.subagent import SubagentResult
 
                 return SubagentResult(
-                    name=spec.name, summary="done",
+                    name=spec.name,
+                    summary="done",
                     status=SubagentStatus.COMPLETED,
                     usage=Usage(input_tokens=10, output_tokens=5),
                     cost_usd=0.01,
@@ -1675,9 +1706,7 @@ class TestSubagentExecutor:
         spec = SubagentSpec(name="test", system="s", model="m")
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         executor = SubagentExecutor(_StubRunner(), spec, ctx)
-        task = RuntimeTask(
-            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
-        )
+        task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)
         assert result.status is TaskStatus.SUCCEEDED
         assert result.summary == "done"
@@ -1693,16 +1722,15 @@ class TestSubagentExecutor:
         class _StubRunner:
             async def run(self, spec, task, ctx, *, channel=None):
                 return SubagentResult(
-                    name=spec.name, summary="timed out",
+                    name=spec.name,
+                    summary="timed out",
                     status=SubagentStatus.TIMEOUT,
                 )
 
         spec = SubagentSpec(name="test", system="s", model="m")
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         executor = SubagentExecutor(_StubRunner(), spec, ctx)
-        task = RuntimeTask(
-            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
-        )
+        task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)
         assert result.status is TaskStatus.TIMED_OUT
 
@@ -1715,16 +1743,16 @@ class TestSubagentExecutor:
         class _StubRunner:
             async def run(self, spec, task, ctx, *, channel=None):
                 return SubagentResult(
-                    name=spec.name, summary="boom",
-                    status=SubagentStatus.ERROR, error="something broke",
+                    name=spec.name,
+                    summary="boom",
+                    status=SubagentStatus.ERROR,
+                    error="something broke",
                 )
 
         spec = SubagentSpec(name="test", system="s", model="m")
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         executor = SubagentExecutor(_StubRunner(), spec, ctx)
-        task = RuntimeTask(
-            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
-        )
+        task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)
         assert result.status is TaskStatus.FAILED
         assert result.error is not None
@@ -1739,16 +1767,15 @@ class TestSubagentExecutor:
         class _StubRunner:
             async def run(self, spec, task, ctx, *, channel=None):
                 return SubagentResult(
-                    name=spec.name, summary="over budget",
+                    name=spec.name,
+                    summary="over budget",
                     status=SubagentStatus.BUDGET_EXCEEDED,
                 )
 
         spec = SubagentSpec(name="test", system="s", model="m")
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         executor = SubagentExecutor(_StubRunner(), spec, ctx)
-        task = RuntimeTask(
-            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
-        )
+        task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)
         assert result.status is TaskStatus.FAILED
 
@@ -1762,9 +1789,7 @@ class TestSubagentExecutor:
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
         executor = SubagentExecutor(SubagentRunner.__new__(SubagentRunner), spec, ctx)
         await executor.close()
-        task = RuntimeTask(
-            task_id="t1", attempt_id="a1", agent_id="test", objective="do it"
-        )
+        task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)
         assert result.status is TaskStatus.FAILED
         assert "已关闭" in result.summary

@@ -130,8 +130,11 @@ class TestFormatBackgroundResults:
 
     def test_single(self):
         r = BackgroundResult(
-            task_id="bg_0001", command="npm test",
-            status="completed", output="all passed", exit_code=0,
+            task_id="bg_0001",
+            command="npm test",
+            status="completed",
+            output="all passed",
+            exit_code=0,
         )
         result = format_background_results([r])
         assert "<background_result>" in result
@@ -163,9 +166,7 @@ class TestRunBashBackground:
         mgr = BackgroundTaskManager(DirectExecutor())
         tool = RunBashTool(DirectExecutor(), mgr)
         ctx = _ctx(tmp_path)
-        result = await tool.execute(
-            {"command": "echo hello", "run_in_background": True}, ctx
-        )
+        result = await tool.execute({"command": "echo hello", "run_in_background": True}, ctx)
         assert not result.is_error
         assert "bg_" in result.content
         assert "started" in result.content
@@ -175,18 +176,14 @@ class TestRunBashBackground:
         mgr = BackgroundTaskManager(DirectExecutor())
         tool = RunBashTool(DirectExecutor(), mgr)
         ctx = _ctx(tmp_path)
-        result = await tool.execute(
-            {"command": "echo sync", "run_in_background": False}, ctx
-        )
+        result = await tool.execute({"command": "echo sync", "run_in_background": False}, ctx)
         assert not result.is_error
         assert "sync" in result.content
 
     async def test_no_background_manager_ignores_flag(self, tmp_path):
         tool = RunBashTool(DirectExecutor(), None)
         ctx = _ctx(tmp_path)
-        result = await tool.execute(
-            {"command": "echo fallback", "run_in_background": True}, ctx
-        )
+        result = await tool.execute({"command": "echo fallback", "run_in_background": True}, ctx)
         assert not result.is_error
         assert "fallback" in result.content
 
@@ -194,9 +191,7 @@ class TestRunBashBackground:
         mgr = BackgroundTaskManager(DirectExecutor())
         tool = RunBashTool(DirectExecutor(), mgr)
         ctx = _ctx(tmp_path)
-        await tool.execute(
-            {"command": "echo bg_result", "run_in_background": True}, ctx
-        )
+        await tool.execute({"command": "echo bg_result", "run_in_background": True}, ctx)
         await asyncio.sleep(0.3)
         results = await mgr.collect()
         assert len(results) == 1

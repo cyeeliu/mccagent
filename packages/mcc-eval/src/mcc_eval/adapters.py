@@ -271,9 +271,7 @@ class MccAdapter:
         # 无人值守评测：常规操作 bypass 放行，但 hardened 危险命令/
         # 敏感路径与安全栈仍生效——Red Team 攻防 case 的判定前提，
         # 也是「防注入防线在评测链路与生产一致」的保证
-        checker = PermissionChecker(
-            PermissionConfig(mode="bypassPermissions"), hardened=True
-        )
+        checker = PermissionChecker(PermissionConfig(mode="bypassPermissions"), hardened=True)
         builder = (
             AgentLoopBuilder(llm, registry, ctx)
             .model(req.model)

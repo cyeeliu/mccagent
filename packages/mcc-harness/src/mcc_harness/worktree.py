@@ -65,15 +65,14 @@ def is_dirty(wt_dir: Path) -> bool:
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return True
-    lines = [
-        line for line in result.stdout.strip().splitlines()
-        if not line.endswith(".task_id")
-    ]
+    lines = [line for line in result.stdout.strip().splitlines() if not line.endswith(".task_id")]
     return bool(lines)
 
 
 def archive_worktree(
-    name: str, base_dir: Path, archive_dir: Path | None = None,
+    name: str,
+    base_dir: Path,
+    archive_dir: Path | None = None,
 ) -> Path:
     """将 worktree 的未提交变更归档为 patch 文件，返回 patch 路径。
 
@@ -148,9 +147,7 @@ def create_worktree(name: str, task_id: str, base_dir: Path) -> Path:
                 capture_output=True,
             )
         except subprocess.CalledProcessError as e:
-            raise WorktreeError(
-                f"git worktree add failed: {e.stderr.decode().strip()}"
-            ) from e
+            raise WorktreeError(f"git worktree add failed: {e.stderr.decode().strip()}") from e
     else:
         wt_dir.mkdir(parents=True)
 
@@ -182,8 +179,7 @@ def remove_worktree(
     if dirty:
         if policy == CleanupPolicy.SAFE:
             raise WorktreeError(
-                f"worktree {name} has uncommitted changes; "
-                f"use policy=ARCHIVE or FORCE to override"
+                f"worktree {name} has uncommitted changes; use policy=ARCHIVE or FORCE to override"
             )
         if policy == CleanupPolicy.ARCHIVE:
             archive_path = archive_worktree(name, base_dir)
@@ -204,9 +200,7 @@ def remove_worktree(
                 capture_output=True,
             )
         except subprocess.CalledProcessError as e:
-            raise WorktreeError(
-                f"git worktree remove failed: {e.stderr.decode().strip()}"
-            ) from e
+            raise WorktreeError(f"git worktree remove failed: {e.stderr.decode().strip()}") from e
     else:
         shutil.rmtree(wt_dir)
 

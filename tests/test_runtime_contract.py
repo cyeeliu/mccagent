@@ -61,32 +61,37 @@ class TestRuntimeContract:
     __test__ = False
 
     async def test_initial_status_created(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         assert rt.status is RuntimeStatus.CREATED
 
     async def test_runtime_id_is_string(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         assert isinstance(rt.runtime_id, str)
         assert len(rt.runtime_id) > 0
 
     async def test_agent_id_is_string(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         assert isinstance(rt.agent_id, str)
 
     async def test_capabilities_is_runtime_capabilities(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         assert isinstance(rt.capabilities, RuntimeCapabilities)
 
     async def test_start_transitions_to_ready(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -94,7 +99,8 @@ class TestRuntimeContract:
         await rt.stop()
 
     async def test_start_twice_raises_invalid_transition(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -103,7 +109,9 @@ class TestRuntimeContract:
         await rt.stop()
 
     async def test_submit_before_start_raises_not_ready(
-        self, runtime_factory: RuntimeFactory, make_task: Callable[..., RuntimeTask],
+        self,
+        runtime_factory: RuntimeFactory,
+        make_task: Callable[..., RuntimeTask],
     ) -> None:
         rt = await runtime_factory()
         task = make_task()
@@ -111,7 +119,9 @@ class TestRuntimeContract:
             await rt.submit(task)
 
     async def test_submit_returns_task_handle(
-        self, runtime_factory: RuntimeFactory, make_task: Callable[..., RuntimeTask],
+        self,
+        runtime_factory: RuntimeFactory,
+        make_task: Callable[..., RuntimeTask],
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -124,7 +134,8 @@ class TestRuntimeContract:
         await rt.stop()
 
     async def test_stop_transitions_to_stopped(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -132,7 +143,8 @@ class TestRuntimeContract:
         assert rt.status is RuntimeStatus.STOPPED
 
     async def test_stop_is_idempotent(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -141,14 +153,16 @@ class TestRuntimeContract:
         assert rt.status is RuntimeStatus.STOPPED
 
     async def test_stop_before_start_is_safe(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.stop()
         assert rt.status is RuntimeStatus.STOPPED
 
     async def test_health_check_returns_health(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -158,7 +172,8 @@ class TestRuntimeContract:
         await rt.stop()
 
     async def test_subscribe_events_returns_async_iterator(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         events = rt.subscribe_events()
@@ -167,7 +182,8 @@ class TestRuntimeContract:
         await rt.stop()
 
     async def test_pause_unsupported_raises(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -177,7 +193,8 @@ class TestRuntimeContract:
         await rt.stop()
 
     async def test_resume_unsupported_raises(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -187,7 +204,8 @@ class TestRuntimeContract:
         await rt.stop()
 
     async def test_cancel_task_unsupported_raises(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         await rt.start()
@@ -197,7 +215,8 @@ class TestRuntimeContract:
         await rt.stop()
 
     async def test_events_emitted_on_lifecycle(
-        self, runtime_factory: RuntimeFactory,
+        self,
+        runtime_factory: RuntimeFactory,
     ) -> None:
         rt = await runtime_factory()
         collected: list[RuntimeEvent] = []

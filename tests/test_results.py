@@ -88,14 +88,17 @@ class TestResultStatus:
             assert s != ResultStatus.SUCCESS
             assert s != ResultStatus.PARTIAL
 
-    @pytest.mark.parametrize("status,expect_failure", [
-        (ResultStatus.SUCCESS, False),
-        (ResultStatus.PARTIAL, False),
-        (ResultStatus.FAILED, True),
-        (ResultStatus.TIMEOUT, True),
-        (ResultStatus.CANCELLED, True),
-        (ResultStatus.BUDGET_EXCEEDED, True),
-    ])
+    @pytest.mark.parametrize(
+        "status,expect_failure",
+        [
+            (ResultStatus.SUCCESS, False),
+            (ResultStatus.PARTIAL, False),
+            (ResultStatus.FAILED, True),
+            (ResultStatus.TIMEOUT, True),
+            (ResultStatus.CANCELLED, True),
+            (ResultStatus.BUDGET_EXCEEDED, True),
+        ],
+    )
     def test_is_failure_property(self, status, expect_failure):
         result = make_result(status=status)
         assert result.is_failure == expect_failure
@@ -165,12 +168,15 @@ class TestExecutionMetrics:
         m = ExecutionMetrics(started_at=100.0)
         assert m.duration_secs is None
 
-    @pytest.mark.parametrize("field", [
-        "input_tokens",
-        "output_tokens",
-        "cache_read_tokens",
-        "cache_write_tokens",
-    ])
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+        ],
+    )
     def test_negative_tokens_raise(self, field):
         with pytest.raises(ResultError, match=f"{field} must be >= 0"):
             ExecutionMetrics(**{field: -1})
@@ -489,12 +495,26 @@ class TestCollectorSummarize:
 
     def test_summarize_cost_and_tokens(self):
         c = ResultCollectorImpl()
-        c.record(make_result(
-            "a1", "t1", run_id="r1", cost=0.02, input_tokens=100, output_tokens=50,
-        ))
-        c.record(make_result(
-            "a2", "t2", run_id="r1", cost=0.04, input_tokens=200, output_tokens=100,
-        ))
+        c.record(
+            make_result(
+                "a1",
+                "t1",
+                run_id="r1",
+                cost=0.02,
+                input_tokens=100,
+                output_tokens=50,
+            )
+        )
+        c.record(
+            make_result(
+                "a2",
+                "t2",
+                run_id="r1",
+                cost=0.04,
+                input_tokens=200,
+                output_tokens=100,
+            )
+        )
         s = c.summarize("r1")
         assert s.total_cost_usd == pytest.approx(0.06)
         assert s.total_tokens == 450
@@ -611,17 +631,25 @@ class TestEndToEnd:
 
     async def test_artifact_collection_across_agents(self):
         c = ResultCollectorImpl()
-        c.record(make_result(
-            "a1", "t1", run_id="r1",
-            artifacts=(
-                make_artifact("a1_out.txt"),
-                make_artifact("a1_diff.patch", ArtifactKind.DIFF),
-            ),
-        ))
-        c.record(make_result(
-            "a2", "t2", run_id="r1",
-            artifacts=(make_artifact("a2_out.txt"),),
-        ))
+        c.record(
+            make_result(
+                "a1",
+                "t1",
+                run_id="r1",
+                artifacts=(
+                    make_artifact("a1_out.txt"),
+                    make_artifact("a1_diff.patch", ArtifactKind.DIFF),
+                ),
+            )
+        )
+        c.record(
+            make_result(
+                "a2",
+                "t2",
+                run_id="r1",
+                artifacts=(make_artifact("a2_out.txt"),),
+            )
+        )
 
         all_arts = c.get_artifacts("r1")
         assert len(all_arts) == 3

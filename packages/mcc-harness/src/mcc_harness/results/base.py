@@ -37,12 +37,14 @@ class ResultStatus(StrEnum):
     BUDGET_EXCEEDED = "budget_exceeded"
 
 
-_FAILURE_STATUSES = frozenset({
-    ResultStatus.FAILED,
-    ResultStatus.TIMEOUT,
-    ResultStatus.CANCELLED,
-    ResultStatus.BUDGET_EXCEEDED,
-})
+_FAILURE_STATUSES = frozenset(
+    {
+        ResultStatus.FAILED,
+        ResultStatus.TIMEOUT,
+        ResultStatus.CANCELLED,
+        ResultStatus.BUDGET_EXCEEDED,
+    }
+)
 
 
 class ArtifactKind(StrEnum):

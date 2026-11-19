@@ -154,20 +154,14 @@ class TestDeriveChild:
         assert child.has_permissions
 
     def test_override_inherited_field(self, root_context):
-        child = root_context.derive_child(
-            "child-1", workspace_id="ws-isolated"
-        )
+        child = root_context.derive_child("child-1", workspace_id="ws-isolated")
         assert child.workspace_id == "ws-isolated"
 
     def test_override_permission(self, root_context):
-        child = root_context.derive_child(
-            "child-1", permission_profile_id="readonly"
-        )
+        child = root_context.derive_child("child-1", permission_profile_id="readonly")
         assert child.permission_profile_id == "readonly"
 
-    def test_override_takes_precedence_over_inherit_permissions(
-        self, root_context
-    ):
+    def test_override_takes_precedence_over_inherit_permissions(self, root_context):
         child = root_context.derive_child(
             "child-1",
             inherit_permissions=True,
@@ -180,9 +174,7 @@ class TestDeriveChild:
         assert child.task_id == "task-200"
 
     def test_override_session_id(self, root_context):
-        child = root_context.derive_child(
-            "child-1", session_id="session-child"
-        )
+        child = root_context.derive_child("child-1", session_id="session-child")
         assert child.session_id == "session-child"
 
     def test_empty_child_id_rejected(self, root_context):
@@ -235,12 +227,8 @@ class TestSensitiveFields:
         assert grandchild.permission_profile_id is None
 
     def test_explicit_permission_inheritance_chain(self, root_context):
-        child = root_context.derive_child(
-            "child-1", inherit_permissions=True
-        )
-        grandchild = child.derive_child(
-            "grandchild-1", inherit_permissions=True
-        )
+        child = root_context.derive_child("child-1", inherit_permissions=True)
+        grandchild = child.derive_child("grandchild-1", inherit_permissions=True)
         assert grandchild.permission_profile_id == "admin"
 
 
@@ -277,12 +265,7 @@ class TestChainMethods:
         assert ctx.tags == frozenset({"lead", "gpu"})
 
     def test_chain_multiple(self, root_context):
-        ctx = (
-            root_context
-            .with_task_id("task-2")
-            .with_trace_id("trace-2")
-            .add_tag("urgent")
-        )
+        ctx = root_context.with_task_id("task-2").with_trace_id("trace-2").add_tag("urgent")
         assert ctx.task_id == "task-2"
         assert ctx.trace_id == "trace-2"
         assert "urgent" in ctx.tags

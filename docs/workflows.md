@@ -36,13 +36,14 @@ parallel() 屏障并发、pipeline() 无屏障流水线、workflow() 单层嵌�
 ```python
 from mcc_harness import register_workflow
 
+
 async def my_flow(ctx, args):
     ctx.phase("Collect")
-    items = await ctx.parallel([
-        lambda: ctx.agent(f"fetch {x}", label=f"fetch:{x}")
-        for x in args["urls"]
-    ])
+    items = await ctx.parallel(
+        [lambda: ctx.agent(f"fetch {x}", label=f"fetch:{x}") for x in args["urls"]]
+    )
     return {"items": items}
+
 
 register_workflow(
     {"name": "my-flow", "description": "demo", "phases": ["Collect"]},

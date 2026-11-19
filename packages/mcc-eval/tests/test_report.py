@@ -28,11 +28,24 @@ def _batch(tmp_path: Path) -> BatchResult:
         started_at="2026-10-20T10:00:00+00:00",
         finished_at="2026-10-20T10:01:00+00:00",
         results=[
-            CaseResult(case_id="ok", status="passed", score=1.0, reason="all good",
-                       cost_usd=0.01, turns=2, duration_s=3.2),
-            CaseResult(case_id="bad", status="failed", score=0.0,
-                       reason="execution check failed", turns=1, duration_s=1.0,
-                       details=["✗ tool_called: tool 'write_file' not called"]),
+            CaseResult(
+                case_id="ok",
+                status="passed",
+                score=1.0,
+                reason="all good",
+                cost_usd=0.01,
+                turns=2,
+                duration_s=3.2,
+            ),
+            CaseResult(
+                case_id="bad",
+                status="failed",
+                score=0.0,
+                reason="execution check failed",
+                turns=1,
+                duration_s=1.0,
+                details=["✗ tool_called: tool 'write_file' not called"],
+            ),
         ],
     )
 
@@ -44,9 +57,15 @@ def test_results_json_and_report_md(tmp_path: Path) -> None:
 
     data = json.loads(results_path.read_text(encoding="utf-8"))
     assert data["summary"] == {
-        "total": 2, "passed": 1, "failed": 1, "errors": 0,
-        "pass_rate": 0.5, "cost_usd": 0.01,
-        "cases": 2, "stable_cases": 1, "flaky_cases": 0,
+        "total": 2,
+        "passed": 1,
+        "failed": 1,
+        "errors": 0,
+        "pass_rate": 0.5,
+        "cost_usd": 0.01,
+        "cases": 2,
+        "stable_cases": 1,
+        "flaky_cases": 0,
     }
 
     text = report_path.read_text(encoding="utf-8")
@@ -58,8 +77,7 @@ def test_results_json_and_report_md(tmp_path: Path) -> None:
 
 
 def test_report_md_without_failures(tmp_path: Path) -> None:
-    batch = BatchResult("b2", "mbpp", "m", "s", "f",
-                        results=[CaseResult("x", "passed", 1.0, "ok")])
+    batch = BatchResult("b2", "mbpp", "m", "s", "f", results=[CaseResult("x", "passed", 1.0, "ok")])
     path = write_report_md(batch, tmp_path, title="MBPP")
     assert "（无失败采样）" in path.read_text(encoding="utf-8")
 
@@ -85,9 +103,10 @@ def test_report_md_multi_sample_aggregation(tmp_path: Path) -> None:
 
 
 def test_cases_file_roundtrip(tmp_path: Path) -> None:
-    cases = [Case(case_id="c1", task="t", check="print(1)"),
-             Case(case_id="c2", task="t2", expectations=[{"type": "no_tool_errors",
-                                                          "weight": 1.0}])]
+    cases = [
+        Case(case_id="c1", task="t", check="print(1)"),
+        Case(case_id="c2", task="t2", expectations=[{"type": "no_tool_errors", "weight": 1.0}]),
+    ]
     save_cases(cases, tmp_path)
     assert load_cases(tmp_path) == cases
 
@@ -99,18 +118,23 @@ def test_cases_file_roundtrip(tmp_path: Path) -> None:
 def batch_dir(tmp_path: Path) -> Path:
     """跑一个真实小批次（Mock 适配器），产物自包含。"""
     cases = [
-        Case(case_id="passing", task="normal task",
-             expectations=[{"type": "no_tool_errors", "weight": 1.0}]),
-        Case(case_id="failing", task="this will fail",
-             expectations=[{"type": "no_tool_errors", "weight": 1.0}]),
+        Case(
+            case_id="passing",
+            task="normal task",
+            expectations=[{"type": "no_tool_errors", "weight": 1.0}],
+        ),
+        Case(
+            case_id="failing",
+            task="this will fail",
+            expectations=[{"type": "no_tool_errors", "weight": 1.0}],
+        ),
     ]
     batch_dir = new_batch_dir(tmp_path, "unit", 2, 2)
     save_cases(cases, batch_dir)
 
     async def drive() -> None:
         for case in cases:
-            await run_case(case, MockAdapter(), model="mock", batch_dir=batch_dir,
-                           timeout_s=5)
+            await run_case(case, MockAdapter(), model="mock", batch_dir=batch_dir, timeout_s=5)
 
     import asyncio
 
@@ -130,22 +154,30 @@ async def test_rebuild_reads_attempt_files_and_legacy_layout(tmp_path: Path) -> 
     """rebuild 兼容两种布局：-a<attempt> 多采样与旧版无后缀单采样。"""
     from mcc_eval.events import LlmChunk, RunStarted, ToolResult
 
-    cases = [Case(case_id="multi", task="t", expectations=[
-        {"type": "no_tool_errors", "weight": 1.0}])]
+    cases = [
+        Case(case_id="multi", task="t", expectations=[{"type": "no_tool_errors", "weight": 1.0}])
+    ]
     save_cases(cases, tmp_path)
     runs = tmp_path / "runs"
     runs.mkdir()
 
     def _write(name: str, *, tool_error: bool = False) -> None:
         with open(runs / name, "w", encoding="utf-8") as fh:
-            fh.write(RunStarted(seq=0, run_id="r", case_id="multi", task="t",
-                                model="m").model_dump_json() + "\n")
+            fh.write(
+                RunStarted(
+                    seq=0, run_id="r", case_id="multi", task="t", model="m"
+                ).model_dump_json()
+                + "\n"
+            )
             fh.write(LlmChunk(seq=1, turn=0, delta="x").model_dump_json() + "\n")
             if tool_error:
-                fh.write(ToolResult(seq=2, call_id="e", output="boom",
-                                    is_error=True).model_dump_json() + "\n")
-            fh.write(RunFinished(seq=3, status="passed", turns=1,
-                                 cost_usd=0.01).model_dump_json() + "\n")
+                fh.write(
+                    ToolResult(seq=2, call_id="e", output="boom", is_error=True).model_dump_json()
+                    + "\n"
+                )
+            fh.write(
+                RunFinished(seq=3, status="passed", turns=1, cost_usd=0.01).model_dump_json() + "\n"
+            )
 
     _write("multi-a1.jsonl")
     _write("multi-a2.jsonl")
@@ -163,9 +195,10 @@ async def test_rebuild_reads_attempt_files_and_legacy_layout(tmp_path: Path) -> 
     (legacy / "runs").mkdir()
     _write_legacy = legacy / "runs" / "old.jsonl"
     _write_legacy.write_text(
-        RunStarted(seq=0, run_id="r", case_id="old", task="t",
-                   model="m").model_dump_json() + "\n"
-        + RunFinished(seq=1, status="passed", turns=1).model_dump_json() + "\n",
+        RunStarted(seq=0, run_id="r", case_id="old", task="t", model="m").model_dump_json()
+        + "\n"
+        + RunFinished(seq=1, status="passed", turns=1).model_dump_json()
+        + "\n",
         encoding="utf-8",
     )
     old_batch = await rebuild(legacy)
@@ -199,8 +232,13 @@ async def test_rebuild_execution_terminal_preserved(tmp_path: Path) -> None:
 
 async def test_rebuild_execution_check_reruns_on_work_dir(tmp_path: Path) -> None:
     """执行式重评分：在保留的 work/ 目录上重跑官方测试。"""
-    cases = [Case(case_id="exec", task="t",
-                  check="from solution import double as candidate\nassert candidate(3) == 6\n")]
+    cases = [
+        Case(
+            case_id="exec",
+            task="t",
+            check="from solution import double as candidate\nassert candidate(3) == 6\n",
+        )
+    ]
     save_cases(cases, tmp_path)
     runs = tmp_path / "runs"
     runs.mkdir()
@@ -210,11 +248,14 @@ async def test_rebuild_execution_check_reruns_on_work_dir(tmp_path: Path) -> Non
     from mcc_eval.events import LlmChunk, RunStarted
 
     with open(runs / "exec.jsonl", "w", encoding="utf-8") as fh:
-        fh.write(RunStarted(seq=0, run_id="r", case_id="exec", task="t",
-                            model="m").model_dump_json() + "\n")
+        fh.write(
+            RunStarted(seq=0, run_id="r", case_id="exec", task="t", model="m").model_dump_json()
+            + "\n"
+        )
         fh.write(LlmChunk(seq=1, turn=0, delta="PASSED").model_dump_json() + "\n")
-        fh.write(RunFinished(seq=2, status="passed", cost_usd=0.01,
-                             turns=1).model_dump_json() + "\n")
+        fh.write(
+            RunFinished(seq=2, status="passed", cost_usd=0.01, turns=1).model_dump_json() + "\n"
+        )
 
     batch = await rebuild(tmp_path)
     assert batch.results[0].status == "passed"
@@ -225,8 +266,10 @@ def test_load_trace_events_validates_schema(tmp_path: Path) -> None:
 
     path = tmp_path / "t.jsonl"
     path.write_text(
-        LlmChunk(seq=0, turn=0, delta="hi").model_dump_json() + "\n"
-        + json.dumps({"type": "bogus"}) + "\n",
+        LlmChunk(seq=0, turn=0, delta="hi").model_dump_json()
+        + "\n"
+        + json.dumps({"type": "bogus"})
+        + "\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError):

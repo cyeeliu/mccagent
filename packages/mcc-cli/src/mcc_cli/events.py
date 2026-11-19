@@ -60,11 +60,13 @@ def history_events(history: list, cost_usd: float = 0.0) -> list:
                 elif isinstance(b, TextBlock) and b.text.strip():
                     events.append(TextDelta(text=b.text))
                 elif isinstance(b, ToolUseBlock):
-                    events.append(ToolCallStart(
-                        id=b.id, name=b.name,
-                        args_preview=json.dumps(b.input, ensure_ascii=False)
-                        if b.input else "",
-                    ))
+                    events.append(
+                        ToolCallStart(
+                            id=b.id,
+                            name=b.name,
+                            args_preview=json.dumps(b.input, ensure_ascii=False) if b.input else "",
+                        )
+                    )
         elif m.role == Role.tool:
             for b in m.content:
                 if isinstance(b, ToolResultBlock):
@@ -97,8 +99,7 @@ class EchoEventSource:
         yield Notice(text="generating response…")
 
         response = (
-            f"已收到你的请求：「{prompt}」\n"
-            "这是一个模拟响应，真实 Agent 集成后将由 LLM 生成。"
+            f"已收到你的请求：「{prompt}」\n这是一个模拟响应，真实 Agent 集成后将由 LLM 生成。"
         )
         for i in range(0, len(response), self._chunk_size):
             yield TextDelta(text=response[i : i + self._chunk_size])
@@ -232,10 +233,7 @@ class AgentEventSource(EventSource):
                     from uuid import uuid4
 
                     req_id = f"sel-{uuid4().hex[:8]}"
-                    options = [
-                        SelectionOption(label=lbl, value=val)
-                        for lbl, val in result.select
-                    ]
+                    options = [SelectionOption(label=lbl, value=val) for lbl, val in result.select]
                     yield SelectionRequest(
                         id=req_id,
                         title=result.select_title,

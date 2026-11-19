@@ -45,7 +45,10 @@ def _make_persistent(
     plan_store = PlanStore()
     registry = ToolRegistry()
     spec = TeammateSpec(
-        name=name, role="coder", system="test", model="claude-haiku-4-5",
+        name=name,
+        role="coder",
+        system="test",
+        model="claude-haiku-4-5",
     )
     rt = TeammateRuntime(
         spec=spec,
@@ -67,18 +70,21 @@ class TestRuntimeContract:
         assert V2RuntimeStatus.READY == "ready"
         assert V2RuntimeStatus.STOPPED == "stopped"
 
-    @pytest.mark.parametrize("status,expected", [
-        (RuntimeStatus.COMPLETED, True),
-        (RuntimeStatus.FAILED, True),
-        (RuntimeStatus.CANCELLED, True),
-        (RuntimeStatus.TIMEOUT, True),
-        (RuntimeStatus.BUDGET_EXCEEDED, True),
-        (RuntimeStatus.SHUTDOWN, True),
-        (RuntimeStatus.CREATED, False),
-        (RuntimeStatus.RUNNING, False),
-        (RuntimeStatus.IDLE, False),
-        (RuntimeStatus.PAUSED, False),
-    ])
+    @pytest.mark.parametrize(
+        "status,expected",
+        [
+            (RuntimeStatus.COMPLETED, True),
+            (RuntimeStatus.FAILED, True),
+            (RuntimeStatus.CANCELLED, True),
+            (RuntimeStatus.TIMEOUT, True),
+            (RuntimeStatus.BUDGET_EXCEEDED, True),
+            (RuntimeStatus.SHUTDOWN, True),
+            (RuntimeStatus.CREATED, False),
+            (RuntimeStatus.RUNNING, False),
+            (RuntimeStatus.IDLE, False),
+            (RuntimeStatus.PAUSED, False),
+        ],
+    )
     def test_result_is_terminal(self, status, expected):
         r = RuntimeResult(runtime_id="x", status=status, summary="")
         assert r.is_terminal is expected
@@ -125,10 +131,12 @@ class TestPersistentRuntimeV2:
         assert not rt.alive
 
     async def test_pause_and_resume(self, tmp_path):
-        llm = MockLlm([
-            single_text_turn("first"),
-            single_text_turn("second"),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("first"),
+                single_text_turn("second"),
+            ]
+        )
         rt = _make_persistent(tmp_path, llm=llm, name="pausable")
         await rt.start()
         await asyncio.sleep(0.2)
@@ -140,10 +148,12 @@ class TestPersistentRuntimeV2:
         assert not rt.alive
 
     async def test_inject_instruction(self, tmp_path):
-        llm = MockLlm([
-            single_text_turn("first"),
-            single_text_turn("second"),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("first"),
+                single_text_turn("second"),
+            ]
+        )
         rt = _make_persistent(tmp_path, llm=llm, name="injectable")
         await rt.start()
         await asyncio.sleep(0.1)
@@ -170,7 +180,9 @@ class TestPersistentRuntimeV2:
         plan_store = PlanStore()
         registry = ToolRegistry()
         spec = TeammateSpec(
-            name="bus-test", role="coder", system="test",
+            name="bus-test",
+            role="coder",
+            system="test",
             model="claude-haiku-4-5",
         )
         teammate = TeammateRuntime(
@@ -220,9 +232,11 @@ class TestPersistentRuntimeV2:
         assert captured == [5.0]
 
     async def test_submit_task_and_wait_task(self, tmp_path):
-        llm = MockLlm([
-            single_text_turn("task result"),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("task result"),
+            ]
+        )
         rt = _make_persistent(tmp_path, llm=llm, name="submit-test")
         await rt.start()
         await asyncio.sleep(0.1)
@@ -235,11 +249,13 @@ class TestPersistentRuntimeV2:
         await rt.stop()
 
     async def test_submit_multiple_tasks_sequentially(self, tmp_path):
-        llm = MockLlm([
-            single_text_turn("first done"),
-            single_text_turn("second done"),
-            single_text_turn("third done"),
-        ])
+        llm = MockLlm(
+            [
+                single_text_turn("first done"),
+                single_text_turn("second done"),
+                single_text_turn("third done"),
+            ]
+        )
         rt = _make_persistent(tmp_path, llm=llm, name="multi-submit")
         await rt.start()
         await asyncio.sleep(0.3)
@@ -283,7 +299,9 @@ class TestOldApiCompatibility:
         plan_store = PlanStore()
         registry = ToolRegistry()
         spec = TeammateSpec(
-            name="compat", role="coder", system="test",
+            name="compat",
+            role="coder",
+            system="test",
             model="claude-haiku-4-5",
         )
         rt = TeammateRuntime(
@@ -307,7 +325,9 @@ class TestOldApiCompatibility:
         plan_store = PlanStore()
         registry = ToolRegistry()
         spec = TeammateSpec(
-            name="cons", role="coder", system="test",
+            name="cons",
+            role="coder",
+            system="test",
             model="claude-haiku-4-5",
         )
         teammate = TeammateRuntime(
@@ -346,11 +366,18 @@ class TestOldApiCompatibility:
         plan_store = PlanStore()
         registry = ToolRegistry()
         spec = TeammateSpec(
-            name="hang", role="coder", system="test", model="claude-haiku-4-5",
+            name="hang",
+            role="coder",
+            system="test",
+            model="claude-haiku-4-5",
         )
         teammate = TeammateRuntime(
-            spec=spec, llm=HangingLlm(), registry=registry, bus=bus,
-            plan_store=plan_store, base_dir=tmp_path,
+            spec=spec,
+            llm=HangingLlm(),
+            registry=registry,
+            bus=bus,
+            plan_store=plan_store,
+            base_dir=tmp_path,
         )
         rt = PersistentRuntimeV2.from_teammate(teammate, bus)
         await rt.start()

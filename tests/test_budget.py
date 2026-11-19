@@ -83,8 +83,13 @@ class TestUsageEvent:
 
     def test_full(self):
         e = UsageEvent(
-            agent_id="a", model="m", task_id="t1",
-            tokens=100, cost_usd=0.01, duration_secs=1.5, iterations=3,
+            agent_id="a",
+            model="m",
+            task_id="t1",
+            tokens=100,
+            cost_usd=0.01,
+            duration_secs=1.5,
+            iterations=3,
         )
         assert e.task_id == "t1"
         assert e.tokens == 100
@@ -257,17 +262,13 @@ class TestAgentBudgetCharge:
     def test_charge_exceeds_duration(self):
         b = AgentBudget("b1", BudgetPolicy(max_duration_secs=10.0))
         with pytest.raises(BudgetExceededError) as exc_info:
-            b.charge(
-                UsageEvent(agent_id="a1", model="m", duration_secs=15.0)
-            )
+            b.charge(UsageEvent(agent_id="a1", model="m", duration_secs=15.0))
         assert exc_info.value.dimension == BudgetDimension.DURATION_SECS
 
     def test_charge_exceeds_iterations(self):
         b = AgentBudget("b1", BudgetPolicy(max_iterations=5))
         with pytest.raises(BudgetExceededError) as exc_info:
-            b.charge(
-                UsageEvent(agent_id="a1", model="m", iterations=6)
-            )
+            b.charge(UsageEvent(agent_id="a1", model="m", iterations=6))
         assert exc_info.value.dimension == BudgetDimension.ITERATIONS
 
     def test_charge_exact_limit_ok(self):
@@ -282,9 +283,7 @@ class TestAgentBudgetCharge:
         )
         b.charge(UsageEvent(agent_id="a1", model="m", tokens=50, cost_usd=0.5))
         with pytest.raises(BudgetExceededError):
-            b.charge(
-                UsageEvent(agent_id="a1", model="m", tokens=60, cost_usd=0.6)
-            )
+            b.charge(UsageEvent(agent_id="a1", model="m", tokens=60, cost_usd=0.6))
 
     def test_charge_not_recorded_on_exceed(self):
         b = AgentBudget("b1", BudgetPolicy(max_tokens=100))
@@ -474,11 +473,7 @@ class TestAgentBudgetConcurrency:
             charged = 0
             for _ in range(per_thread):
                 try:
-                    b.charge(
-                        UsageEvent(
-                            agent_id=f"a{tid}", model="m", tokens=10
-                        )
-                    )
+                    b.charge(UsageEvent(agent_id=f"a{tid}", model="m", tokens=10))
                     charged += 1
                 except BudgetExceededError:
                     break
@@ -525,9 +520,7 @@ class TestAgentBudgetConcurrency:
                 res = b.reserve(f"a{tid}", tokens=1000)
                 if res is None:
                     return
-                b.charge(
-                    UsageEvent(agent_id=f"a{tid}", model="m", tokens=500)
-                )
+                b.charge(UsageEvent(agent_id=f"a{tid}", model="m", tokens=500))
                 b.settle(f"a{tid}")
             except Exception as exc:
                 errors.append(exc)

@@ -56,20 +56,24 @@ async def test_using_signal_reflects_platform():
 async def test_polling_detects_size_change():
     """轮询模式检测到终端尺寸变化。"""
     rw = ResizeWatcher(poll_interval=0.01)
-    sizes = iter([
-        (80, 24),
-        (80, 24),
-        (120, 40),
-        (120, 40),
-    ])
+    sizes = iter(
+        [
+            (80, 24),
+            (80, 24),
+            (120, 40),
+            (120, 40),
+        ]
+    )
 
     def fake_get_terminal_size():
         cols, lines = next(sizes)
         return type("TermSize", (), {"columns": cols, "lines": lines})()
 
     loop = asyncio.get_event_loop()
-    with patch.object(loop, "add_signal_handler", side_effect=NotImplementedError), \
-         patch("mcc_tui.resize.os.get_terminal_size", side_effect=fake_get_terminal_size):
+    with (
+        patch.object(loop, "add_signal_handler", side_effect=NotImplementedError),
+        patch("mcc_tui.resize.os.get_terminal_size", side_effect=fake_get_terminal_size),
+    ):
         rw.start()
         assert not rw.using_signal
         await rw.wait()
@@ -91,8 +95,10 @@ async def test_polling_ignores_oserror():
         return type("TermSize", (), {"columns": 80, "lines": 24})()
 
     loop = asyncio.get_event_loop()
-    with patch.object(loop, "add_signal_handler", side_effect=NotImplementedError), \
-         patch("mcc_tui.resize.os.get_terminal_size", side_effect=fake_get_terminal_size):
+    with (
+        patch.object(loop, "add_signal_handler", side_effect=NotImplementedError),
+        patch("mcc_tui.resize.os.get_terminal_size", side_effect=fake_get_terminal_size),
+    ):
         rw.start()
         await asyncio.wait_for(rw.wait(), timeout=1.0)
         rw.stop()
@@ -214,8 +220,10 @@ async def test_stop_cancels_poll_task():
     """stop() 取消轮询任务。"""
     rw = ResizeWatcher(poll_interval=0.01)
     loop = asyncio.get_event_loop()
-    with patch.object(loop, "add_signal_handler", side_effect=NotImplementedError), \
-         patch("mcc_tui.resize.os.get_terminal_size", side_effect=OSError):
+    with (
+        patch.object(loop, "add_signal_handler", side_effect=NotImplementedError),
+        patch("mcc_tui.resize.os.get_terminal_size", side_effect=OSError),
+    ):
         rw.start()
         assert rw._poll_task is not None
         assert not rw._poll_task.done()

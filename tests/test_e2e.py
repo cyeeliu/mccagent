@@ -619,12 +619,23 @@ async def test_team_e2e_partial_failure_aggregates(tmp_path):
     agent_ids = _register_agents(orch, 2)
     team = orch.create_team("team-1", "alpha", "lead-1")
 
-    rt1 = _StubRuntime("rt-1", RuntimeResult(
-        runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok-1",
-    ))
-    rt2 = _StubRuntime("rt-2", RuntimeResult(
-        runtime_id="rt-2", status=RuntimeStatus.FAILED, summary="", error="fail-2",
-    ))
+    rt1 = _StubRuntime(
+        "rt-1",
+        RuntimeResult(
+            runtime_id="rt-1",
+            status=RuntimeStatus.COMPLETED,
+            summary="ok-1",
+        ),
+    )
+    rt2 = _StubRuntime(
+        "rt-2",
+        RuntimeResult(
+            runtime_id="rt-2",
+            status=RuntimeStatus.FAILED,
+            summary="",
+            error="fail-2",
+        ),
+    )
     coordinator.register(rt1)
     coordinator.register(rt2)
     orch.bind_runtime(agent_ids[0], "rt-1")
@@ -778,12 +789,23 @@ async def test_team_e2e_dispatcher_partial_failure(tmp_path):
     agent_ids = _register_agents(orch, 2)
     team = orch.create_team("team-1", "alpha", "lead-1")
 
-    rt1 = _StubRuntime("rt-1", RuntimeResult(
-        runtime_id="rt-1", status=RuntimeStatus.COMPLETED, summary="ok-1",
-    ))
-    rt2 = _StubRuntime("rt-2", RuntimeResult(
-        runtime_id="rt-2", status=RuntimeStatus.FAILED, summary="", error="fail-2",
-    ))
+    rt1 = _StubRuntime(
+        "rt-1",
+        RuntimeResult(
+            runtime_id="rt-1",
+            status=RuntimeStatus.COMPLETED,
+            summary="ok-1",
+        ),
+    )
+    rt2 = _StubRuntime(
+        "rt-2",
+        RuntimeResult(
+            runtime_id="rt-2",
+            status=RuntimeStatus.FAILED,
+            summary="",
+            error="fail-2",
+        ),
+    )
     coordinator.register(rt1)
     coordinator.register(rt2)
     orch.bind_runtime(agent_ids[0], "rt-1")
@@ -806,11 +828,14 @@ async def test_team_e2e_dispatcher_result_content(tmp_path):
     agent_ids = _register_agents(orch, 1)
     team = orch.create_team("team-1", "alpha", "lead-1")
 
-    rt = _StubRuntime("rt-1", RuntimeResult(
-        runtime_id="rt-1",
-        status=RuntimeStatus.COMPLETED,
-        summary="feature A built successfully",
-    ))
+    rt = _StubRuntime(
+        "rt-1",
+        RuntimeResult(
+            runtime_id="rt-1",
+            status=RuntimeStatus.COMPLETED,
+            summary="feature A built successfully",
+        ),
+    )
     coordinator.register(rt)
     orch.bind_runtime(agent_ids[0], "rt-1")
 

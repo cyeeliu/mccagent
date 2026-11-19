@@ -89,9 +89,7 @@ def checker():
 
 def _agent(llm, ctx, registry, checker, responses=None, **kwargs):
     builder = (
-        AgentLoopBuilder(llm, registry, ctx)
-        .permission(checker)
-        .permission_responses(responses)
+        AgentLoopBuilder(llm, registry, ctx).permission(checker).permission_responses(responses)
     )
     for k, v in kwargs.items():
         getattr(builder, k)(v)
@@ -111,9 +109,7 @@ class TestAllowAlways:
 
     def test_bash_different_command_still_asks(self, checker):
         checker.allow_always("Bash", BashAction(cmd="git status"))
-        decision = checker.check(
-            PermissionReq(category="Bash", action=BashAction(cmd="git push"))
-        )
+        decision = checker.check(PermissionReq(category="Bash", action=BashAction(cmd="git push")))
         assert not isinstance(decision, Allow)
 
     def test_path_allowed(self, checker):
@@ -136,10 +132,12 @@ class TestAllowAlways:
 async def test_allow_decision_executes_tool(ctx, registry, checker, tmp_path):
     responses: asyncio.Queue = asyncio.Queue()
     evq: asyncio.Queue = asyncio.Queue()
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "allowed.txt", "content": "ok"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "allowed.txt", "content": "ok"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = _agent(llm, ctx, registry, checker, responses)
 
     sink, resp_task = _start_responder(
@@ -159,10 +157,12 @@ async def test_allow_decision_executes_tool(ctx, registry, checker, tmp_path):
 async def test_deny_decision_blocks_tool(ctx, registry, checker, tmp_path):
     responses: asyncio.Queue = asyncio.Queue()
     evq: asyncio.Queue = asyncio.Queue()
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "blocked.txt", "content": "x"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "blocked.txt", "content": "x"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = _agent(llm, ctx, registry, checker, responses)
 
     sink, resp_task = _start_responder(
@@ -183,10 +183,12 @@ async def test_deny_decision_blocks_tool(ctx, registry, checker, tmp_path):
 async def test_feedback_decision_returns_comment(ctx, registry, checker):
     responses: asyncio.Queue = asyncio.Queue()
     evq: asyncio.Queue = asyncio.Queue()
-    llm = MockLlm([
-        _tool_turn("t1", "run_bash", {"command": "rm -rf ./build-dir"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "run_bash", {"command": "rm -rf ./build-dir"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = _agent(llm, ctx, registry, checker, responses)
 
     def decide(ev):
@@ -206,21 +208,21 @@ async def test_feedback_decision_returns_comment(ctx, registry, checker):
 
 
 @pytest.mark.asyncio
-async def test_allow_always_adds_rule_and_second_call_skips_ask(
-    ctx, registry, checker
-):
+async def test_allow_always_adds_rule_and_second_call_skips_ask(ctx, registry, checker):
     responses: asyncio.Queue = asyncio.Queue()
     evq: asyncio.Queue = asyncio.Queue()
 
     turn_write = _tool_turn("t1", "write_file", {"path": "a.txt", "content": "A"})
     turn_bash = _tool_turn("t2", "run_bash", {"command": "echo twice"})
-    llm = MockLlm([
-        turn_bash,
-        turn_write,
-        # 相同命令第二次调用：allow_always 已加规则，应跳过 Ask 直接执行
-        turn_bash,
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            turn_bash,
+            turn_write,
+            # 相同命令第二次调用：allow_always 已加规则，应跳过 Ask 直接执行
+            turn_bash,
+            single_text_turn("done"),
+        ]
+    )
     agent = _agent(llm, ctx, registry, checker, responses)
 
     sink, resp_task = _start_responder(
@@ -241,10 +243,12 @@ async def test_allow_always_adds_rule_and_second_call_skips_ask(
 async def test_stale_decision_ignored(ctx, registry, checker):
     responses: asyncio.Queue = asyncio.Queue()
     evq: asyncio.Queue = asyncio.Queue()
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "c.txt", "content": "C"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "c.txt", "content": "C"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = _agent(llm, ctx, registry, checker, responses)
 
     state = {"seen": False}
@@ -254,9 +258,7 @@ async def test_stale_decision_ignored(ctx, registry, checker):
             return PermissionDecision(request_id=ev.id, action="allow")
         state["seen"] = True
         # 先放一个过期决策（id 不匹配），再放正确决策
-        responses.put_nowait(
-            PermissionDecision(request_id=ev.id + 999, action="deny")
-        )
+        responses.put_nowait(PermissionDecision(request_id=ev.id + 999, action="deny"))
         return PermissionDecision(request_id=ev.id, action="allow")
 
     sink, resp_task = _start_responder(evq, responses, decide)
@@ -271,13 +273,13 @@ async def test_stale_decision_ignored(ctx, registry, checker):
 async def test_timeout_defaults_to_deny(ctx, registry, checker, tmp_path):
     responses: asyncio.Queue = asyncio.Queue()
     evq: asyncio.Queue = asyncio.Queue()
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "never.txt", "content": "x"}),
-        single_text_turn("done"),
-    ])
-    agent = _agent(
-        llm, ctx, registry, checker, responses, permission_timeout_secs=0.05
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "never.txt", "content": "x"}),
+            single_text_turn("done"),
+        ]
     )
+    agent = _agent(llm, ctx, registry, checker, responses, permission_timeout_secs=0.05)
 
     await agent.run_streaming("go", evq)
 
@@ -290,10 +292,12 @@ async def test_timeout_defaults_to_deny(ctx, registry, checker, tmp_path):
 @pytest.mark.asyncio
 async def test_headless_without_channel_denies(ctx, registry, checker, tmp_path):
     evq: asyncio.Queue = asyncio.Queue()
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "no.txt", "content": "x"}),
-        single_text_turn("done"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "no.txt", "content": "x"}),
+            single_text_turn("done"),
+        ]
+    )
     agent = _agent(llm, ctx, registry, checker, None)
 
     await agent.run_streaming("go", evq)
@@ -436,9 +440,7 @@ class TestPermissionRender:
         from rich.console import Console
 
         app = App(session_short_id="t")
-        app.apply_event(
-            PermissionRequest(id=1, message="run_bash: confirmation required")
-        )
+        app.apply_event(PermissionRequest(id=1, message="run_bash: confirmation required"))
         console = Console(width=100, height=30)
         layout = build_renderable(app, console)
         # input 区（第二个子布局）渲染为权限确认面板
@@ -490,10 +492,12 @@ async def test_e2e_tui_permission_flow(tmp_path: Path):
     permission_queue: asyncio.Queue = asyncio.Queue()
     evq: asyncio.Queue = asyncio.Queue()
 
-    llm = MockLlm([
-        _tool_turn("t1", "write_file", {"path": "e2e.txt", "content": "E2E"}),
-        single_text_turn("written"),
-    ])
+    llm = MockLlm(
+        [
+            _tool_turn("t1", "write_file", {"path": "e2e.txt", "content": "E2E"}),
+            single_text_turn("written"),
+        ]
+    )
     agent = (
         AgentLoopBuilder(llm, default_registry(), ctx)
         .permission(checker)
@@ -506,9 +510,7 @@ async def test_e2e_tui_permission_flow(tmp_path: Path):
         async for ev in source.run("create file"):
             await evq.put(ev)
             if isinstance(ev, PermissionRequest):
-                permission_queue.put_nowait(
-                    PermissionDecision(request_id=ev.id, action="allow")
-                )
+                permission_queue.put_nowait(PermissionDecision(request_id=ev.id, action="allow"))
 
     await asyncio.wait_for(run_agent(), timeout=5)
     assert (tmp_path / "e2e.txt").read_text() == "E2E"

@@ -47,12 +47,14 @@ class AssignmentStatus(StrEnum):
     FAILED = "failed"
 
 
-ATTEMPT_TERMINAL_STATUSES = frozenset({
-    AttemptStatus.SUCCEEDED,
-    AttemptStatus.FAILED,
-    AttemptStatus.TIMED_OUT,
-    AttemptStatus.CANCELLED,
-})
+ATTEMPT_TERMINAL_STATUSES = frozenset(
+    {
+        AttemptStatus.SUCCEEDED,
+        AttemptStatus.FAILED,
+        AttemptStatus.TIMED_OUT,
+        AttemptStatus.CANCELLED,
+    }
+)
 
 
 def _now() -> datetime:
@@ -99,12 +101,14 @@ class TaskRecord:
 
     @property
     def is_terminal(self) -> bool:
-        return self.status in frozenset({
-            TaskStatus.SUCCEEDED,
-            TaskStatus.FAILED,
-            TaskStatus.CANCELLED,
-            TaskStatus.TIMED_OUT,
-        })
+        return self.status in frozenset(
+            {
+                TaskStatus.SUCCEEDED,
+                TaskStatus.FAILED,
+                TaskStatus.CANCELLED,
+                TaskStatus.TIMED_OUT,
+            }
+        )
 
 
 @dataclass

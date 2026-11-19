@@ -105,21 +105,22 @@ class IntegrationManagerImpl:
         diff_content = diff_result.stdout
 
         untracked_result = _run_git(
-            ["ls-files", "--others", "--exclude-standard"], cwd=wt,
+            ["ls-files", "--others", "--exclude-standard"],
+            cwd=wt,
         )
-        untracked = tuple(
-            line for line in untracked_result.stdout.strip().splitlines() if line
-        )
+        untracked = tuple(line for line in untracked_result.stdout.strip().splitlines() if line)
 
         changed_result = _run_git(
-            ["diff", "--name-only", "HEAD"], cwd=wt, check=False,
+            ["diff", "--name-only", "HEAD"],
+            cwd=wt,
+            check=False,
         )
-        changed = tuple(
-            line for line in changed_result.stdout.strip().splitlines() if line
-        )
+        changed = tuple(line for line in changed_result.stdout.strip().splitlines() if line)
 
         stat_result = _run_git(
-            ["diff", "--numstat", "HEAD"], cwd=wt, check=False,
+            ["diff", "--numstat", "HEAD"],
+            cwd=wt,
+            check=False,
         )
         insertions = 0
         deletions = 0
@@ -195,7 +196,9 @@ class IntegrationManagerImpl:
             merge_result = _run_git(merge_args, cwd=repo_root, check=False)
             if merge_result.returncode != 0:
                 return self._build_conflict_result(
-                    repo_root, request, merge_result,
+                    repo_root,
+                    request,
+                    merge_result,
                 )
             _run_git(
                 ["commit", "-m", request.commit_message or f"squash: {agent_branch}"],
@@ -205,11 +208,14 @@ class IntegrationManagerImpl:
             merge_result = _run_git(merge_args, cwd=repo_root, check=False)
             if merge_result.returncode != 0:
                 return self._build_conflict_result(
-                    repo_root, request, merge_result,
+                    repo_root,
+                    request,
+                    merge_result,
                 )
 
         merged_commit = _run_git(
-            ["rev-parse", "HEAD"], cwd=repo_root,
+            ["rev-parse", "HEAD"],
+            cwd=repo_root,
         ).stdout.strip()
 
         result = MergeResult(
@@ -247,7 +253,8 @@ class IntegrationManagerImpl:
         failures: tuple[str, ...] = ()
         if not passed:
             fail_lines = [
-                line for line in output.strip().splitlines()
+                line
+                for line in output.strip().splitlines()
                 if "fail" in line.lower() or "error" in line.lower()
             ]
             failures = tuple(fail_lines[:20]) or ("verification failed",)
@@ -311,7 +318,8 @@ class IntegrationManagerImpl:
         wt = request.worktree_dir
         repo_root = self._repo_root(wt)
         pre_merge_commit = _run_git(
-            ["rev-parse", "HEAD"], cwd=repo_root,
+            ["rev-parse", "HEAD"],
+            cwd=repo_root,
         ).stdout.strip()
 
         try:
@@ -391,7 +399,8 @@ class IntegrationManagerImpl:
     def _detect_branch(cwd: Path) -> str:
         """检测当前分支名。"""
         result = _run_git(
-            ["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd,
+            ["rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd,
         )
         return result.stdout.strip()
 
@@ -409,15 +418,15 @@ class IntegrationManagerImpl:
     ) -> MergeResult:
         """从合并失败输出构建冲突结果。"""
         diff_result = _run_git(["diff", "--name-only", "--diff-filter=U"], cwd=repo_root)
-        conflicted = tuple(
-            line for line in diff_result.stdout.strip().splitlines() if line
-        )
+        conflicted = tuple(line for line in diff_result.stdout.strip().splitlines() if line)
 
         details: dict[str, str] = {}
         for f in conflicted:
             try:
                 content = _run_git(
-                    ["diff", f], cwd=repo_root, check=False,
+                    ["diff", f],
+                    cwd=repo_root,
+                    check=False,
                 ).stdout
                 details[f] = content
             except IntegrationError:
