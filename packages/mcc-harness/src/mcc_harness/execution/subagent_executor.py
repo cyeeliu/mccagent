@@ -34,6 +34,10 @@ class SubagentExecutor:
 
     持有 SubagentRunner + SubagentSpec + ToolContext，
     execute() 调用 runner.run() 并将 SubagentResult 映射为 RuntimeResult。
+
+    当提供 agent_factory + factory_context 时，走装配路径：
+    spec.to_agent_definition() → agent_factory.create_executor() → 直接执行，
+    不再委托 SubagentRunner。未提供时走旧委托路径（向后兼容）。
     """
 
     def __init__(
@@ -41,10 +45,15 @@ class SubagentExecutor:
         runner: SubagentRunner,
         spec: SubagentSpec,
         ctx: ToolContext,
+        *,
+        agent_factory: Any | None = None,
+        factory_context: Any | None = None,
     ) -> None:
         self._runner = runner
         self._spec = spec
         self._ctx = ctx
+        self._agent_factory = agent_factory
+        self._factory_context = factory_context
         self._closed = False
 
     async def execute(
@@ -56,6 +65,13 @@ class SubagentExecutor:
     ) -> RuntimeResult:
         if self._closed:
             return self._error_result(task, "executor_closed", "Executor 已关闭")
+
+        if self._agent_factory is not None and self._factory_context is not None:
+            return await self._execute_via_factory(
+                task,
+                emit=emit,
+                cancellation=cancellation,
+            )
 
         started_at = datetime.now(UTC)
         try:
@@ -74,6 +90,35 @@ class SubagentExecutor:
             return self._error_result(task, "execution_error", str(exc), started_at)
 
         return self._build_result(task, result, started_at)
+
+    async def _execute_via_factory(
+        self,
+        task: RuntimeTask,
+        *,
+        emit: Any | None = None,
+        cancellation: CancellationToken | None = None,
+    ) -> RuntimeResult:
+        """通过 AgentFactory 从 AgentDefinition 装配 Executor 并执行。
+
+        为子代理创建隔离上下文（depth + 1），用 spec.to_agent_definition()
+        转换后经 agent_factory.create_executor 装配 AgentLoopExecutor，
+        直接执行并返回 RuntimeResult，不委托 SubagentRunner。
+        """
+        from dataclasses import replace
+
+        isolated_ctx = ToolContext(
+            cwd=self._ctx.cwd,
+            session_id=f"{self._ctx.session_id}::{self._spec.name}",
+            depth=self._ctx.depth + 1,
+        )
+        context = replace(self._factory_context, tool_context=isolated_ctx)
+        definition = self._spec.to_agent_definition()
+        started_at = datetime.now(UTC)
+        try:
+            executor = self._agent_factory.create_executor(definition, context)
+            return await executor.execute(task, emit=emit, cancellation=cancellation)
+        except Exception as exc:
+            return self._error_result(task, "execution_error", str(exc), started_at)
 
     def _build_result(
         self,

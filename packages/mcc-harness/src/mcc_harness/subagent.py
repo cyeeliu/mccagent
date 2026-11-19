@@ -17,6 +17,8 @@ from typing import Any
 from mcc_core import ToolContext, ToolOutput, Usage
 from mcc_core.event import PermissionDecision
 from mcc_core.event import PermissionRequest as PermissionRequestEvent
+from mcc_core.runtime import AgentDefinition, ExecutionProfile, ModelProfile, ToolProfile
+from mcc_core.runtime.enums import RuntimeKind
 from mcc_llm import LlmProvider
 from mcc_tools import ToolRegistry
 
@@ -148,6 +150,32 @@ class SubagentSpec:
     max_tokens: int = 2048
     budget_tokens: int = 80_000
     timeout_secs: float = 120.0
+
+    def to_agent_definition(self) -> AgentDefinition:
+        """将 SubagentSpec 映射为 AgentDefinition。
+
+        model/max_tokens → ModelProfile；tools → ToolProfile.allowed_tools；
+        max_iterations/budget_tokens/timeout_secs → ExecutionProfile；
+        name → agent_id/name；system → role/description。
+        runtime_kind 固定为 TASK，子代理经 TaskRuntime 执行。
+        """
+        return AgentDefinition(
+            agent_id=self.name,
+            name=self.name,
+            role="subagent",
+            description=self.system,
+            model_profile=ModelProfile(
+                model_id=self.model,
+                max_tokens=self.max_tokens,
+            ),
+            tool_profile=ToolProfile(allowed_tools=frozenset(self.tools)),
+            execution_profile=ExecutionProfile(
+                max_iterations=self.max_iterations,
+                budget_tokens=self.budget_tokens,
+                timeout_seconds=self.timeout_secs,
+            ),
+            runtime_kind=RuntimeKind.TASK,
+        )
 
 
 class SubagentStatus(StrEnum):
