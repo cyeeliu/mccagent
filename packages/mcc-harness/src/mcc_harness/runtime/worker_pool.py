@@ -101,7 +101,11 @@ class WorkerPool:
                         task_id=getattr(task, "task_id", None),
                         attempt_id=getattr(task, "attempt_id", None),
                     )
-                result = await self._executor.execute(task)
+                result = await self._executor.execute(
+                    task,
+                    emit=None,
+                    cancellation=None,
+                )
                 if not future.done():
                     future.set_result(result)
                 if self._on_event is not None:

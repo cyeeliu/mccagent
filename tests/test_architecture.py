@@ -190,3 +190,81 @@ class TestLayering:
                 if m == "mcc_harness" or m.startswith("mcc_harness."):
                     violations.append(f"{_file_to_module(f)} imports {m}")
         assert not violations, "mcc-core depends on mcc-harness:\n" + "\n".join(violations)
+
+
+# -- P2-05: 禁止模式 AST 规则 --
+
+
+def _find_method_node(
+    tree: ast.AST,
+    class_name: str,
+    method_name: str,
+) -> ast.AsyncFunctionDef | ast.FunctionDef | None:
+    """在 AST 中查找指定类的指定方法。"""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for item in node.body:
+                if (
+                    isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and item.name == method_name
+                ):
+                    return item
+    return None
+
+
+class TestForbiddenMethodCalls:
+    """禁止特定方法调用模式。"""
+
+    def test_orchestrator_no_submit_task_wait_task(self):
+        """TeamOrchestrator 不得调用 submit_task/wait_task。"""
+        orch_file = PACKAGES / "mcc-harness/src/mcc_harness/team/orchestrator.py"
+        source = orch_file.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("submit_task", "wait_task")
+            ):
+                violations.append(node.func.attr)
+        assert not violations, f"TeamOrchestrator 调用了禁止方法: {violations}"
+
+
+class TestNoHasattrCapabilityProbing:
+    """禁止使用 hasattr 探测 capabilities。"""
+
+    def test_no_hasattr_capability_probing(self):
+        violations: list[str] = []
+        for pkg in ("mcc-core", "mcc-harness", "mcc-cli"):
+            src = PACKAGES / pkg / "src"
+            if not src.exists():
+                continue
+            for f in sorted(src.rglob("*.py")):
+                tree = ast.parse(f.read_text(encoding="utf-8"))
+                for node in ast.walk(tree):
+                    if (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id == "hasattr"
+                        and len(node.args) >= 2
+                        and isinstance(node.args[1], ast.Constant)
+                        and isinstance(node.args[1].value, str)
+                        and "capabilit" in node.args[1].value.lower()
+                    ):
+                        violations.append(str(f.relative_to(REPO_ROOT)))
+        assert not violations, f"发现 hasattr 能力探测: {violations}"
+
+
+class TestSubagentExecutorAssemblyPreference:
+    """SubagentExecutor 应优先使用 agent_factory 装配路径。"""
+
+    def test_factory_check_before_runner_run(self):
+        """Factory 装配检查应在 _runner.run 回退之前。"""
+        exec_file = PACKAGES / "mcc-harness/src/mcc_harness/execution/subagent_executor.py"
+        source = exec_file.read_text(encoding="utf-8")
+        factory_check_pos = source.find("self._agent_factory is not None")
+        runner_run_pos = source.find("self._runner.run")
+        assert factory_check_pos > 0, "SubagentExecutor 应检查 _agent_factory"
+        assert runner_run_pos > 0, "SubagentExecutor 应有 _runner.run 回退"
+        assert factory_check_pos < runner_run_pos, "Factory 装配检查应在 _runner.run 回退之前"

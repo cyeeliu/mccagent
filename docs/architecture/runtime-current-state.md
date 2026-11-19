@@ -1,7 +1,8 @@
 # Runtime 架构当前状态
 
-> 最新 commit: `7429d0a` (2026-11-18)
+> 最新 commit: `67476c8` (2026-11-19)
 > 迁移完成日期: 2026-11-18
+> P2 收尾日期: 2026-11-19
 
 ## 1. 执行体系总览
 
@@ -161,3 +162,24 @@ Runtime 生命周期唯一管理中心：
 | `SubagentExecutor` | 将 `SubagentRunner` 封装为 `AgentExecutor`，TaskRuntime 使用 |
 | `TeammateRuntime` | Teammate 规格容器，执行委托给 PersistentRuntimeV2 |
 | `SubagentRunner` | 子代理工具（`SpawnSubagentTool`）的执行引擎 |
+
+## 12. P2 收尾完成状态
+
+以下各项在 P0/P1/P2 阶段已完成，文档据此校准：
+
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| 统一 Protocol | 已完成 | `AgentRuntime` / `AgentExecutor` / `AgentFactory` 统一契约 |
+| Runtime 实现 | 已完成 | `InteractiveRuntimeV2` / `TaskRuntime` / `PersistentRuntimeV2` |
+| 旧执行器 | 仍通过 Adapter 运行 | `AgentLoopExecutor` / `SubagentExecutor` 适配层保留 |
+| Attempt/Assignment 持久化 | 已完成 | TaskStore 写入 Attempt 结果（P1-01） |
+| TeamRun 状态恢复 | 已完成 | TeamRun 状态机可从持久化恢复（P1-11） |
+| Dispatcher 结果闭环 | 已完成 | TaskDispatcher 派发 → 执行 → 写入 Store → 返回结果（P0-03） |
+| RuntimeCapabilities 实例化 | 已完成 | PersistentRuntimeV2 从实例配置生成 capabilities（P2-01） |
+| AgentExecutor 协议统一 | 已完成 | emit/cancellation 可选参数，所有 Runtime 统一传参（P2-02） |
+| RuntimeTask 校验 | 已完成 | timeout/时区/序列化/格式/长度校验（P2-03） |
+| RuntimeEvent 关联字段 | 已完成 | causation_id/result_ref/schema_version/trace_id/parent_event_id（P2-04） |
+| 架构 AST 规则 | 已完成 | 禁止 submit_task/wait_task/hasattr 能力探测（P2-05） |
+
+注意：旧执行引擎未完全删除，仍通过 Adapter 层运行。类名替换完成不等于
+执行引擎删除完成。后续阶段可逐步将执行逻辑内联到 Executor，移除 Adapter。

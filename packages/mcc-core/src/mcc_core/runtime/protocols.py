@@ -89,8 +89,8 @@ class AgentExecutor(Protocol):
         self,
         task: RuntimeTask,
         *,
-        emit: EventEmitter,
-        cancellation: CancellationToken,
+        emit: EventEmitter | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> object: ...
 
     async def close(self) -> None: ...

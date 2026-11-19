@@ -85,7 +85,7 @@ class _CountingRuntime:
 class _NoopExecutor:
     """Executor 桩：worker 取到 sentinel 即退出，不会真正执行。"""
 
-    async def execute(self, task: Any) -> Any:
+    async def execute(self, task: Any, **kwargs: Any) -> Any:
         return None
 
 

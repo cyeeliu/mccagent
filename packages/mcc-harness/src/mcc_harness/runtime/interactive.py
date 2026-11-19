@@ -141,7 +141,11 @@ class InteractiveRuntimeV2:
             attempt_id=task.attempt_id,
         )
         try:
-            result = await self._executor.execute(task)
+            result = await self._executor.execute(
+                task,
+                emit=None,
+                cancellation=None,
+            )
             if self._task_store is not None:
                 await self._write_result_to_store(task, result)
             event_type = "task_completed" if result.is_success else "task_failed"

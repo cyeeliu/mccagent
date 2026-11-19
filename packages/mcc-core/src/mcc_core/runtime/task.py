@@ -6,6 +6,7 @@ task_id 在 Retry 期间保持不变，每次执行尝试生成新的 attempt_id
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -20,6 +21,10 @@ from mcc_core.runtime.identifiers import (
 )
 
 _MAX_OBJECTIVE_LENGTH = 10_000
+_MAX_ID_LENGTH = 256
+_MAX_IDEMPOTENCY_KEY_LENGTH = 512
+_MAX_ENV_KEY_LENGTH = 256
+_MAX_ENV_VALUE_LENGTH = 8192
 
 
 @dataclass(frozen=True)
@@ -53,14 +58,53 @@ class RuntimeTask:
             raise TaskValidationError("attempt_id 不能为空")
         if not self.agent_id:
             raise TaskValidationError("agent_id 不能为空")
-        if not self.objective:
-            raise TaskValidationError("objective 不能为空")
+        for field_name, value in (
+            ("task_id", self.task_id),
+            ("attempt_id", self.attempt_id),
+            ("agent_id", self.agent_id),
+        ):
+            if len(value) > _MAX_ID_LENGTH:
+                raise TaskValidationError(
+                    f"{field_name} 长度超限 ({len(value)} > {_MAX_ID_LENGTH})",
+                )
+            if any(ord(c) < 32 for c in value):
+                raise TaskValidationError(f"{field_name} 包含控制字符")
+        if not self.objective.strip():
+            raise TaskValidationError("objective 不能为空白")
         if len(self.objective) > _MAX_OBJECTIVE_LENGTH:
             raise TaskValidationError(
                 f"objective 长度超限 ({len(self.objective)} > {_MAX_OBJECTIVE_LENGTH})",
             )
+        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
+            raise TaskValidationError(
+                f"timeout_seconds 必须为正数，实际为 {self.timeout_seconds}",
+            )
+        if self.created_at.tzinfo is None:
+            raise TaskValidationError("created_at 必须带时区信息")
+        try:
+            json.dumps(dict(self.input))
+        except (TypeError, ValueError) as exc:
+            raise TaskValidationError(f"input 必须可 JSON 序列化: {exc}") from exc
+        try:
+            json.dumps(dict(self.metadata))
+        except (TypeError, ValueError) as exc:
+            raise TaskValidationError(f"metadata 必须可 JSON 序列化: {exc}") from exc
+        for env_key, env_value in self.context.environment.items():
+            if len(env_key) > _MAX_ENV_KEY_LENGTH:
+                raise TaskValidationError(
+                    f"environment key 长度超限 ({len(env_key)} > {_MAX_ENV_KEY_LENGTH})",
+                )
+            if len(env_value) > _MAX_ENV_VALUE_LENGTH:
+                raise TaskValidationError(
+                    f"environment value 长度超限 ({len(env_value)} > {_MAX_ENV_VALUE_LENGTH})",
+                )
         if not self.idempotency_key:
             object.__setattr__(self, "idempotency_key", f"{self.task_id}:{self.attempt_id}")
+        if len(self.idempotency_key) > _MAX_IDEMPOTENCY_KEY_LENGTH:
+            raise TaskValidationError(
+                f"idempotency_key 长度超限"
+                f" ({len(self.idempotency_key)} > {_MAX_IDEMPOTENCY_KEY_LENGTH})",
+            )
 
     @property
     def is_retry(self) -> bool:

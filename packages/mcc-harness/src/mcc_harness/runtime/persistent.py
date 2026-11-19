@@ -15,8 +15,8 @@ from typing import Any
 from uuid import uuid4
 
 from mcc_core.runtime import (
-    PERSISTENT_CAPABILITIES,
     HealthState,
+    RuntimeCapabilities,
     RuntimeEvent,
     RuntimeEventType,
     RuntimeHealth,
@@ -146,9 +146,19 @@ class PersistentRuntimeV2:
         self._executor = executor
         self._runtime_id = runtime_id or f"persistent::{uuid4().hex[:12]}"
         self._agent_id = agent_id or self._runtime_id
-        self._capabilities = PERSISTENT_CAPABILITIES
         self._max_concurrency = max_concurrency
         self._queue = BoundedTaskQueue(max_size=queue_capacity)
+        self._capabilities = RuntimeCapabilities(
+            supports_pause=True,
+            supports_resume=True,
+            supports_cancel_task=True,
+            supports_cancel=True,
+            supports_health_check=True,
+            supports_subscribe_events=True,
+            supports_multiple_tasks=True,
+            max_concurrency=self._max_concurrency,
+            queue_capacity=self._queue.max_size,
+        )
         self._worker_pool = WorkerPool(
             self._queue,
             executor,

@@ -15,7 +15,6 @@ from uuid import uuid4
 import pytest
 from mcc_core.runtime import (
     INTERACTIVE_CAPABILITIES,
-    PERSISTENT_CAPABILITIES,
     TASK_CAPABILITIES,
     RuntimeStatus,
     TaskStatus,
@@ -435,7 +434,8 @@ class TestPersistentRuntimeV2:
 
         teammate = StubTeammate()
         rt = PersistentRuntimeV2.from_teammate(teammate, StubBus())
-        assert rt.capabilities is PERSISTENT_CAPABILITIES
+        assert rt.capabilities.max_concurrency == 1
+        assert rt.capabilities.queue_capacity == 0
         assert rt.capabilities.supports_pause
         assert rt.capabilities.supports_resume
         assert rt.capabilities.supports_multiple_tasks

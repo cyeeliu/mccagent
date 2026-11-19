@@ -51,6 +51,7 @@ class ControllableExecutor:
         self,
         task: RuntimeTask,
         *,
+        emit: Any | None = None,
         cancellation: Any | None = None,
     ) -> RuntimeResult:
         self.execute_calls.append(task)
@@ -77,6 +78,7 @@ class ImmediateExecutor:
         self,
         task: RuntimeTask,
         *,
+        emit: Any | None = None,
         cancellation: Any | None = None,
     ) -> RuntimeResult:
         return _make_result(task, TaskStatus.SUCCEEDED, "immediate")
@@ -95,6 +97,7 @@ class CrashingExecutor:
         self,
         task: RuntimeTask,
         *,
+        emit: Any | None = None,
         cancellation: Any | None = None,
     ) -> RuntimeResult:
         raise self._error

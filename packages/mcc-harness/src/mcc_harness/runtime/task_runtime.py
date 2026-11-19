@@ -131,6 +131,7 @@ class TaskRuntime:
         try:
             result = await self._executor.execute(
                 task,
+                emit=None,
                 cancellation=cancel_token,
             )
             self._results[task.task_id] = result

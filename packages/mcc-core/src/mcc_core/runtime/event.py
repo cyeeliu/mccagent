@@ -32,6 +32,11 @@ class RuntimeEvent:
     attempt_id: AttemptId | None = None
     sequence: int = 0
     correlation_id: CorrelationId | None = None
+    causation_id: str | None = None
+    result_ref: str | None = None
+    schema_version: int = 1
+    trace_id: str | None = None
+    parent_event_id: str | None = None
     payload: Mapping[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
@@ -45,6 +50,11 @@ class RuntimeEvent:
             "attempt_id": self.attempt_id,
             "sequence": self.sequence,
             "correlation_id": self.correlation_id,
+            "causation_id": self.causation_id,
+            "result_ref": self.result_ref,
+            "schema_version": self.schema_version,
+            "trace_id": self.trace_id,
+            "parent_event_id": self.parent_event_id,
             "payload": dict(self.payload),
         }
 
