@@ -40,6 +40,25 @@ class SessionContext:
     bus: Any | None = None
 
 
+@dataclass
+class FactoryContext:
+    """Factory 从 AgentDefinition 装配 Runtime/Executor 所需的共享基础设施。
+
+    只含跨子系统共享的环境与基础设施对象，不含预构建的
+    agent_loop/teammate——这些应由 Factory 从 AgentDefinition 装配。
+    """
+
+    llm: Any
+    registry: Any
+    tool_context: ToolContext
+    work_dir: Path
+    config: Any
+    hooks: Any | None = None
+    recorder: Any | None = None
+    coordinator: Any | None = None
+    bus: Any | None = None
+
+
 class DefaultAgentFactory:
     """Agent 工厂：收拢 AgentLoop → AgentLoopExecutor → Runtime 的构造链。
 
@@ -64,14 +83,32 @@ class DefaultAgentFactory:
 
     def create_executor(
         self,
-        agent_loop: Any,
+        definition_or_loop: Any,
+        context: Any | None = None,
         *,
         runtime_id: str = "",
         agent_id: str = "",
     ) -> AgentLoopExecutor:
-        """从已构造的 AgentLoop 创建 AgentLoopExecutor。"""
+        """从 AgentDefinition 或已构造的 AgentLoop 创建 AgentLoopExecutor。
+
+        新路径：create_executor(definition, context) 从 AgentDefinition
+        的 profile 装配 AgentLoop 再包装为 AgentLoopExecutor。
+        旧路径：create_executor(agent_loop, *, runtime_id, agent_id)
+        直接包装已构造的 AgentLoop，保持向后兼容。
+        """
+        if isinstance(definition_or_loop, AgentDefinition):
+            if context is None:
+                raise ValueError(
+                    "context is required when creating executor from AgentDefinition",
+                )
+            loop = self._assemble_agent_loop(definition_or_loop, context)
+            return AgentLoopExecutor(
+                loop,
+                runtime_id=runtime_id,
+                agent_id=agent_id or definition_or_loop.agent_id,
+            )
         return AgentLoopExecutor(
-            agent_loop,
+            definition_or_loop,
             runtime_id=runtime_id,
             agent_id=agent_id,
         )
@@ -202,8 +239,7 @@ class DefaultAgentFactory:
             bus = getattr(session, "bus", None)
             if teammate is None or bus is None:
                 raise ValueError(
-                    "teammate and bus are required in session_context"
-                    " for PERSISTENT runtime",
+                    "teammate and bus are required in session_context for PERSISTENT runtime",
                 )
             return PersistentRuntimeV2.from_teammate(
                 teammate,
@@ -213,6 +249,86 @@ class DefaultAgentFactory:
         raise NotImplementedError(
             f"runtime_kind {kind} is not supported by create()",
         )
+
+    async def create_runtime(
+        self,
+        definition: AgentDefinition,
+        context: FactoryContext,
+    ) -> Any:
+        """从 AgentDefinition 的 profile 装配 Runtime。
+
+        根据 definition.runtime_kind 从 AgentDefinition 装配
+        AgentLoop → AgentLoopExecutor → Runtime：
+        - INTERACTIVE → InteractiveRuntimeV2
+        - TASK → TaskRuntime（通过 AgentLoopExecutor）
+        - PERSISTENT → 需 teammate，暂不支持从 AgentDefinition 装配
+        - REMOTE → 暂不支持
+        """
+        from mcc_core.runtime.enums import RuntimeKind
+
+        kind = definition.runtime_kind
+
+        if kind is RuntimeKind.INTERACTIVE:
+            from mcc_harness.runtime.interactive import InteractiveRuntimeV2
+
+            loop = self._assemble_agent_loop(definition, context)
+            return InteractiveRuntimeV2(loop, agent_id=definition.agent_id)
+
+        if kind is RuntimeKind.TASK:
+            from mcc_harness.runtime.task_runtime import TaskRuntime
+
+            loop = self._assemble_agent_loop(definition, context)
+            executor = AgentLoopExecutor(loop, agent_id=definition.agent_id)
+            return TaskRuntime(executor, agent_id=definition.agent_id)
+
+        raise NotImplementedError(
+            f"runtime_kind {kind} is not supported by create_runtime()"
+            " from AgentDefinition; use create() with session_context"
+            " for PERSISTENT runtime",
+        )
+
+    def _assemble_agent_loop(
+        self,
+        definition: AgentDefinition,
+        context: FactoryContext,
+    ) -> Any:
+        """从 AgentDefinition 的 profile 装配 AgentLoop。
+
+        model_profile → model/max_tokens/temperature；
+        execution_profile → max_iterations；
+        context.config → permission（若可用）。
+        """
+        if context.llm is None:
+            raise ValueError(
+                "llm is required in context to assemble agent loop",
+            )
+        permission = self._resolve_permission(context)
+        return self.build_agent_loop(
+            llm=context.llm,
+            registry=context.registry,
+            ctx=context.tool_context,
+            model=definition.model_profile.model_id,
+            max_tokens=definition.model_profile.max_tokens,
+            max_iterations=definition.execution_profile.max_iterations,
+            temperature=definition.model_profile.temperature,
+            permission=permission,
+            hooks=context.hooks,
+        )
+
+    @staticmethod
+    def _resolve_permission(context: FactoryContext) -> Any | None:
+        """从 FactoryContext.config 解析 PermissionChecker（若配置可用）。"""
+        config = context.config
+        if config is None:
+            return None
+        perms = getattr(config, "permissions", None)
+        if perms is None:
+            return None
+        from mcc_harness import PermissionChecker
+
+        security = getattr(config, "security", None)
+        hardened = getattr(security, "hardened", True) if security else True
+        return PermissionChecker(perms, hardened=hardened)
 
 
 class _LazyRuntimeFactory:
@@ -247,5 +363,6 @@ class _LazyRuntimeFactory:
 
 __all__ = [
     "DefaultAgentFactory",
+    "FactoryContext",
     "SessionContext",
 ]

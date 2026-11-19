@@ -25,3 +25,6 @@ eval-runs/
 
 # workflow 运行时产物（快照/输出/journal）
 .workflows/
+
+# bugfix 工作流程产物（分析/定位/补丁工件）
+.bugfix/

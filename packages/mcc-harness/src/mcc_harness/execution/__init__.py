@@ -11,7 +11,11 @@ from mcc_harness.execution.agent_loop_executor import AgentLoopExecutor
 from mcc_harness.execution.cancellation import CancellationToken
 from mcc_harness.execution.context import ExecutionContext
 from mcc_harness.execution.event_adapter import EventAdapter
-from mcc_harness.execution.factory import DefaultAgentFactory, SessionContext
+from mcc_harness.execution.factory import (
+    DefaultAgentFactory,
+    FactoryContext,
+    SessionContext,
+)
 
 __all__ = [
     "AgentLoopExecutor",
@@ -19,5 +23,6 @@ __all__ = [
     "DefaultAgentFactory",
     "ExecutionContext",
     "EventAdapter",
+    "FactoryContext",
     "SessionContext",
 ]
