@@ -166,6 +166,7 @@ class PersistentRuntimeV2:
         self._teammate: Any = None
         self._bus: Any = None
         self._lead_name: str = ""
+        self._message_adapter: Any = None
 
     @classmethod
     def from_teammate(
@@ -189,6 +190,33 @@ class PersistentRuntimeV2:
         instance._teammate = teammate
         instance._bus = bus
         instance._lead_name = ln
+        return instance
+
+    @classmethod
+    def from_executor(
+        cls,
+        executor: Any,
+        *,
+        runtime_id: str | None = None,
+        agent_id: str = "",
+        message_adapter: Any | None = None,
+        max_concurrency: int = 1,
+        queue_capacity: int = 0,
+    ) -> PersistentRuntimeV2:
+        """直接持有 AgentExecutor 构造 PersistentRuntimeV2。
+
+        新路径：不经过 _TeammateExecutorAdapter / 旧 TeammateRuntime，
+        PersistentRuntimeV2 直接通过 BoundedTaskQueue + WorkerPool 驱动 executor。
+        message_adapter 可选，用于 instruction/pause/resume 等消息收发。
+        """
+        instance = cls(
+            executor,
+            max_concurrency=max_concurrency,
+            queue_capacity=queue_capacity,
+            runtime_id=runtime_id,
+            agent_id=agent_id,
+        )
+        instance._message_adapter = message_adapter
         return instance
 
     @property

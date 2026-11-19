@@ -11,11 +11,15 @@ import asyncio
 import contextlib
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from mcc_core import ToolContext, ToolOutput
+from mcc_core.runtime import TaskStatus
+from mcc_core.runtime.result import RuntimeResult as CoreRuntimeResult
+from mcc_core.runtime.task import RuntimeTask
 from mcc_llm import LlmProvider
 from mcc_tools import ToolRegistry
 
@@ -777,6 +781,356 @@ class TeammateRuntime:
             worktree=str(self._worktree) if self._worktree else None,
             last_transition=last,
         )
+
+
+@dataclass(frozen=True)
+class TeammatePolicy:
+    """teammate 执行护栏：迭代上限、令牌与预算、计划审批与超时。
+
+    纯配置数据，不含执行逻辑，从 TeammateSpec 的护栏字段提取。
+    """
+
+    max_iterations: int = 20
+    max_tokens: int = 4096
+    budget_tokens: int = 150_000
+    require_plan: bool = False
+    timeout_secs: float = 300.0
+
+
+@dataclass(frozen=True)
+class TeammateDefinition:
+    """teammate 纯配置定义：身份、模型、工具与护栏。
+
+    从 TeammateRuntime.spec 提取不含执行逻辑的配置数据，
+    供 PersistentRuntimeV2 / TeammateExecutionService 等新路径直接持有。
+    """
+
+    name: str
+    role: str
+    system: str
+    model: str
+    tools: tuple[str, ...] = ()
+    policy: TeammatePolicy = field(default_factory=TeammatePolicy)
+
+    @classmethod
+    def from_spec(cls, spec: TeammateSpec) -> TeammateDefinition:
+        """从 TeammateSpec 提取纯配置定义。"""
+        return cls(
+            name=spec.name,
+            role=spec.role,
+            system=spec.system,
+            model=spec.model,
+            tools=tuple(spec.tools),
+            policy=TeammatePolicy(
+                max_iterations=spec.max_iterations,
+                max_tokens=spec.max_tokens,
+                budget_tokens=spec.budget_tokens,
+                require_plan=spec.require_plan,
+                timeout_secs=spec.timeout_secs,
+            ),
+        )
+
+    def to_spec(self) -> TeammateSpec:
+        """转换回 TeammateSpec，保持字段一一对应。"""
+        return TeammateSpec(
+            name=self.name,
+            role=self.role,
+            system=self.system,
+            model=self.model,
+            tools=list(self.tools),
+            max_iterations=self.policy.max_iterations,
+            max_tokens=self.policy.max_tokens,
+            budget_tokens=self.policy.budget_tokens,
+            require_plan=self.policy.require_plan,
+            timeout_secs=self.policy.timeout_secs,
+        )
+
+
+class TeammateMessageAdapter:
+    """封装 MessageBus 消息收发与唤醒，不含执行逻辑。
+
+    从 TeammateRuntime 的消息相关方法提取，供新执行路径独立收发消息。
+    """
+
+    def __init__(
+        self,
+        bus: MessageBus,
+        name: str,
+        lead_name: str = LEAD_NAME,
+    ) -> None:
+        self._bus = bus
+        self._name = name
+        self._lead_name = lead_name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def lead_name(self) -> str:
+        return self._lead_name
+
+    @property
+    def bus(self) -> MessageBus:
+        return self._bus
+
+    async def send_to_lead(
+        self,
+        content: str,
+        *,
+        kind: str = "message",
+        meta: dict[str, Any] | None = None,
+        task_id: str | None = None,
+    ) -> Any:
+        """向 lead 发送消息。"""
+        return await self._bus.send(
+            self._name,
+            self._lead_name,
+            content,
+            kind=kind,
+            meta=meta or {},
+            task_id=task_id,
+        )
+
+    async def send_task_submitted(
+        self,
+        from_name: str,
+        objective: str,
+        *,
+        task_id: str,
+    ) -> Any:
+        """向本 teammate 投递 task_submitted 消息（来自 lead 或调度方）。"""
+        return await self._bus.send(
+            from_name,
+            self._name,
+            objective,
+            kind="task_submitted",
+            task_id=task_id,
+        )
+
+    async def recv(self) -> list:
+        """读取并清空本 teammate 收件箱。"""
+        return await self._bus.consume(self._name)
+
+    async def has_messages(self) -> bool:
+        """检查收件箱是否有未读消息。"""
+        return await self._bus.peek(self._name)
+
+    def notify(self, wake: asyncio.Event) -> None:
+        """唤醒处于 IDLE 等待的 teammate。"""
+        wake.set()
+
+
+class TeammateExecutionService:
+    """通过注入的 AgentExecutor 执行 RuntimeTask，含 Plan/Worktree/Result 回写。
+
+    从 TeammateRuntime._do_work 提取执行逻辑，但用 AgentExecutor 替代内嵌的
+    AgentLoop 构建，使执行路径可独立于旧 TeammateRuntime 主循环。
+    不管理 TeammateRuntime 状态机，只负责执行与结果回写。
+    """
+
+    def __init__(
+        self,
+        executor: Any,
+        *,
+        definition: TeammateDefinition,
+        message_adapter: TeammateMessageAdapter | None = None,
+        plan_store: PlanStore | None = None,
+        task_store: Any | None = None,
+        base_dir: Path | None = None,
+        worktree_enabled: bool = False,
+        runtime_id: str = "",
+        agent_id: str = "",
+    ) -> None:
+        self._executor = executor
+        self._definition = definition
+        self._message_adapter = message_adapter
+        self._plan_store = plan_store
+        self._task_store = task_store
+        self._base_dir = base_dir
+        self._worktree_enabled = worktree_enabled
+        self._runtime_id = runtime_id or f"teammate-exec::{definition.name}"
+        self._agent_id = agent_id or definition.name
+        self._worktree: Path | None = None
+        self._work_version = 0
+
+    @property
+    def definition(self) -> TeammateDefinition:
+        return self._definition
+
+    @property
+    def runtime_id(self) -> str:
+        return self._runtime_id
+
+    @property
+    def agent_id(self) -> str:
+        return self._agent_id
+
+    async def execute(
+        self,
+        task: RuntimeTask,
+        **kwargs: Any,
+    ) -> CoreRuntimeResult:
+        """执行单个 RuntimeTask：Plan 审批 → Worktree → executor → 回写。"""
+        self._work_version += 1
+
+        if self._definition.policy.require_plan and self._plan_store is not None:
+            approved = await self._submit_and_wait_plan(task)
+            if not approved:
+                return self._failed_result(task, "plan rejected")
+
+        from .worktree import WorktreeError as _WtErr
+
+        try:
+            await self._prepare_worktree(task)
+        except _WtErr as e:
+            summary = f"worktree creation failed: {e}"
+            await self._send_to_lead(
+                summary,
+                kind="work_failed",
+                meta={"task_id": task.task_id} if task.task_id else {},
+            )
+            if task.task_id and self._task_store is not None:
+                with contextlib.suppress(Exception):
+                    self._task_store.fail(
+                        task.task_id,
+                        error=summary,
+                        owner=self._definition.name,
+                    )
+            await self._cleanup_worktree()
+            return self._failed_result(task, summary)
+
+        try:
+            result = await self._executor.execute(task)
+        except asyncio.CancelledError:
+            await self._cleanup_worktree()
+            raise
+        except Exception as e:
+            summary = f"teammate error: {type(e).__name__}: {e}"
+            result = self._failed_result(task, summary)
+
+        kind = _TASK_STATUS_TO_WORK_KIND.get(result.status, "work_failed")
+
+        await self._send_to_lead(
+            result.summary,
+            kind=kind,
+            meta={"task_id": task.task_id} if task.task_id else {},
+        )
+
+        if task.task_id and self._task_store is not None:
+            with contextlib.suppress(Exception):
+                if result.status == TaskStatus.SUCCEEDED:
+                    self._task_store.complete(
+                        task.task_id,
+                        owner=self._definition.name,
+                    )
+                elif result.status == TaskStatus.TIMED_OUT:
+                    self._task_store.timeout(
+                        task.task_id,
+                        owner=self._definition.name,
+                    )
+                elif result.status == TaskStatus.CANCELLED:
+                    self._task_store.cancel(
+                        task.task_id,
+                        owner=self._definition.name,
+                        reason=result.summary,
+                    )
+                else:
+                    self._task_store.fail(
+                        task.task_id,
+                        owner=self._definition.name,
+                        error=result.summary,
+                    )
+
+        await self._cleanup_worktree()
+
+        return result
+
+    async def close(self) -> None:
+        """关闭底层 executor。"""
+        if hasattr(self._executor, "close"):
+            await self._executor.close()
+
+    async def _submit_and_wait_plan(self, task: RuntimeTask) -> bool:
+        plan_req = await self._plan_store.create(
+            sender=self._definition.name,
+            plan=task.objective,
+            task_id=task.task_id,
+            work_version=self._work_version,
+        )
+        await self._send_to_lead(
+            f"Plan submitted for review:\n{task.objective}",
+            kind="plan_submitted",
+            meta={"request_id": plan_req.request_id},
+        )
+        reviewed = await self._plan_store.wait_for_review(plan_req.request_id)
+        if reviewed.status == "rejected":
+            await self._send_to_lead(
+                f"Plan rejected: {reviewed.feedback}",
+                kind="plan_rejected",
+            )
+            return False
+        return True
+
+    async def _prepare_worktree(self, task: RuntimeTask) -> Path | None:
+        if not self._worktree_enabled or not self._base_dir or not task.task_id:
+            return None
+        from .worktree import create_worktree
+
+        wt_name = f"{self._definition.name}_{self._work_version}"
+        wt = await asyncio.to_thread(create_worktree, wt_name, task.task_id, self._base_dir)
+        self._worktree = wt
+        return wt
+
+    async def _cleanup_worktree(self) -> None:
+        if not self._worktree or not self._base_dir:
+            return
+        from .worktree import CleanupPolicy, WorktreeError, remove_worktree
+
+        wt_name = f"{self._definition.name}_{self._work_version}"
+        with contextlib.suppress(WorktreeError):
+            await asyncio.to_thread(remove_worktree, wt_name, self._base_dir, CleanupPolicy.SAFE)
+        self._worktree = None
+
+    async def _send_to_lead(
+        self,
+        content: str,
+        *,
+        kind: str = "message",
+        meta: dict[str, Any] | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        if self._message_adapter is not None:
+            await self._message_adapter.send_to_lead(
+                content,
+                kind=kind,
+                meta=meta,
+                task_id=task_id,
+            )
+
+    def _failed_result(self, task: RuntimeTask, summary: str) -> CoreRuntimeResult:
+        from mcc_core.runtime import RuntimeErrorInfo
+
+        now = datetime.now(UTC)
+        return CoreRuntimeResult(
+            task_id=task.task_id,
+            attempt_id=task.attempt_id,
+            runtime_id=self._runtime_id,
+            agent_id=task.agent_id,
+            status=TaskStatus.FAILED,
+            summary=summary,
+            error=RuntimeErrorInfo(code="execution_error", message=summary),
+            started_at=now,
+            finished_at=now,
+        )
+
+
+_TASK_STATUS_TO_WORK_KIND: dict[TaskStatus, str] = {
+    TaskStatus.SUCCEEDED: "work_done",
+    TaskStatus.FAILED: "work_failed",
+    TaskStatus.CANCELLED: "work_cancelled",
+    TaskStatus.TIMED_OUT: "work_timeout",
+}
 
 
 class TeammateManager:
