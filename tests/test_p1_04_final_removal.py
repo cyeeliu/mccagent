@@ -43,12 +43,8 @@ class TestOldPathRemoved:
             if py.name == Path(__file__).name:
                 continue
             text = py.read_text(encoding="utf-8")
-            assert ".from_teammate(" not in text, (
-                f"{py} 仍包含 .from_teammate() 调用"
-            )
-            assert "def from_teammate(" not in text, (
-                f"{py} 仍定义 from_teammate"
-            )
+            assert ".from_teammate(" not in text, f"{py} 仍包含 .from_teammate() 调用"
+            assert "def from_teammate(" not in text, f"{py} 仍定义 from_teammate"
 
     def test_no_teammate_executor_adapter_in_source(self) -> None:
         """源文件中不应出现 _TeammateExecutorAdapter 引用。"""
@@ -59,9 +55,7 @@ class TestOldPathRemoved:
             if py.name == Path(__file__).name:
                 continue
             text = py.read_text(encoding="utf-8")
-            assert "_TeammateExecutorAdapter" not in text, (
-                f"{py} 仍引用 _TeammateExecutorAdapter"
-            )
+            assert "_TeammateExecutorAdapter" not in text, f"{py} 仍引用 _TeammateExecutorAdapter"
 
 
 class TestNewPathAvailable:
@@ -93,9 +87,7 @@ class TestNewPathAvailable:
         from mcc_harness.runtime.persistent import PersistentRuntimeV2
 
         sig = inspect.signature(PersistentRuntimeV2.from_executor)
-        assert param_name in sig.parameters, (
-            f"from_executor 应接受 {param_name} 参数"
-        )
+        assert param_name in sig.parameters, f"from_executor 应接受 {param_name} 参数"
 
 
 class TestFromExecutorWithTeammate:
@@ -163,9 +155,7 @@ class TestProductionCallersUseFromExecutor:
         import mcc_harness.teammate as teammate_mod
 
         source = inspect.getsource(teammate_mod.TeammateManager.spawn)
-        assert "from_executor" in source, (
-            "TeammateManager.spawn 应使用 from_executor"
-        )
+        assert "from_executor" in source, "TeammateManager.spawn 应使用 from_executor"
         assert "from_teammate" not in source
 
     def test_runtime_factory_uses_from_executor(self) -> None:
@@ -173,9 +163,7 @@ class TestProductionCallersUseFromExecutor:
         import mcc_harness.runtime.factory as factory_mod
 
         source = inspect.getsource(factory_mod.RuntimeFactory.create_persistent_v2)
-        assert "from_executor" in source, (
-            "RuntimeFactory.create_persistent_v2 应使用 from_executor"
-        )
+        assert "from_executor" in source, "RuntimeFactory.create_persistent_v2 应使用 from_executor"
 
     def test_execution_factory_uses_from_executor(self) -> None:
         """execution/factory.py create PERSISTENT 分支使用 from_executor。"""

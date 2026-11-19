@@ -621,7 +621,7 @@ class TestTaskDispatcher:
         assert attempt.status is AttemptStatus.FAILED
 
     async def test_wait_for_result_timeout(self):
-        from mcc_core.runtime.errors import TaskTimeoutError
+        from mcc_core.runtime.errors import TaskWaitTimeoutError
 
         store = InMemoryTaskStore()
         coord = RuntimeCoordinator()
@@ -636,7 +636,7 @@ class TestTaskDispatcher:
             runtime_id="rt-1",
         )
 
-        with pytest.raises(TaskTimeoutError):
+        with pytest.raises(TaskWaitTimeoutError):
             await dispatcher.wait_for_result(handle, timeout=0.05)
 
     async def test_retry_creates_new_attempt(self):

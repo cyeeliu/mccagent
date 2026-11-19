@@ -154,9 +154,12 @@ class TaskRuntime:
         except asyncio.CancelledError:
             if self._task_store is not None:
                 with contextlib.suppress(Exception):
+                    from mcc_core.runtime.task_record import AttemptStatus
+
                     await self._task_store.fail_attempt(
                         task.attempt_id,
                         error="cancelled",
+                        status=AttemptStatus.CANCELLED,
                     )
             await self._emit(
                 RuntimeEventType.TASK_CANCELLED,

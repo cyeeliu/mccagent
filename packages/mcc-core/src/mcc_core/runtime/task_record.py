@@ -131,6 +131,7 @@ class TaskAttempt:
     output: dict[str, object] | None = None
     usage: TokenUsage | None = None
     cost_usd: float | None = None
+    artifacts: dict[str, str] | None = None
     version: int = 0
 
     def __post_init__(self) -> None:

@@ -128,6 +128,7 @@ class TaskStoreProtocol(Protocol):
         output: dict[str, object] | None = None,
         usage: TokenUsage | None = None,
         cost_usd: float | None = None,
+        artifacts: dict[str, str] | None = None,
     ) -> TaskAttempt: ...
 
     async def fail_attempt(
@@ -135,6 +136,7 @@ class TaskStoreProtocol(Protocol):
         attempt_id: str,
         *,
         error: str,
+        status: AttemptStatus = AttemptStatus.FAILED,
     ) -> TaskAttempt: ...
 
     async def find_by_idempotency_key(
@@ -352,6 +354,7 @@ class InMemoryTaskStore:
         output: dict[str, object] | None = None,
         usage: TokenUsage | None = None,
         cost_usd: float | None = None,
+        artifacts: dict[str, str] | None = None,
     ) -> TaskAttempt:
         async with self._lock:
             attempt = self._attempts.get(attempt_id)
@@ -364,6 +367,7 @@ class InMemoryTaskStore:
             attempt.output = output
             attempt.usage = usage
             attempt.cost_usd = cost_usd
+            attempt.artifacts = artifacts
             attempt.finished_at = _now()
             attempt.touch()
 
@@ -378,6 +382,7 @@ class InMemoryTaskStore:
         attempt_id: str,
         *,
         error: str,
+        status: AttemptStatus = AttemptStatus.FAILED,
     ) -> TaskAttempt:
         async with self._lock:
             attempt = self._attempts.get(attempt_id)
@@ -385,7 +390,16 @@ class InMemoryTaskStore:
                 from mcc_core.runtime.errors import AttemptNotFoundError
 
                 raise AttemptNotFoundError(attempt_id)
-            attempt.status = AttemptStatus.FAILED
+            if status not in (
+                AttemptStatus.FAILED,
+                AttemptStatus.TIMED_OUT,
+                AttemptStatus.CANCELLED,
+            ):
+                raise InvalidTransitionError(
+                    AttemptStatus.RUNNING.value,
+                    status.value,
+                )
+            attempt.status = status
             attempt.error = error
             attempt.finished_at = _now()
             attempt.touch()

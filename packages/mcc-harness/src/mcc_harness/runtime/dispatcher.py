@@ -235,9 +235,9 @@ class TaskDispatcher:
                 return await asyncio.wait_for(_wait(), timeout=timeout)
             return await _wait()
         except TimeoutError:
-            from mcc_core.runtime.errors import TaskTimeoutError
+            from mcc_core.runtime.errors import TaskWaitTimeoutError
 
-            raise TaskTimeoutError(handle.task_id, handle.attempt_id) from None
+            raise TaskWaitTimeoutError(handle.task_id, timeout or 0.0) from None
 
     def _synthetic_event(
         self,
@@ -294,11 +294,13 @@ class TaskDispatcher:
             await self._store.fail_attempt(
                 handle.attempt_id,
                 error="cancelled",
+                status=AttemptStatus.CANCELLED,
             )
         elif event.event_type is RuntimeEventType.TASK_TIMED_OUT:
             await self._store.fail_attempt(
                 handle.attempt_id,
                 error="timed out",
+                status=AttemptStatus.TIMED_OUT,
             )
 
     async def retry(

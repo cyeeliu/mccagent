@@ -583,5 +583,3 @@ class TestPersistentRuntimeFromExecutor:
             assert result.status is RuntimeStatus.FAILED
         finally:
             await pr.stop(timeout=5.0)
-
-

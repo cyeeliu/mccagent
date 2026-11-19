@@ -26,7 +26,7 @@ from mcc_core.runtime import (
     TaskStatus,
     TokenUsage,
 )
-from mcc_core.runtime.errors import TaskTimeoutError
+from mcc_core.runtime.errors import TaskTimeoutError, TaskWaitTimeoutError
 from mcc_core.runtime.result import RuntimeResult
 from mcc_harness import RuntimeCoordinator, TaskDispatcher
 from mcc_harness.agent import AgentRun
@@ -330,7 +330,7 @@ class TestP0_04:
             runtime_id="quiet-rt",
         )
 
-        with pytest.raises(TaskTimeoutError):
+        with pytest.raises(TaskWaitTimeoutError):
             await dispatcher.wait_for_result(handle, timeout=0.05)
 
         attempt = await store.get_attempt(handle.attempt_id)

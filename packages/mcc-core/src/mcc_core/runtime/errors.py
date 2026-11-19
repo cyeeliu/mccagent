@@ -109,6 +109,40 @@ class WaitTimeoutError(DomainError):
         )
 
 
+class TaskWaitTimeoutError(DomainError):
+    """任务等待超时：调用方等待特定任务结果时超时，Attempt 可能仍在运行。
+
+    与 TaskExecutionTimeoutError 区分：
+    - TaskWaitTimeoutError 表示等待事件/结果超时，不修改 Attempt 执行状态；
+    - TaskExecutionTimeoutError 表示 Attempt 自身运行超时，已到达终态。
+    """
+
+    def __init__(self, task_id: str, timeout: float) -> None:
+        super().__init__(
+            code="task_wait_timeout",
+            message=f"任务等待超时: task={task_id}, timeout={timeout}s",
+            retryable=True,
+            details={"task_id": task_id, "timeout": timeout},
+        )
+
+
+class TaskExecutionTimeoutError(DomainError):
+    """任务执行超时：Attempt 自身运行超过时限，已到达终态。
+
+    与 TaskWaitTimeoutError 区分：
+    - TaskExecutionTimeoutError 表示执行超时，Attempt 标记为 TIMED_OUT；
+    - TaskWaitTimeoutError 表示等待超时，Attempt 状态不变。
+    """
+
+    def __init__(self, attempt_id: str, timeout: float) -> None:
+        super().__init__(
+            code="task_execution_timeout",
+            message=f"任务执行超时: attempt={attempt_id}, timeout={timeout}s",
+            retryable=True,
+            details={"attempt_id": attempt_id, "timeout": timeout},
+        )
+
+
 class RuntimeStopTimeoutError(DomainError):
     """Runtime 停止超时：stop 操作在指定超时内未能完成。
 
@@ -175,6 +209,8 @@ __all__ = [
     "UnsupportedOperationError",
     "RuntimeNotFoundError",
     "TaskTimeoutError",
+    "TaskWaitTimeoutError",
+    "TaskExecutionTimeoutError",
     "WaitTimeoutError",
     "RuntimeStopTimeoutError",
     "TaskNotFoundError",

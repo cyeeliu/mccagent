@@ -369,7 +369,10 @@ def _wire_team(
 
     async_task_store: Any = None
     if task_store is not None:
-        async_task_store = TaskStoreAdapter(task_store)
+        async_task_store = TaskStoreAdapter(
+            task_store,
+            persist_dir=work_dir / ".runtime" / "attempts",
+        )
     else:
         async_task_store = InMemoryTaskStore()
     if coordinator is None:

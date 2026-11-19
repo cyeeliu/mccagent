@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from mcc_core.runtime.enums import TaskStatus
+from mcc_core.runtime.errors import CASConflictError, InvalidTransitionError
 from mcc_core.runtime.result import TokenUsage
 from mcc_core.runtime.task_record import (
     AssignmentStatus,
@@ -32,6 +33,7 @@ _STATUS_TO_ENUM: dict[str, TaskStatus] = {
     "dispatched": TaskStatus.DISPATCHED,
     "accepted": TaskStatus.ACCEPTED,
     "running": TaskStatus.RUNNING,
+    "in_progress": TaskStatus.RUNNING,
     "completed": TaskStatus.SUCCEEDED,
     "succeeded": TaskStatus.SUCCEEDED,
     "failed": TaskStatus.FAILED,
@@ -106,11 +108,13 @@ class TaskStoreAdapter:
         self._task_attempts: dict[str, list[str]] = {}
         self._idempotency_index: dict[str, str] = {}
         self._assignments: dict[str, TaskAssignment] = {}
+        self._task_run_ids: dict[str, str] = {}
         self._lock = asyncio.Lock()
         if persist_dir is not None:
             persist_dir.mkdir(parents=True, exist_ok=True)
             self._load_attempts()
             self._load_assignments()
+            self._load_run_ids()
 
     # -- 持久化 --
 
@@ -137,6 +141,7 @@ class TaskStoreAdapter:
             "output": attempt.output,
             "usage": attempt.usage.to_dict() if attempt.usage else None,
             "cost_usd": attempt.cost_usd,
+            "artifacts": attempt.artifacts,
             "version": attempt.version,
         }
 
@@ -159,6 +164,7 @@ class TaskStoreAdapter:
             output=data.get("output"),
             usage=usage,
             cost_usd=data.get("cost_usd"),
+            artifacts=data.get("artifacts"),
             version=data.get("version", 0),
         )
 
@@ -239,6 +245,24 @@ class TaskStoreAdapter:
         payload = [self._assignment_to_dict(a) for a in self._assignments.values()]
         self._atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
+    def _load_run_ids(self) -> None:
+        if self._persist_dir is None:
+            return
+        path = self._persist_dir / "run_ids.json"
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        self._task_run_ids.update(data)
+
+    def _save_run_ids(self) -> None:
+        if self._persist_dir is None:
+            return
+        path = self._persist_dir / "run_ids.json"
+        self._atomic_write(path, json.dumps(self._task_run_ids, ensure_ascii=False, indent=2))
+
     async def create_task(
         self,
         subject: str,
@@ -249,21 +273,35 @@ class TaskStoreAdapter:
         priority: int = 0,
         max_attempts: int = 3,
     ) -> TaskRecord:
-        task = self._store.create(subject, description)
-        task.max_attempts = max_attempts
-        if blocked_by:
-            task.blockedBy = list(blocked_by)
-        self._store.save(task)
-        return _task_to_record(task)
+        def _sync() -> TaskRecord:
+            task = self._store.create(subject, description)
+            task.max_attempts = max_attempts
+            if blocked_by:
+                task.blockedBy = list(blocked_by)
+            self._store.save(task)
+            return _task_to_record(task)
+
+        record = await asyncio.to_thread(_sync)
+        if run_id is not None:
+            self._task_run_ids[record.task_id] = run_id
+            self._save_run_ids()
+            record.run_id = run_id
+        return record
 
     async def get_task(self, task_id: str) -> TaskRecord | None:
-        try:
-            task = self._store.load(task_id)
-        except Exception:
-            return None
-        if task is None:
-            return None
-        return _task_to_record(task)
+        def _sync() -> TaskRecord | None:
+            try:
+                task = self._store.load(task_id)
+            except Exception:
+                return None
+            if task is None:
+                return None
+            return _task_to_record(task)
+
+        record = await asyncio.to_thread(_sync)
+        if record is not None and record.task_id in self._task_run_ids:
+            record.run_id = self._task_run_ids[record.task_id]
+        return record
 
     async def list_tasks(
         self,
@@ -271,8 +309,16 @@ class TaskStoreAdapter:
         run_id: str | None = None,
         status: TaskStatus | None = None,
     ) -> list[TaskRecord]:
-        tasks = self._store.list()
-        records = [_task_to_record(t) for t in tasks]
+        def _sync() -> list[TaskRecord]:
+            tasks = self._store.list()
+            return [_task_to_record(t) for t in tasks]
+
+        records = await asyncio.to_thread(_sync)
+        for r in records:
+            if r.task_id in self._task_run_ids:
+                r.run_id = self._task_run_ids[r.task_id]
+        if run_id is not None:
+            records = [r for r in records if r.run_id == run_id]
         if status is not None:
             records = [r for r in records if r.status == status]
         return records
@@ -285,19 +331,22 @@ class TaskStoreAdapter:
         *,
         agent_id: str | None = None,
     ) -> TaskRecord:
-        task = self._store.load(task_id)
-        current = _STATUS_TO_ENUM.get(task.status, TaskStatus.PENDING)
-        if current != from_status:
+        def _sync() -> TaskRecord:
+            task = self._store.load(task_id)
+            current = _STATUS_TO_ENUM.get(task.status, TaskStatus.PENDING)
+            if current != from_status:
+                raise CASConflictError(task_id, from_status.value, current.value)
+            new_status_str = _ENUM_TO_STATUS.get(to_status, to_status.value)
+            if new_status_str != task.status:
+                task.status = new_status_str
+                if agent_id is not None:
+                    task.owner_agent_id = agent_id
+                    task.owner = agent_id
+                task.version += 1
+                self._store.save(task)
             return _task_to_record(task)
-        new_status_str = _ENUM_TO_STATUS.get(to_status, to_status.value)
-        if new_status_str != task.status:
-            task.status = new_status_str
-            if agent_id is not None:
-                task.owner_agent_id = agent_id
-                task.owner = agent_id
-            task.version += 1
-            self._store.save(task)
-        return _task_to_record(task)
+
+        return await asyncio.to_thread(_sync)
 
     async def claim_task(
         self,
@@ -306,8 +355,11 @@ class TaskStoreAdapter:
         *,
         lease_seconds: float = 300,
     ) -> TaskRecord:
-        task = self._store.claim(task_id, agent_id)
-        return _task_to_record(task)
+        def _sync() -> TaskRecord:
+            task = self._store.claim(task_id, agent_id, lease_seconds=lease_seconds)
+            return _task_to_record(task)
+
+        return await asyncio.to_thread(_sync)
 
     async def renew_lease(
         self,
@@ -316,11 +368,46 @@ class TaskStoreAdapter:
         *,
         lease_seconds: float = 300,
     ) -> TaskRecord:
-        task = self._store.renew_lease(task_id, agent_id, lease_seconds=lease_seconds)
-        return _task_to_record(task)
+        def _sync() -> TaskRecord:
+            task = self._store.renew_lease(task_id, agent_id, lease_seconds=lease_seconds)
+            return _task_to_record(task)
+
+        return await asyncio.to_thread(_sync)
 
     async def expire_leases(self) -> list[str]:
-        return []
+        """回收过期租约：将 lease_expires_at 已过期且非终态的任务重置为 PENDING。"""
+
+        def _sync() -> list[str]:
+            now = _now()
+            expired: list[str] = []
+            for task in self._store.list():
+                lease = getattr(task, "lease_expires_at", None)
+                if lease is None:
+                    continue
+                lease_dt: datetime | None
+                if isinstance(lease, float | int):
+                    lease_dt = datetime.fromtimestamp(lease, tz=UTC)
+                elif isinstance(lease, datetime):
+                    lease_dt = lease
+                else:
+                    continue
+                if lease_dt < now and task.status in (
+                    "claimed",
+                    "dispatched",
+                    "accepted",
+                    "running",
+                    "in_progress",
+                ):
+                    task.status = "pending"
+                    task.owner_agent_id = None
+                    task.owner = None
+                    task.lease_expires_at = None
+                    task.version += 1
+                    self._store.save(task)
+                    expired.append(task.id)
+            return expired
+
+        return await asyncio.to_thread(_sync)
 
     async def create_attempt(
         self,
@@ -367,6 +454,7 @@ class TaskStoreAdapter:
         output: dict[str, object] | None = None,
         usage: Any | None = None,
         cost_usd: float | None = None,
+        artifacts: dict[str, str] | None = None,
     ) -> TaskAttempt:
         async with self._lock:
             attempt = self._attempts.get(attempt_id)
@@ -374,7 +462,12 @@ class TaskStoreAdapter:
                 raise KeyError(attempt_id)
             attempt.status = AttemptStatus.SUCCEEDED
             attempt.summary = summary
+            attempt.output = output
+            attempt.usage = usage
+            attempt.cost_usd = cost_usd
+            attempt.artifacts = artifacts
             attempt.finished_at = _now()
+            attempt.touch()
             self._save_attempts()
             return attempt
 
@@ -383,14 +476,22 @@ class TaskStoreAdapter:
         attempt_id: str,
         *,
         error: str,
+        status: AttemptStatus = AttemptStatus.FAILED,
     ) -> TaskAttempt:
         async with self._lock:
             attempt = self._attempts.get(attempt_id)
             if attempt is None:
                 raise KeyError(attempt_id)
-            attempt.status = AttemptStatus.FAILED
+            if status not in (
+                AttemptStatus.FAILED,
+                AttemptStatus.TIMED_OUT,
+                AttemptStatus.CANCELLED,
+            ):
+                raise InvalidTransitionError(AttemptStatus.RUNNING.value, status.value)
+            attempt.status = status
             attempt.error = error
             attempt.finished_at = _now()
+            attempt.touch()
             self._save_attempts()
             return attempt
 
