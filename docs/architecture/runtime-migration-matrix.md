@@ -1,8 +1,9 @@
 # Runtime 迁移矩阵
 
 > 基线 commit: `69ded02` (2026-11-16)
-> 完成 commit: `7429d0a` (2026-11-18)
+> 完成 commit: `e565ab6` (2026-11-20)
 > 方案文档: `MCCAgent_AgentRuntime_迁移完善详细执行方案.md`
+> 深度修复方案: `MCCAgent_AgentRuntime_新代码审查与下一阶段详细改造方案.md`
 
 ## 1. 模块迁移映射
 
@@ -155,6 +156,31 @@
 - [x] `runtime-migration-matrix.md` 更新
 - [x] `architecture.md` 更新
 - [x] DoD 验证
+
+### 深度修复 Phase 1-6 — 旧路径消除与幂等闭环
+- [x] P1-01: TeamOrchestrator 不再调用 `submit_task/wait_task` 旧 API
+- [x] P1-02: TaskDispatcher 幂等状态机（PENDING→DISPATCHED→RUNNING→COMPLETED）
+- [x] P1-03: TaskStore `wait` 不隐式取消执行
+- [x] P1-04: `hasattr(runtime, ...)` 兼容分支全部消除
+- [x] P1-05: `run.results` 旧字段访问路径消除
+- [x] P1-06: `_TeammateExecutorAdapter` 旧适配器删除
+- [x] P1-07~P1-10: TeamOrchestrator 任务闭环重构（Phase 6）
+- [x] P1-11: 状态副本消除（TeamOrchestrator 不再持有独立 state dict）
+
+### 深度修复 Phase 7 — 架构守卫验证
+- [x] P1-04/P1-05/P1-06 AST 守卫测试（10 个测试）
+
+### 深度修复 Phase 8 — 生命周期与质量守卫
+- [x] P1-12: CoordinatorState 状态机（OPEN/CLOSING/CLOSED）+ `begin_shutdown` 幂等
+- [x] P1-13: Health 回调去重（RuntimeMonitorState）
+- [x] P1-14: Application STOPPING 准入闸门（ApplicationState 状态机）
+- [x] P1-15: shutdown 超时与错误报告（ApplicationShutdownReport 8 步事务）
+- [x] P2-01: RuntimeCapabilities 从 instance config 读取 max_concurrency/queue_capacity
+- [x] P2-02: AgentExecutor Protocol 统一 `execute(task, *, emit, cancellation)` 签名
+- [x] P2-03: RuntimeTask 完整校验（空白/超时/时区/JSON/长度/控制字符）
+- [x] P2-04: RuntimeEvent 关联字段（correlation_id/causation_id/result_ref/schema_version/trace_id/parent_event_id）
+- [x] P2-05: 架构 AST 守卫（Phase 8 新增 33 个测试）
+- [x] P2-06: 文档校准（runtime-current-state.md / runtime-migration-matrix.md）
 
 ## 4. DoD 验证结果
 

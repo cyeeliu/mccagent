@@ -1,8 +1,9 @@
 # Runtime 架构当前状态
 
-> 最新 commit: `67476c8` (2026-11-19)
+> 最新 commit: `e565ab6` (2026-11-20)
 > 迁移完成日期: 2026-11-18
-> P2 收尾日期: 2026-11-19
+> P2 收尾日期: 2026-11-20
+> Phase 7-8 深度修复: 2026-11-20（P1-11 状态副本消除 + P1-04/05/06 旧引擎拆除 + P1-12~15 生命周期 + P2-01~06 质量收尾）
 
 ## 1. 执行体系总览
 
@@ -105,10 +106,12 @@ mcc-harness/src/mcc_harness/runtime/
 ## 5. RuntimeCoordinator
 
 Runtime 生命周期唯一管理中心：
-- 事务注册：注册失败无半注册对象
-- 退出监听：`on_runtime_finished` 回调
-- 健康检查：`health_check_all()`
-- 统一关闭：`shutdown_all(timeout)`
+- 状态机：`OPEN → CLOSING → CLOSED`（P1-12）
+- 事务注册：`register_and_start` 锁内检查→锁外启动→锁内确认，失败回滚
+- `begin_shutdown`：切换 CLOSING，禁止新注册（供 Application admission gate 调用）
+- 健康监控：`RuntimeMonitorState` 去重，HEALTHY→UNHEALTHY 只触发一次故障回调（P1-13）
+- 退出监听：`on_exit` 回调，Runtime 到达终态时触发
+- 统一关闭：`shutdown_all(timeout)` 幂等，聚合异常，按优先级排序
 
 ## 6. TaskDispatcher / TaskStore
 
@@ -125,8 +128,9 @@ Runtime 生命周期唯一管理中心：
 `team/orchestrator.py` 编排层：
 - 依赖 Store / Scheduler / Dispatcher，不直接创建 AgentLoop
 - 通过 `TaskDispatcher.dispatch()` 派发正式任务
-- 无 dispatcher 时回退到 `runtime.submit_task/wait_task`（PersistentRuntimeV2 公开 API）
-- 无 `hasattr` 兼容分支
+- 不调用 `submit_task/wait_task`（Phase 6 已删除旧路径，AST 守卫验证）
+- 不使用 `hasattr` 兼容分支（AST 守卫验证）
+- 结果通过 `_aggregate_results` 从 TaskStore 聚合，不读 `run.results` 内存副本（P1-11）
 
 ## 8. TeammateManager
 
@@ -138,10 +142,13 @@ Runtime 生命周期唯一管理中心：
 ## 9. CLI 装配
 
 `mcc-cli/wiring.py` 作为 Composition Root：
-- 通过 `DefaultAgentFactory` 创建 Runtime
+- 通过 `DefaultAgentFactory` 创建 Runtime（P1-06：`create_runtime`/`create_executor` 从 AgentDefinition 装配）
 - 通过 `RuntimeCoordinator` 注册 Runtime
 - 显式构造 `AgentApplication` 并注入 `AgentEventSource`
 - `AgentApplication` 作为团队操作统一入口
+- Application 状态机：`CREATED → RUNNING → STOPPING → STOPPED`（P1-14）
+- shutdown 8 步事务：admission gate → team manager → cancel all → stop runtimes → MCP → event source → clear terminal → report（P1-15）
+- 并发 shutdown 共享同一 task，总 timeout 作为整体 deadline
 
 ## 10. 已删除的旧架构
 
@@ -153,33 +160,42 @@ Runtime 生命周期唯一管理中心：
 | `hasattr(runtime, "submit_task")` 兼容分支 | `dbf120a` | `TaskDispatcher` 派发 |
 | `kind="assignment"` 消息派发 | `07e342b` | `kind="task_submitted"` |
 | V2 feature flag | `f2c9125` | V2 为唯一实现 |
+| `_TeammateExecutorAdapter` | Phase 7 | `PersistentRuntimeV2.from_executor` |
+| `TeamOrchestrator.submit_task/wait_task` | Phase 6 | `TaskDispatcher.dispatch/wait_for_result` |
+| `TeamRun.results` 独立可写状态副本 | Phase 7 (P1-11) | `_aggregate_results` 从 TaskStore 聚合 |
 
 ## 11. 保留的适配层
 
 | 适配层 | 说明 |
 |--------|------|
 | `AgentLoopExecutor` | 将 `AgentLoop` 封装为 `AgentExecutor`，InteractiveRuntimeV2 使用 |
-| `SubagentExecutor` | 将 `SubagentRunner` 封装为 `AgentExecutor`，TaskRuntime 使用 |
-| `TeammateRuntime` | Teammate 规格容器，执行委托给 PersistentRuntimeV2 |
-| `SubagentRunner` | 子代理工具（`SpawnSubagentTool`）的执行引擎 |
+| `SubagentExecutor` | 优先使用 `agent_factory` 装配路径，`SubagentRunner.run` 仅作回退（P1-05） |
+| `TeammateDefinition` / `TeammateMessageAdapter` / `TeammateExecutionService` | 从 TeammateRuntime 提取的职责分离组件（P1-04） |
+| `SubagentRunner` | 子代理工具（`SpawnSubagentTool`）的执行引擎，SubagentExecutor 优先走 Factory 路径 |
 
 ## 12. P2 收尾完成状态
 
-以下各项在 P0/P1/P2 阶段已完成，文档据此校准：
+以下各项在 Phase 1-8 阶段已完成，文档据此校准：
 
-| 项目 | 状态 | 说明 |
-|------|------|------|
-| 统一 Protocol | 已完成 | `AgentRuntime` / `AgentExecutor` / `AgentFactory` 统一契约 |
-| Runtime 实现 | 已完成 | `InteractiveRuntimeV2` / `TaskRuntime` / `PersistentRuntimeV2` |
-| 旧执行器 | 仍通过 Adapter 运行 | `AgentLoopExecutor` / `SubagentExecutor` 适配层保留 |
-| Attempt/Assignment 持久化 | 已完成 | TaskStore 写入 Attempt 结果（P1-01） |
-| TeamRun 状态恢复 | 已完成 | TeamRun 状态机可从持久化恢复（P1-11） |
-| Dispatcher 结果闭环 | 已完成 | TaskDispatcher 派发 → 执行 → 写入 Store → 返回结果（P0-03） |
-| RuntimeCapabilities 实例化 | 已完成 | PersistentRuntimeV2 从实例配置生成 capabilities（P2-01） |
-| AgentExecutor 协议统一 | 已完成 | emit/cancellation 可选参数，所有 Runtime 统一传参（P2-02） |
-| RuntimeTask 校验 | 已完成 | timeout/时区/序列化/格式/长度校验（P2-03） |
-| RuntimeEvent 关联字段 | 已完成 | causation_id/result_ref/schema_version/trace_id/parent_event_id（P2-04） |
-| 架构 AST 规则 | 已完成 | 禁止 submit_task/wait_task/hasattr 能力探测（P2-05） |
+| 项目 | 状态 | 完成阶段 | 说明 |
+|------|------|----------|------|
+| 统一 Protocol | 已完成 | Phase 1 | `AgentRuntime` / `AgentExecutor` / `AgentFactory` 统一契约 |
+| Runtime 实现 | 已完成 | Phase 1 | `InteractiveRuntimeV2` / `TaskRuntime` / `PersistentRuntimeV2` |
+| 旧执行引擎拆除 | 已完成 | Phase 7 | `_TeammateExecutorAdapter` 已删除，SubagentExecutor 优先走 Factory 路径（P1-04/05） |
+| AgentFactory 完善 | 已完成 | Phase 7 | `create_runtime`/`create_executor` 从 AgentDefinition 装配（P1-06） |
+| Attempt/Assignment 持久化 | 已完成 | Phase 1 | TaskStore 写入 Attempt 结果（P1-01） |
+| TeamRun 状态恢复 | 已完成 | Phase 7 | `_aggregate_results` 从 TaskStore 聚合，不读内存副本（P1-11） |
+| Dispatcher 结果闭环 | 已完成 | Phase 2 | TaskDispatcher 派发 → 执行 → 写入 Store → 返回结果（P0-03） |
+| Coordinator 状态机 | 已完成 | Phase 8 | OPEN/CLOSING/CLOSED + 注册事务（P1-12） |
+| 健康回调去重 | 已完成 | Phase 8 | RuntimeMonitorState 去重（P1-13） |
+| Application admission gate | 已完成 | Phase 8 | STOPPING 状态 + begin_shutdown 第一步（P1-14） |
+| shutdown 错误报告 | 已完成 | Phase 8 | ApplicationShutdownReport 8 步事务（P1-15） |
+| RuntimeCapabilities 实例化 | 已完成 | Phase 8 | PersistentRuntimeV2 从实例配置生成 capabilities（P2-01） |
+| AgentExecutor 协议统一 | 已完成 | Phase 8 | emit/cancellation 可选参数，所有 Runtime 统一传参（P2-02） |
+| RuntimeTask 校验 | 已完成 | Phase 8 | timeout/时区/序列化/格式/长度/控制字符校验（P2-03） |
+| RuntimeEvent 关联字段 | 已完成 | Phase 8 | correlation_id/causation_id/result_ref/schema_version/trace_id/parent_event_id（P2-04） |
+| 架构 AST 规则 | 已完成 | Phase 8 | 禁止 submit_task/wait_task/hasattr 能力探测/AgentLoop 构造/反向依赖（P2-05） |
+| 文档校准 | 已完成 | Phase 8 | 本文档与实际代码一致（P2-06） |
 
-注意：旧执行引擎未完全删除，仍通过 Adapter 层运行。类名替换完成不等于
-执行引擎删除完成。后续阶段可逐步将执行逻辑内联到 Executor，移除 Adapter。
+Phase 1-8 全部完成。生产 wiring 走正确路径，旧执行引擎已拆除，
+状态副本已消除，生命周期状态机完整，架构 AST 守卫覆盖关键禁止模式。
