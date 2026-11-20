@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -33,6 +34,15 @@ from mcc_core.runtime.errors import (
 from mcc_core.runtime.handle import TaskHandle as TaskHandleType
 from mcc_core.runtime.result import RuntimeResult
 from mcc_core.runtime.task import RuntimeTask
+
+
+@dataclass
+class RunningExecution:
+    """追踪 submit 创建的后台执行：asyncio.Task 与取消令牌。"""
+
+    attempt_id: str
+    task: asyncio.Task[None]
+    cancel_token: Any
 
 
 class TaskRuntime:
@@ -66,6 +76,7 @@ class TaskRuntime:
         self._event_listeners: list[asyncio.Queue[RuntimeEvent | None]] = []
         self._cancel_tokens: dict[str, Any] = {}
         self._results: dict[str, RuntimeResult] = {}
+        self._running: dict[str, RunningExecution] = {}
         self._lock = asyncio.Lock()
 
     @property
@@ -113,13 +124,18 @@ class TaskRuntime:
             task_id=task.task_id,
             attempt_id=task.attempt_id,
         )
-        asyncio.create_task(self._execute(task))
-        return handle
-
-    async def _execute(self, task: RuntimeTask) -> None:
         from mcc_harness.execution.cancellation import CancellationToken
 
         cancel_token = CancellationToken()
+        bg_task = asyncio.create_task(self._execute(task, cancel_token))
+        self._running[task.attempt_id] = RunningExecution(
+            attempt_id=task.attempt_id,
+            task=bg_task,
+            cancel_token=cancel_token,
+        )
+        return handle
+
+    async def _execute(self, task: RuntimeTask, cancel_token: Any) -> None:
         self._cancel_tokens[task.task_id] = cancel_token
 
         await self._emit(
@@ -181,6 +197,7 @@ class TaskRuntime:
         finally:
             self._cancel_tokens.pop(task.task_id, None)
             self._active_tasks -= 1
+            self._running.pop(task.attempt_id, None)
 
     async def _write_result_to_store(self, task: RuntimeTask, result: RuntimeResult) -> None:
         """将 RuntimeResult 写入 TaskStore（P0-03）。"""
@@ -210,6 +227,12 @@ class TaskRuntime:
         token = self._cancel_tokens.get(task_id)
         if token is not None:
             token.cancel(reason)
+        running = self._running.get(attempt_id)
+        if running is not None and not running.task.done():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.shield(running.task), timeout=2.0
+                )
         await self._emit(
             RuntimeEventType.TASK_CANCELLED,
             task_id=task_id,
@@ -236,6 +259,24 @@ class TaskRuntime:
         if cancel_running:
             for token in self._cancel_tokens.values():
                 token.cancel("runtime stopping")
+        if self._running:
+            stop_timeout = timeout or 5.0
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        *[e.task for e in self._running.values()],
+                        return_exceptions=True,
+                    ),
+                    timeout=stop_timeout,
+                )
+            except TimeoutError:
+                for e in self._running.values():
+                    if not e.task.done():
+                        e.task.cancel()
+                await asyncio.gather(
+                    *[e.task for e in self._running.values()],
+                    return_exceptions=True,
+                )
         if hasattr(self._executor, "close"):
             await self._executor.close()
         self._status = RuntimeStatus.STOPPED
