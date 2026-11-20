@@ -41,6 +41,7 @@ class WorkerPool:
         self._workers: list[asyncio.Task] = []
         self._started = False
         self._stop_event = asyncio.Event()
+        self._cancellations: dict[str, Any] = {}
 
     @property
     def max_workers(self) -> int:
@@ -156,17 +157,19 @@ class WorkerPool:
             if future.done():
                 self._queue.task_done()
                 continue
+            attempt_id = getattr(task, "attempt_id", None)
+            cancellation = self._cancellations.get(attempt_id) if attempt_id else None
             try:
                 if self._on_event is not None:
                     await self._on_event(
                         "task_started",
                         task_id=getattr(task, "task_id", None),
-                        attempt_id=getattr(task, "attempt_id", None),
+                        attempt_id=attempt_id,
                     )
                 result = await self._executor.execute(
                     task,
                     emit=None,
-                    cancellation=None,
+                    cancellation=cancellation,
                 )
                 if not future.done():
                     future.set_result(result)
@@ -205,6 +208,8 @@ class WorkerPool:
                         payload={"error": str(exc)},
                     )
             finally:
+                if attempt_id is not None:
+                    self._cancellations.pop(attempt_id, None)
                 self._queue.task_done()
 
 

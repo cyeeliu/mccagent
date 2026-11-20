@@ -129,6 +129,7 @@ class PersistentRuntimeV2:
         self._event_listeners: list[asyncio.Queue] = []
         self._pending_sends: set[asyncio.Task] = set()
         self._task_futures: dict[str, asyncio.Future] = {}
+        self._executions: dict[str, Any] = {}
 
         self._teammate: Any = None
         self._bus: Any = None
@@ -214,6 +215,8 @@ class PersistentRuntimeV2:
         await self._emit(RuntimeEventType.RUNTIME_READY)
 
     async def submit(self, task: Any) -> Any:
+        from mcc_harness.execution.cancellation import CancellationToken
+
         handle = TaskHandle(
             task_id=task.task_id,
             attempt_id=task.attempt_id,
@@ -224,6 +227,9 @@ class PersistentRuntimeV2:
             task_id=task.task_id,
             attempt_id=task.attempt_id,
         )
+        cancel_token = CancellationToken()
+        self._executions[task.attempt_id] = cancel_token
+        self._worker_pool._cancellations[task.attempt_id] = cancel_token
         future = await self._queue.put(task)
         self._task_futures[task.task_id] = future
         return handle
@@ -256,6 +262,9 @@ class PersistentRuntimeV2:
         attempt_id: str,
         reason: str | None = None,
     ) -> None:
+        cancel_token = self._executions.get(attempt_id)
+        if cancel_token is not None:
+            cancel_token.cancel(reason)
         future = self._task_futures.get(task_id)
         if future is not None and not future.done():
             future.cancel()
@@ -423,6 +432,8 @@ class PersistentRuntimeV2:
 
     async def submit_task(self, task: str, *, task_id: str | None = None) -> str:
         """兼容 V1 接口：提交任务并返回 task_id。"""
+        from mcc_harness.execution.cancellation import CancellationToken
+
         tid = task_id or f"task::{uuid4().hex[:12]}"
         rt_task = RuntimeTask(
             task_id=tid,
@@ -430,6 +441,9 @@ class PersistentRuntimeV2:
             agent_id=self._agent_id,
             objective=task,
         )
+        cancel_token = CancellationToken()
+        self._executions[rt_task.attempt_id] = cancel_token
+        self._worker_pool._cancellations[rt_task.attempt_id] = cancel_token
         future = await self._queue.put(rt_task)
         self._task_futures[tid] = future
         return tid
