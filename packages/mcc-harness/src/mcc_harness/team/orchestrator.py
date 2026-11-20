@@ -429,7 +429,7 @@ class SimpleResultCollector:
         run = self._orch._runs.get(run_id)
         if run is None:
             raise RunNotFoundError(f"unknown run: {run_id}")
-        results = tuple(run.results)
+        results = self._orch._aggregate_results(run)
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
             1 for r in results if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
@@ -1098,15 +1098,25 @@ class TeamOrchestrator:
         return self._coordinator.get(runtime_id)
 
     def _check_run_completion(self, run: TeamRun) -> None:
-        """检查是否所有任务已完成，更新 TeamRun 终态。"""
+        """检查是否所有任务已完成，更新 TeamRun 终态。
+
+        通过 _aggregate_results 从 TaskStore 聚合结果（唯一事实来源），
+        只检查终态结果（completed/failed/timeout/cancelled/budget_exceeded），
+        非终态 task 不参与判定，避免提前误判。
+        """
         total = len(run.task_ids)
         if total == 0:
             return
-        result_task_ids = {r.task_id for r in run.results}
+        results = self._aggregate_results(run)
+        terminal_statuses = frozenset(
+            {"completed", "failed", "timeout", "cancelled", "budget_exceeded"}
+        )
+        terminal_results = [r for r in results if r.status in terminal_statuses]
+        result_task_ids = {r.task_id for r in terminal_results}
         expected_task_ids = run.task_ids
         if not expected_task_ids.issubset(result_task_ids):
             return
-        failed = any(r.status != "completed" for r in run.results)
+        failed = any(r.status != "completed" for r in terminal_results)
         if failed:
             run.status = TeamRunStatus.FAILED
             run.finished_at = time.time()
@@ -1137,10 +1147,15 @@ class TeamOrchestrator:
 
         无 TaskStore 时 fallback 到 run.results 内存副本。
         summary / cost_usd 不在 TaskStore 中，从 run.results 缓存补充。
+        当 TaskStore 状态非终态（如 pending）但缓存有终态结果时，
+        使用缓存结果（处理 TaskStore 写入失败的边界情况）。
         """
         if self._task_store is None:
             return tuple(run.results)
 
+        terminal_statuses = frozenset(
+            {"completed", "failed", "timeout", "cancelled", "budget_exceeded"}
+        )
         cache: dict[str, AgentResult] = {r.task_id: r for r in run.results}
         results: list[AgentResult] = []
         for tid in run.task_ids:
@@ -1152,16 +1167,32 @@ class TeamOrchestrator:
                     results.append(cached)
                 continue
             cached = cache.get(tid)
-            results.append(
-                AgentResult(
-                    agent_id=task.owner_agent_id or task.owner or "",
-                    task_id=task.id,
-                    status=task.status,
-                    summary=cached.summary if cached else "",
-                    error=task.error,
-                    cost_usd=cached.cost_usd if cached else 0.0,
+            # TaskStore 终态 → 以 TaskStore 为准
+            if task.status in terminal_statuses:
+                results.append(
+                    AgentResult(
+                        agent_id=task.owner_agent_id or task.owner or "",
+                        task_id=task.id,
+                        status=task.status,
+                        summary=cached.summary if cached else "",
+                        error=task.error,
+                        cost_usd=cached.cost_usd if cached else 0.0,
+                    )
                 )
-            )
+            elif cached is not None and cached.status in terminal_statuses:
+                # TaskStore 非终态但缓存有终态 → 使用缓存（TaskStore 写入失败）
+                results.append(cached)
+            else:
+                results.append(
+                    AgentResult(
+                        agent_id=task.owner_agent_id or task.owner or "",
+                        task_id=task.id,
+                        status=task.status,
+                        summary=cached.summary if cached else "",
+                        error=task.error,
+                        cost_usd=cached.cost_usd if cached else 0.0,
+                    )
+                )
         return tuple(results)
 
     def progress(self, run_id: str) -> TeamProgress:
