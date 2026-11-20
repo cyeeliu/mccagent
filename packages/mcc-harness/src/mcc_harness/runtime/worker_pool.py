@@ -121,15 +121,24 @@ class WorkerPool:
                 if not future.done():
                     future.set_result(result)
                 if self._on_event is not None:
-                    event_type = "task_completed" if result.is_success else "task_failed"
+                    from mcc_harness.runtime.event_payload import (
+                        build_result_payload,
+                        result_event_type,
+                    )
+
+                    event_type = result_event_type(result)
+                    task_id = getattr(task, "task_id", None)
+                    attempt_id = getattr(task, "attempt_id", None)
+                    payload = build_result_payload(
+                        task_id or "",
+                        attempt_id or "",
+                        result,
+                    )
                     await self._on_event(
-                        event_type,
-                        task_id=getattr(task, "task_id", None),
-                        attempt_id=getattr(task, "attempt_id", None),
-                        payload={
-                            "summary": result.summary,
-                            "error": str(result.error) if result.error else None,
-                        },
+                        event_type.value,
+                        task_id=task_id,
+                        attempt_id=attempt_id,
+                        payload=payload,
                     )
             except asyncio.CancelledError:
                 if not future.done():

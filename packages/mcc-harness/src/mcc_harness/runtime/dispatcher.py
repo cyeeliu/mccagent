@@ -15,6 +15,7 @@ TaskDispatcher 负责：
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -27,6 +28,7 @@ from mcc_core.runtime import (
     TaskHandle,
     TaskStatus,
     TaskStoreProtocol,
+    TokenUsage,
 )
 from mcc_core.runtime.task_record import (
     AttemptStatus,
@@ -198,10 +200,11 @@ class TaskDispatcher:
     ) -> RuntimeEvent:
         """等待任务完成，返回完成事件。
 
-        先查 TaskStore：若 attempt 已终态，直接返回合成事件（不依赖事件流）。
+        P0-01: 先订阅事件流（注册 listener），再查 TaskStore，消除竞态窗口。
+        若 attempt 已终态，直接返回合成事件（不依赖事件流）。
         否则监听 Runtime 事件流，直到收到 TASK_COMPLETED / TASK_FAILED /
         TASK_CANCELLED / TASK_TIMED_OUT 事件。
-        超时仅抛 TaskTimeoutError，不修改 attempt 状态。
+        超时仅抛 TaskWaitTimeoutError，不修改 attempt 状态。
         """
         runtime = self._coordinator.get(handle.runtime_id)
         if runtime is None:
@@ -209,19 +212,30 @@ class TaskDispatcher:
                 f"runtime not found: {handle.runtime_id}",
             )
 
-        # P0-01: 先查 TaskStore，若已终态直接返回合成事件
-        attempt = await self._store.get_attempt(handle.attempt_id)
-        if attempt is not None and attempt.is_terminal:
-            return self._synthetic_event(handle, attempt)
-
+        # P0-01: 先订阅事件流，再查 TaskStore，消除竞态窗口
         event_iter = runtime.subscribe_events(
             task_id=handle.task_id,
             attempt_id=handle.attempt_id,
         )
 
+        priming: asyncio.Task | None = None
         try:
+            # Prime generator 以确保 listener 注册到 runtime 的事件队列
+            priming = asyncio.ensure_future(event_iter.__anext__())
+            await asyncio.sleep(0)  # 让 priming 执行到 queue.get() 挂起
 
+            # listener 已注册，安全查 TaskStore
+            attempt = await self._store.get_attempt(handle.attempt_id)
+            if attempt is not None and attempt.is_terminal:
+                return self._synthetic_event(handle, attempt)
+
+            # 未终态，等待事件
             async def _wait() -> RuntimeEvent:
+                # priming 可能已拿到事件
+                first_event = await priming
+                if first_event.event_type in _TASK_DONE_EVENTS:
+                    await self._record_result(handle, first_event)
+                    return first_event
                 async for event in event_iter:
                     if event.event_type in _TASK_DONE_EVENTS:
                         await self._record_result(handle, event)
@@ -238,6 +252,13 @@ class TaskDispatcher:
             from mcc_core.runtime.errors import TaskWaitTimeoutError
 
             raise TaskWaitTimeoutError(handle.task_id, timeout or 0.0) from None
+        finally:
+            if priming is not None and not priming.done():
+                priming.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await priming
+            with contextlib.suppress(Exception):
+                await event_iter.aclose()
 
     def _synthetic_event(
         self,
@@ -274,16 +295,22 @@ class TaskDispatcher:
         """将结果写入 TaskStore。
 
         若 attempt 已终态（Runtime 已写入完整结果），则跳过不覆盖。
+        从事件 payload 读取完整字段（output / usage / cost_usd）（P0-03）。
         """
         attempt = await self._store.get_attempt(handle.attempt_id)
         if attempt is not None and attempt.is_terminal:
             return
 
         if event.event_type is RuntimeEventType.TASK_COMPLETED:
+            usage = self._payload_usage(event.payload)
+            cost_raw = event.payload.get("cost_usd")
+            cost = float(cost_raw) if cost_raw is not None else None
             await self._store.complete_attempt(
                 handle.attempt_id,
                 summary=str(event.payload.get("summary", "")),
                 output=event.payload.get("output"),
+                usage=usage,
+                cost_usd=cost,
             )
         elif event.event_type is RuntimeEventType.TASK_FAILED:
             await self._store.fail_attempt(
@@ -302,6 +329,21 @@ class TaskDispatcher:
                 error="timed out",
                 status=AttemptStatus.TIMED_OUT,
             )
+
+    @staticmethod
+    def _payload_usage(
+        payload: dict[str, object],
+    ) -> TokenUsage | None:
+        """从 payload 中的 usage dict 重建 TokenUsage（P0-03）。"""
+        raw = payload.get("usage")
+        if raw is None or not isinstance(raw, dict):
+            return None
+        return TokenUsage(
+            input_tokens=int(raw.get("input_tokens", 0)),
+            output_tokens=int(raw.get("output_tokens", 0)),
+            cache_creation_input_tokens=int(raw.get("cache_creation_input_tokens", 0)),
+            cache_read_input_tokens=int(raw.get("cache_read_input_tokens", 0)),
+        )
 
     async def retry(
         self,

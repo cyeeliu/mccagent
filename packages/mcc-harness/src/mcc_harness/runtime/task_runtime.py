@@ -137,14 +137,13 @@ class TaskRuntime:
             self._results[task.task_id] = result
             if self._task_store is not None:
                 await self._write_result_to_store(task, result)
-            event_type = (
-                RuntimeEventType.TASK_COMPLETED
-                if result.is_success
-                else RuntimeEventType.TASK_FAILED
+            from mcc_harness.runtime.event_payload import (
+                build_result_payload,
+                result_event_type,
             )
-            payload: dict[str, object] = {"status": str(result.status)}
-            if result.summary:
-                payload["summary"] = result.summary
+
+            event_type = result_event_type(result)
+            payload = build_result_payload(task.task_id, task.attempt_id, result)
             await self._emit(
                 event_type,
                 task_id=task.task_id,

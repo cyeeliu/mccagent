@@ -148,12 +148,15 @@ class InteractiveRuntimeV2:
             )
             if self._task_store is not None:
                 await self._write_result_to_store(task, result)
-            event_type = "task_completed" if result.is_success else "task_failed"
-            payload: dict[str, object] = {"status": str(result.status)}
-            if result.summary:
-                payload["summary"] = result.summary
+            from mcc_harness.runtime.event_payload import (
+                build_result_payload,
+                result_event_type,
+            )
+
+            event_type = result_event_type(result)
+            payload = build_result_payload(task.task_id, task.attempt_id, result)
             await self._emit_event(
-                event_type,
+                event_type.value,
                 task_id=task.task_id,
                 attempt_id=task.attempt_id,
                 payload=payload,
