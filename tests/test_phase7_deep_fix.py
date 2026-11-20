@@ -189,7 +189,7 @@ async def test_check_completion_uses_taskstore_failed(orchestrator: TeamOrchestr
     run.finished_at = None
     run.error = None
 
-    orchestrator._check_run_completion(run)
+    await orchestrator._check_run_completion(run)
 
     assert run.status == TeamRunStatus.FAILED, (
         f"expected FAILED from TaskStore terminal state, got {run.status.value}"
@@ -222,7 +222,7 @@ async def test_check_completion_ignores_non_terminal(orchestrator: TeamOrchestra
     run.status = TeamRunStatus.RUNNING
     run.finished_at = None
     run.error = None
-    orchestrator._check_run_completion(run)
+    await orchestrator._check_run_completion(run)
 
     assert run.status == TeamRunStatus.RUNNING, (
         f"expected RUNNING (not all tasks terminal), got {run.status.value}"

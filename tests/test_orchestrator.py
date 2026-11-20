@@ -618,7 +618,7 @@ class TestQueryRun:
         register_agents(orchestrator, count=2)
         team = make_team(orchestrator)
         run = await orchestrator.start(team, "task A\ntask B")
-        prog = orchestrator.progress(run.run_id)
+        prog = await orchestrator.progress(run.run_id)
         assert prog.status == TeamRunStatus.RUNNING
         assert prog.total_tasks == 2
         assert prog.completed_tasks == 0
@@ -633,7 +633,7 @@ class TestQueryRun:
         tid = sorted(run.task_ids)[0]
         aid = sorted(run.agent_ids)[0]
         await orchestrator.complete_task(run.run_id, aid, tid, summary="ok")
-        prog = orchestrator.progress(run.run_id)
+        prog = await orchestrator.progress(run.run_id)
         assert prog.completed_tasks == 1
         assert prog.is_terminal
 
@@ -717,7 +717,7 @@ class TestEndToEnd:
                 summary=f"模块{i + 1}完成",
             )
         assert run.status == TeamRunStatus.COMPLETED
-        prog = orch.progress(run.run_id)
+        prog = await orch.progress(run.run_id)
         assert prog.completed_tasks == 3
         assert prog.failed_tasks == 0
         result = await orch.collect_results(run.run_id)
@@ -743,7 +743,7 @@ class TestEndToEnd:
             error="执行失败",
         )
         assert run.status == TeamRunStatus.FAILED
-        prog = orch.progress(run.run_id)
+        prog = await orch.progress(run.run_id)
         assert prog.completed_tasks == 1
         assert prog.failed_tasks == 1
 
@@ -1955,7 +1955,7 @@ class TestOrchestratorCollectFromTaskStore:
         # 篡改内存副本
         run.results.clear()
 
-        prog = orch.progress(run.run_id)
+        prog = await orch.progress(run.run_id)
         assert prog.completed_tasks == 1
         assert prog.failed_tasks == 1
 

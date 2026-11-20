@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from mcc_core.runtime import RuntimeEventType, TaskHandle
+from mcc_core.runtime import RuntimeEventType, TaskHandle, TaskStatus, TaskStoreProtocol
 from mcc_core.runtime.errors import TaskTimeoutError, TaskWaitTimeoutError
 from mcc_core.runtime.task_record import AttemptStatus
 
@@ -75,6 +75,13 @@ _TERMINAL_RUN_STATUSES = frozenset(
         TeamRunStatus.SHUTDOWN,
     }
 )
+
+_TASK_STATUS_TO_RESULT: dict[TaskStatus, str] = {
+    TaskStatus.SUCCEEDED: "completed",
+    TaskStatus.FAILED: "failed",
+    TaskStatus.CANCELLED: "cancelled",
+    TaskStatus.TIMED_OUT: "timeout",
+}
 
 
 class OrchestratorError(RuntimeError):
@@ -429,7 +436,7 @@ class SimpleResultCollector:
         run = self._orch._runs.get(run_id)
         if run is None:
             raise RunNotFoundError(f"unknown run: {run_id}")
-        results = self._orch._aggregate_results(run)
+        results = await self._orch._aggregate_results(run)
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
             1 for r in results if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
@@ -469,11 +476,13 @@ class TeamOrchestrator:
         planner: Planner | None = None,
         scheduler: TaskScheduler | None = None,
         coordinator: RuntimeCoordinator | None = None,
+        async_task_store: TaskStoreProtocol | None = None,
     ) -> None:
         self._registry = registry
         self._bus = bus
         self._plan_store = plan_store
         self._task_store = task_store
+        self._async_task_store = async_task_store
         self._budget = budget
         self._planner = planner or SimplePlanner()
         self._scheduler = scheduler or CapabilityScheduler()
@@ -500,6 +509,10 @@ class TeamOrchestrator:
     @property
     def task_store(self) -> Any | None:
         return self._task_store
+
+    @property
+    def async_task_store(self) -> TaskStoreProtocol | None:
+        return self._async_task_store
 
     @property
     def dispatcher(self) -> TaskDispatcher:
@@ -638,7 +651,14 @@ class TeamOrchestrator:
         for assignment in assignments:
             run.assignments.append(assignment)
             run.agent_ids.add(assignment.agent_id)
-            if assignment.task_id and self._task_store is not None:
+            if assignment.task_id and self._async_task_store is not None:
+                with contextlib.suppress(Exception):
+                    await self._async_task_store.claim_task(
+                        assignment.task_id,
+                        assignment.agent_id,
+                        lease_seconds=run.team.policy.task_lease_secs,
+                    )
+            elif assignment.task_id and self._task_store is not None:
                 with contextlib.suppress(Exception):
                     self._task_store.claim(assignment.task_id, assignment.agent_id)
 
@@ -649,9 +669,19 @@ class TeamOrchestrator:
 
         无 TaskStore 时生成唯一占位 ID。
         """
+        if self._async_task_store is not None:
+            task_ids: list[str] = []
+            for spec in specs:
+                task = await self._async_task_store.create_task(
+                    subject=spec.subject,
+                    description=spec.description,
+                    priority=spec.priority,
+                )
+                task_ids.append(task.task_id)
+            return task_ids
         if self._task_store is None:
             return [f"task_{i:04d}" for i in range(len(specs))]
-        task_ids: list[str] = []
+        task_ids = []
         for spec in specs:
             task = self._task_store.create(
                 subject=spec.subject,
@@ -721,7 +751,14 @@ class TeamOrchestrator:
                 "cancel",
                 kind="cancel",
             )
-        if self._task_store is not None:
+        if self._async_task_store is not None:
+            for task_id in run.task_ids:
+                if task_id:
+                    with contextlib.suppress(Exception):
+                        await self._async_transition_to_terminal(
+                            task_id, TaskStatus.CANCELLED,
+                        )
+        elif self._task_store is not None:
             for task_id in run.task_ids:
                 if task_id:
                     with contextlib.suppress(Exception):
@@ -794,7 +831,20 @@ class TeamOrchestrator:
         )
         run.results.append(result)
 
-        if self._task_store is not None and task_id:
+        if self._async_task_store is not None and task_id:
+            try:
+                target = TaskStatus.SUCCEEDED if error is None else TaskStatus.FAILED
+                await self._async_transition_to_terminal(
+                    task_id, target, agent_id=agent_id,
+                )
+            except Exception:
+                logger.warning(
+                    "async task_store update failed for task %s (agent %s)",
+                    task_id,
+                    agent_id,
+                    exc_info=True,
+                )
+        elif self._task_store is not None and task_id:
             try:
                 if error is None:
                     self._task_store.complete(task_id, agent_id)
@@ -808,7 +858,7 @@ class TeamOrchestrator:
                     exc_info=True,
                 )
 
-        self._check_run_completion(run)
+        await self._check_run_completion(run)
         return run
 
     async def execute_run(self, run_id: str) -> TeamRun:
@@ -953,7 +1003,10 @@ class TeamOrchestrator:
                             outcome = "succeeded"
                             return
                         if attempt < max_attempts:
-                            if self._task_store and assignment.task_id:
+                            if self._async_task_store is not None and assignment.task_id:
+                                with contextlib.suppress(Exception):
+                                    await self._async_retry_task(assignment.task_id)
+                            elif self._task_store and assignment.task_id:
                                 with contextlib.suppress(Exception):
                                     self._task_store.retry(assignment.task_id)
                             continue
@@ -968,7 +1021,10 @@ class TeamOrchestrator:
                             )
                     except (WaitTimeoutError, TaskTimeoutError, TaskWaitTimeoutError):
                         if attempt < max_attempts:
-                            if self._task_store and assignment.task_id:
+                            if self._async_task_store is not None and assignment.task_id:
+                                with contextlib.suppress(Exception):
+                                    await self._async_retry_task(assignment.task_id)
+                            elif self._task_store and assignment.task_id:
                                 with contextlib.suppress(Exception):
                                     self._task_store.retry(assignment.task_id)
                             continue
@@ -1097,7 +1153,75 @@ class TeamOrchestrator:
             return None
         return self._coordinator.get(runtime_id)
 
-    def _check_run_completion(self, run: TeamRun) -> None:
+    async def _async_transition_to_terminal(
+        self,
+        task_id: str,
+        target: TaskStatus,
+        *,
+        agent_id: str | None = None,
+    ) -> None:
+        """通过 async store 将任务转移到终态，自动走中间状态。
+
+        SUCCEEDED 只能从 RUNNING 转入，因此从 DISPATCHED/ACCEPTED 等
+        中间状态需逐步迁移。FAILED 和 CANCELLED 可从多数非终态直接转入。
+        """
+        store = self._async_task_store
+        if store is None:
+            return
+        task = await store.get_task(task_id)
+        if task is None or task.is_terminal:
+            return
+
+        if target is TaskStatus.SUCCEEDED:
+            intermediate: dict[TaskStatus, list[TaskStatus]] = {
+                TaskStatus.PENDING: [
+                    TaskStatus.DISPATCHED,
+                    TaskStatus.ACCEPTED,
+                    TaskStatus.RUNNING,
+                ],
+                TaskStatus.QUEUED: [
+                    TaskStatus.DISPATCHED,
+                    TaskStatus.ACCEPTED,
+                    TaskStatus.RUNNING,
+                ],
+                TaskStatus.DISPATCHED: [TaskStatus.ACCEPTED, TaskStatus.RUNNING],
+                TaskStatus.ACCEPTED: [TaskStatus.RUNNING],
+                TaskStatus.RUNNING: [],
+            }
+            steps = intermediate.get(task.status, [])
+            for next_status in steps:
+                await store.transition_task(
+                    task_id, task.status, next_status, agent_id=agent_id,
+                )
+                task = await store.get_task(task_id)
+                if task is None:
+                    return
+            await store.transition_task(
+                task_id, task.status, TaskStatus.SUCCEEDED, agent_id=agent_id,
+            )
+        elif target is TaskStatus.FAILED:
+            await store.transition_task(
+                task_id, task.status, TaskStatus.FAILED, agent_id=agent_id,
+            )
+        elif target is TaskStatus.CANCELLED:
+            await store.transition_task(
+                task_id, task.status, TaskStatus.CANCELLED, agent_id=agent_id,
+            )
+
+    async def _async_retry_task(self, task_id: str) -> None:
+        """通过 async store 重置失败/超时任务以供重试。"""
+        store = self._async_task_store
+        if store is None:
+            return
+        task = await store.get_task(task_id)
+        if task is None:
+            return
+        if task.status in (TaskStatus.FAILED, TaskStatus.TIMED_OUT):
+            await store.transition_task(
+                task_id, task.status, TaskStatus.DISPATCHED,
+            )
+
+    async def _check_run_completion(self, run: TeamRun) -> None:
         """检查是否所有任务已完成，更新 TeamRun 终态。
 
         通过 _aggregate_results 从 TaskStore 聚合结果（唯一事实来源），
@@ -1107,7 +1231,7 @@ class TeamOrchestrator:
         total = len(run.task_ids)
         if total == 0:
             return
-        results = self._aggregate_results(run)
+        results = await self._aggregate_results(run)
         terminal_statuses = frozenset(
             {"completed", "failed", "timeout", "cancelled", "budget_exceeded"}
         )
@@ -1142,7 +1266,7 @@ class TeamOrchestrator:
             snapshots = [s for s in snapshots if s.team_id == team_id]
         return snapshots
 
-    def _aggregate_results(self, run: TeamRun) -> tuple[AgentResult, ...]:
+    async def _aggregate_results(self, run: TeamRun) -> tuple[AgentResult, ...]:
         """从 TaskStore 终态聚合 AgentResult，TaskStore 为唯一事实来源。
 
         无 TaskStore 时 fallback 到 run.results 内存副本。
@@ -1150,6 +1274,8 @@ class TeamOrchestrator:
         当 TaskStore 状态非终态（如 pending）但缓存有终态结果时，
         使用缓存结果（处理 TaskStore 写入失败的边界情况）。
         """
+        if self._async_task_store is not None:
+            return await self._async_aggregate_results(run)
         if self._task_store is None:
             return tuple(run.results)
 
@@ -1195,11 +1321,46 @@ class TeamOrchestrator:
                 )
         return tuple(results)
 
-    def progress(self, run_id: str) -> TeamProgress:
+    async def _async_aggregate_results(self, run: TeamRun) -> tuple[AgentResult, ...]:
+        """从 async TaskStore 聚合 AgentResult。
+
+        TaskStatus 映射为结果字符串：SUCCEEDED→completed, FAILED→failed,
+        CANCELLED→cancelled, TIMED_OUT→timeout, 其他原值。
+        """
+        cache: dict[str, AgentResult] = {r.task_id: r for r in run.results}
+        results: list[AgentResult] = []
+        for tid in run.task_ids:
+            try:
+                task = await self._async_task_store.get_task(tid)
+            except Exception:
+                cached = cache.get(tid)
+                if cached is not None:
+                    results.append(cached)
+                continue
+            if task is None:
+                cached = cache.get(tid)
+                if cached is not None:
+                    results.append(cached)
+                continue
+            cached = cache.get(tid)
+            status_str = _TASK_STATUS_TO_RESULT.get(task.status, task.status.value)
+            results.append(
+                AgentResult(
+                    agent_id=task.agent_id or "",
+                    task_id=task.task_id,
+                    status=status_str,
+                    summary=cached.summary if cached else "",
+                    error=task.error,
+                    cost_usd=cached.cost_usd if cached else 0.0,
+                )
+            )
+        return tuple(results)
+
+    async def progress(self, run_id: str) -> TeamProgress:
         """查询 TeamRun 整体进度。"""
         run = self._get_run(run_id)
         total = len(run.task_ids)
-        results = self._aggregate_results(run)
+        results = await self._aggregate_results(run)
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
             1 for r in results if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
@@ -1225,7 +1386,7 @@ class TeamOrchestrator:
         结果从 TaskStore 终态聚合，TaskStore 为唯一事实来源。
         """
         run = self._get_run(run_id)
-        results = self._aggregate_results(run)
+        results = await self._aggregate_results(run)
         completed = sum(1 for r in results if r.status == "completed")
         failed = sum(
             1 for r in results if r.status in ("failed", "timeout", "cancelled", "budget_exceeded")
