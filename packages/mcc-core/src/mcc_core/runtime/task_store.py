@@ -384,6 +384,13 @@ class InMemoryTaskStore:
                 from mcc_core.runtime.errors import AttemptNotFoundError
 
                 raise AttemptNotFoundError(attempt_id)
+            # CAS 终态保护：终态不可被另一个终态覆盖
+            if attempt.is_terminal:
+                if attempt.status is AttemptStatus.SUCCEEDED:
+                    return attempt  # 幂等
+                raise CASConflictError(
+                    attempt_id, attempt.version, attempt.version,
+                )
             attempt.status = AttemptStatus.SUCCEEDED
             attempt.summary = summary
             attempt.output = output
@@ -420,6 +427,13 @@ class InMemoryTaskStore:
                 raise InvalidTransitionError(
                     AttemptStatus.RUNNING.value,
                     status.value,
+                )
+            # CAS 终态保护：终态不可被另一个终态覆盖
+            if attempt.is_terminal:
+                if attempt.status is status:
+                    return attempt  # 幂等
+                raise CASConflictError(
+                    attempt_id, attempt.version, attempt.version,
                 )
             attempt.status = status
             attempt.error = error
