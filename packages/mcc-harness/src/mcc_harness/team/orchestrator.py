@@ -895,13 +895,15 @@ class TeamOrchestrator:
         max_attempts = run.team.policy.max_attempts
         dependency_policy = run.team.policy.dependency_policy
 
-        subject_to_assignment: dict[str, Assignment] = {
-            a.task_spec.subject: a for a in run.assignments
-        }
+        # DAG 依赖字典以 task_id 为键，避免 duplicate subject 碰撞。
+        # subject_to_task_ids 将 blocked_by 中的 subject 展开为全部依赖 task_id。
+        subject_to_task_ids: dict[str, list[str]] = {}
+        for a in run.assignments:
+            subject_to_task_ids.setdefault(a.task_spec.subject, []).append(a.task_id)
         completion_events: dict[str, asyncio.Event] = {
-            a.task_spec.subject: asyncio.Event() for a in run.assignments
+            a.task_id: asyncio.Event() for a in run.assignments
         }
-        subject_outcomes: dict[str, str] = {}
+        task_outcomes: dict[str, str] = {}
 
         tasks = [
             self._execute_assignment(
@@ -910,8 +912,8 @@ class TeamOrchestrator:
                 semaphore,
                 max_attempts,
                 completion_events=completion_events,
-                subject_to_assignment=subject_to_assignment,
-                subject_outcomes=subject_outcomes,
+                subject_to_task_ids=subject_to_task_ids,
+                task_outcomes=task_outcomes,
                 dependency_policy=dependency_policy,
             )
             for assignment in run.assignments
@@ -927,8 +929,8 @@ class TeamOrchestrator:
         max_attempts: int = 1,
         *,
         completion_events: dict[str, asyncio.Event] | None = None,
-        subject_to_assignment: dict[str, Assignment] | None = None,
-        subject_outcomes: dict[str, str] | None = None,
+        subject_to_task_ids: dict[str, list[str]] | None = None,
+        task_outcomes: dict[str, str] | None = None,
         dependency_policy: DependencyPolicy = DependencyPolicy.ALL_SUCCESS,
     ) -> None:
         """执行单个 Assignment：Runtime 执行 → 结果回流。
@@ -942,16 +944,24 @@ class TeamOrchestrator:
         try:
             if completion_events and assignment.task_spec.blocked_by:
                 for dep_subject in assignment.task_spec.blocked_by:
-                    dep_event = completion_events.get(dep_subject)
-                    if dep_event is not None:
-                        await dep_event.wait()
+                    for dep_tid in (
+                        subject_to_task_ids.get(dep_subject, [])
+                        if subject_to_task_ids
+                        else []
+                    ):
+                        dep_event = completion_events.get(dep_tid)
+                        if dep_event is not None:
+                            await dep_event.wait()
 
             if (
                 assignment.task_spec.blocked_by
-                and subject_outcomes is not None
+                and task_outcomes is not None
                 and not self._dependencies_satisfied(
-                    assignment.task_spec.blocked_by,
-                    subject_outcomes,
+                    self._collect_dep_outcomes(
+                        assignment.task_spec.blocked_by,
+                        subject_to_task_ids or {},
+                        task_outcomes,
+                    ),
                     dependency_policy,
                 )
             ):
@@ -1046,17 +1056,37 @@ class TeamOrchestrator:
                                 error=f"execution error: {e}",
                             )
         finally:
-            if subject_outcomes is not None:
-                subject_outcomes[assignment.task_spec.subject] = outcome
+            if task_outcomes is not None:
+                task_outcomes[assignment.task_id] = outcome
             if completion_events:
-                event = completion_events.get(assignment.task_spec.subject)
+                event = completion_events.get(assignment.task_id)
                 if event is not None:
                     event.set()
 
-    def _dependencies_satisfied(
+    def _collect_dep_outcomes(
         self,
         blocked_by: tuple[str, ...],
-        subject_outcomes: dict[str, str],
+        subject_to_task_ids: dict[str, list[str]],
+        task_outcomes: dict[str, str],
+    ) -> list[str]:
+        """将 blocked_by 中的 subject 展开为依赖 task_id 的 outcome 列表。
+
+        对于没有对应 task_id 的 subject（未调度或不存在），
+        记为 "unassigned" 以保持与旧实现一致的跳过语义。
+        """
+        dep_outcomes: list[str] = []
+        for dep_subject in blocked_by:
+            dep_tids = subject_to_task_ids.get(dep_subject)
+            if not dep_tids:
+                dep_outcomes.append("unassigned")
+            else:
+                for dep_tid in dep_tids:
+                    dep_outcomes.append(task_outcomes.get(dep_tid, "unassigned"))
+        return dep_outcomes
+
+    def _dependencies_satisfied(
+        self,
+        dep_outcomes: list[str],
         policy: DependencyPolicy,
     ) -> bool:
         """按 DependencyPolicy 检查依赖终态是否满足执行条件。
@@ -1066,7 +1096,6 @@ class TeamOrchestrator:
         - ALL_TERMINAL：所有依赖到达任意终态（非 unassigned）。
         - ANY_SUCCESS：至少一个依赖 succeeded。
         """
-        dep_outcomes = [subject_outcomes.get(dep, "unassigned") for dep in blocked_by]
         if policy is DependencyPolicy.ALL_SUCCESS:
             return all(o == "succeeded" for o in dep_outcomes)
         if policy is DependencyPolicy.ALL_TERMINAL:
