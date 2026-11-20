@@ -23,7 +23,7 @@ from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from mcc_core.runtime import RuntimeEventType, TaskHandle
-from mcc_core.runtime.errors import TaskTimeoutError
+from mcc_core.runtime.errors import TaskTimeoutError, TaskWaitTimeoutError
 from mcc_core.runtime.task_record import AttemptStatus
 
 from mcc_harness.budget import AgentBudget, BudgetPolicy
@@ -966,7 +966,7 @@ class TeamOrchestrator:
                                 error=result_error,
                                 cost_usd=result_cost,
                             )
-                    except (WaitTimeoutError, TaskTimeoutError):
+                    except (WaitTimeoutError, TaskTimeoutError, TaskWaitTimeoutError):
                         if attempt < max_attempts:
                             if self._task_store and assignment.task_id:
                                 with contextlib.suppress(Exception):
@@ -1052,7 +1052,7 @@ class TeamOrchestrator:
                 handle,
                 timeout=lease_secs,
             )
-        except (WaitTimeoutError, TaskTimeoutError):
+        except (WaitTimeoutError, TaskTimeoutError, TaskWaitTimeoutError):
             # 工作项 11：超时隔离 — 标记旧 attempt 为 TIMED_OUT
             await self._fail_attempt_quietly(
                 handle,
