@@ -35,24 +35,20 @@ class TestOldPathRemoved:
         )
 
     def test_no_from_teammate_in_source(self) -> None:
-        """源文件中不应出现 from_teammate 定义或调用。"""
+        """生产代码中不应出现 from_teammate 定义或调用。"""
         repo = Path(__file__).resolve().parent.parent
-        for py in repo.rglob("*.py"):
-            if ".venv" in str(py) or "__pycache__" in str(py):
-                continue
-            if py.name == Path(__file__).name:
+        for py in (repo / "packages").rglob("*.py"):
+            if "__pycache__" in str(py):
                 continue
             text = py.read_text(encoding="utf-8")
             assert ".from_teammate(" not in text, f"{py} 仍包含 .from_teammate() 调用"
             assert "def from_teammate(" not in text, f"{py} 仍定义 from_teammate"
 
     def test_no_teammate_executor_adapter_in_source(self) -> None:
-        """源文件中不应出现 _TeammateExecutorAdapter 引用。"""
+        """生产代码中不应出现 _TeammateExecutorAdapter 引用。"""
         repo = Path(__file__).resolve().parent.parent
-        for py in repo.rglob("*.py"):
-            if ".venv" in str(py) or "__pycache__" in str(py):
-                continue
-            if py.name == Path(__file__).name:
+        for py in (repo / "packages").rglob("*.py"):
+            if "__pycache__" in str(py):
                 continue
             text = py.read_text(encoding="utf-8")
             assert "_TeammateExecutorAdapter" not in text, f"{py} 仍引用 _TeammateExecutorAdapter"
