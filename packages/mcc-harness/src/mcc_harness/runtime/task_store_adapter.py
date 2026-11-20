@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +47,7 @@ _ENUM_TO_STATUS: dict[TaskStatus, str] = {
     TaskStatus.QUEUED: "pending",
     TaskStatus.DISPATCHED: "claimed",
     TaskStatus.ACCEPTED: "claimed",
-    TaskStatus.RUNNING: "claimed",
+    TaskStatus.RUNNING: "in_progress",
     TaskStatus.SUCCEEDED: "completed",
     TaskStatus.FAILED: "failed",
     TaskStatus.CANCELLED: "cancelled",
@@ -436,6 +436,15 @@ class TaskStoreAdapter:
             self._task_attempts.setdefault(task_id, []).append(attempt_id)
             if idempotency_key:
                 self._idempotency_index[idempotency_key] = attempt_id
+            # 递增底层 Task 的 attempt 计数器，与 InMemoryTaskStore 对齐
+            try:
+                task = self._store.load(task_id)
+                if task is not None:
+                    task.attempt += 1
+                    task.version += 1
+                    self._store.save(task)
+            except Exception:
+                pass
             self._save_attempts()
             return attempt
 
@@ -462,6 +471,46 @@ class TaskStoreAdapter:
         ids = self._task_attempts.get(task_id, [])
         return [self._attempts[i] for i in ids if i in self._attempts]
 
+    def _update_task_record_on_attempt_terminal(
+        self,
+        attempt: TaskAttempt,
+    ) -> None:
+        """Attempt 终态时同步更新底层 TaskRecord 状态。
+
+        SUCCEEDED → TaskRecord.SUCCEEDED
+        FAILED / TIMED_OUT / CANCELLED → TaskRecord.FAILED（当不可重试时）
+        """
+        task_status_str: str | None = None
+        if attempt.status is AttemptStatus.SUCCEEDED:
+            task_status_str = "completed"
+        elif attempt.status in (
+            AttemptStatus.FAILED,
+            AttemptStatus.TIMED_OUT,
+            AttemptStatus.CANCELLED,
+        ):
+            task_status_str = "failed"
+
+        if task_status_str is None:
+            return
+
+        try:
+            task = self._store.load(attempt.task_id)
+        except Exception:
+            return
+        if task is None:
+            return
+        # 不可重试时才标记 TaskRecord 为终态
+        if task_status_str == "failed":
+            max_att = task.max_attempts or 3
+            if task.attempt < max_att:
+                return  # 仍可重试，不标记终态
+        if task.status != task_status_str:
+            task.status = task_status_str
+            if attempt.error:
+                task.error = attempt.error
+            task.version += 1
+            self._store.save(task)
+
     async def complete_attempt(
         self,
         attempt_id: str,
@@ -476,6 +525,13 @@ class TaskStoreAdapter:
             attempt = self._attempts.get(attempt_id)
             if attempt is None:
                 raise KeyError(attempt_id)
+            # CAS 终态保护
+            if attempt.is_terminal:
+                if attempt.status is AttemptStatus.SUCCEEDED:
+                    return attempt  # 幂等
+                raise CASConflictError(
+                    attempt_id, attempt.version, attempt.version,
+                )
             attempt.status = AttemptStatus.SUCCEEDED
             attempt.summary = summary
             attempt.output = output
@@ -485,6 +541,8 @@ class TaskStoreAdapter:
             attempt.finished_at = _now()
             attempt.touch()
             self._save_attempts()
+            # 同步更新底层 TaskRecord
+            self._update_task_record_on_attempt_terminal(attempt)
             return attempt
 
     async def fail_attempt(
@@ -504,11 +562,20 @@ class TaskStoreAdapter:
                 AttemptStatus.CANCELLED,
             ):
                 raise InvalidTransitionError(AttemptStatus.RUNNING.value, status.value)
+            # CAS 终态保护
+            if attempt.is_terminal:
+                if attempt.status is status:
+                    return attempt  # 幂等
+                raise CASConflictError(
+                    attempt_id, attempt.version, attempt.version,
+                )
             attempt.status = status
             attempt.error = error
             attempt.finished_at = _now()
             attempt.touch()
             self._save_attempts()
+            # 同步更新底层 TaskRecord
+            self._update_task_record_on_attempt_terminal(attempt)
             return attempt
 
     async def find_by_idempotency_key(self, key: str) -> TaskAttempt | None:
@@ -529,6 +596,7 @@ class TaskStoreAdapter:
         import uuid
 
         assignment_id = f"asgn_{uuid.uuid4().hex[:12]}"
+        now = _now()
         assignment = TaskAssignment(
             assignment_id=assignment_id,
             task_id=task_id,
@@ -536,6 +604,8 @@ class TaskStoreAdapter:
             agent_id=agent_id,
             runtime_id=runtime_id,
             status=AssignmentStatus.ACTIVE,
+            assigned_at=now,
+            lease_expires_at=now + timedelta(seconds=lease_seconds),
         )
         self._assignments[assignment_id] = assignment
         self._save_assignments()
