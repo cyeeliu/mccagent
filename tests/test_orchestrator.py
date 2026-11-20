@@ -156,6 +156,7 @@ class FakeDispatcher:
         self.dispatch_count = 0
         self.wait_count = 0
         self.dispatched_tasks: list[str] = []
+        self.fail_attempt_calls: list[tuple[str, str, str]] = []
 
     def set_success(self, runtime_id: str, summary: str = "done") -> None:
         self._results[runtime_id] = RuntimeEvent(
@@ -229,6 +230,16 @@ class FakeDispatcher:
 
     def call_count(self, task_id: str) -> int:
         return self._call_counts.get(task_id, 0)
+
+    async def fail_attempt(
+        self,
+        handle: TaskHandle,
+        *,
+        error: str,
+        status: str = "failed",
+    ) -> None:
+        """记录 fail_attempt 调用（测试桩）。"""
+        self.fail_attempt_calls.append((handle.attempt_id, error, status))
 
 
 def _completed_event(runtime_id: str, summary: str = "done") -> RuntimeEvent:

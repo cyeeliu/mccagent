@@ -22,7 +22,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
+from mcc_core.runtime import RuntimeEventType, TaskHandle
 from mcc_core.runtime.errors import TaskTimeoutError
+from mcc_core.runtime.task_record import AttemptStatus
 
 from mcc_harness.budget import AgentBudget, BudgetPolicy
 from mcc_harness.context import AgentContext
@@ -481,6 +483,7 @@ class TeamOrchestrator:
         self._teams: dict[str, Team] = {}
         self._runs: dict[str, TeamRun] = {}
         self._run_counter = 0
+        self._active_handles: dict[str, dict[str, TaskHandle]] = {}
 
     @property
     def registry(self) -> AgentRegistry:
@@ -726,6 +729,18 @@ class TeamOrchestrator:
         run.status = TeamRunStatus.CANCELLED
         run.finished_at = time.time()
         run.error = reason or None
+
+        # 工作项 14：级联取消 — 标记所有活跃 attempt 为 CANCELLED
+        # 在 run.status 设为 CANCELLED 之后执行，确保 _execute_assignment
+        # 中的 complete_task 被 RunStateError 抑制而不干扰取消流程
+        active = self._active_handles.get(run_id, {})
+        for handle in list(active.values()):
+            await self._fail_attempt_quietly(
+                handle,
+                error=reason or "cancelled",
+                status=AttemptStatus.CANCELLED,
+            )
+
         return run
 
     async def shutdown(self, run_id: str) -> TeamRun:
@@ -1014,9 +1029,11 @@ class TeamOrchestrator:
         """通过 TaskDispatcher 派发任务并等待结果。
 
         返回 (summary, error, cost_usd)。error 为 None 表示成功。
-        """
-        from mcc_core.runtime import RuntimeEventType
 
+        Phase 6 工作项 11：超时时标记旧 attempt 为 TIMED_OUT，避免重试后
+        旧 attempt 永远停留在 RUNNING 状态。
+        Phase 6 工作项 14：注册 handle 到 _active_handles，供 cancel 级联取消。
+        """
         runtime_id = self._agent_runtime_map.get(assignment.agent_id, "")
         handle = await self._dispatcher.dispatch(
             assignment.task_id,
@@ -1026,16 +1043,50 @@ class TeamOrchestrator:
             timeout_seconds=lease_secs,
             run_id=run_id,
         )
-        event = await self._dispatcher.wait_for_result(
-            handle,
-            timeout=lease_secs,
-        )
+
+        # 注册活跃 handle，供 cancel 级联取消
+        self._active_handles.setdefault(run_id, {})[assignment.task_id] = handle
+
+        try:
+            event = await self._dispatcher.wait_for_result(
+                handle,
+                timeout=lease_secs,
+            )
+        except (WaitTimeoutError, TaskTimeoutError):
+            # 工作项 11：超时隔离 — 标记旧 attempt 为 TIMED_OUT
+            await self._fail_attempt_quietly(
+                handle,
+                error="timed out",
+                status=AttemptStatus.TIMED_OUT,
+            )
+            raise
+        finally:
+            # 清理活跃 handle
+            self._active_handles.get(run_id, {}).pop(assignment.task_id, None)
+
         summary = str(event.payload.get("summary", ""))
         cost = float(event.payload.get("cost_usd", 0.0))
         if event.event_type is RuntimeEventType.TASK_COMPLETED:
             return summary, None, cost
         error_msg = str(event.payload.get("error", event.event_type.value))
         return summary, error_msg, cost
+
+    async def _fail_attempt_quietly(
+        self,
+        handle: TaskHandle,
+        *,
+        error: str,
+        status: AttemptStatus = AttemptStatus.FAILED,
+    ) -> None:
+        """通过 dispatcher 标记 attempt 为失败/超时/取消，吞异常。
+
+        供超时隔离和级联取消使用。attempt 可能已终态或不存在，
+        这些情况不应影响主流程。
+        """
+        fail = getattr(self._dispatcher, "fail_attempt", None)
+        if fail is not None:
+            with contextlib.suppress(Exception):
+                await fail(handle, error=error, status=status)
 
     def _find_runtime(self, agent_id: str) -> Any | None:
         """通过 agent-runtime 映射查找 Runtime。"""

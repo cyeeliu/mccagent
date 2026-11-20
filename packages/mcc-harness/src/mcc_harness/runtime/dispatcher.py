@@ -384,6 +384,24 @@ class TaskDispatcher:
             idempotency_key=None,
         )
 
+    async def fail_attempt(
+        self,
+        handle: TaskHandle,
+        *,
+        error: str,
+        status: AttemptStatus = AttemptStatus.FAILED,
+    ) -> None:
+        """标记 attempt 为失败 / 超时 / 取消。
+
+        供 Orchestrator 在超时隔离或级联取消时调用，
+        确保旧 attempt 不会永远停留在 RUNNING 状态。
+        """
+        await self._store.fail_attempt(
+            handle.attempt_id,
+            error=error,
+            status=status,
+        )
+
     async def dispatch_batch(
         self,
         tasks: list[tuple[str, str, str]],
