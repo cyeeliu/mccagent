@@ -225,7 +225,6 @@ class TestSubagentExecutorFactoryPath:
     ) -> None:
         spec = _make_spec()
         executor = SubagentExecutor(
-            _UnusedRunner(),
             spec,
             tool_context,
             agent_factory=agent_factory,
@@ -244,11 +243,11 @@ class TestSubagentExecutorFactoryPath:
         """新路径不应调用 runner.run（_UnusedRunner.run 会 raise AssertionError）。"""
         spec = _make_spec()
         executor = SubagentExecutor(
-            _UnusedRunner(),
             spec,
             tool_context,
             agent_factory=agent_factory,
             factory_context=factory_context,
+            runner=_UnusedRunner(),
         )
         result = await executor.execute(_runtime_task())
         assert result.status is TaskStatus.SUCCEEDED
@@ -261,7 +260,6 @@ class TestSubagentExecutorFactoryPath:
         factory = _RecordingFactory()
         spec = _make_spec(model="custom-model-xyz")
         executor = SubagentExecutor(
-            _UnusedRunner(),
             spec,
             tool_context,
             agent_factory=factory,
@@ -281,7 +279,6 @@ class TestSubagentExecutorFactoryPath:
         factory = _RecordingFactory()
         spec = _make_spec(max_iterations=42)
         executor = SubagentExecutor(
-            _UnusedRunner(),
             spec,
             tool_context,
             agent_factory=factory,
@@ -309,7 +306,6 @@ class TestSubagentExecutorFactoryPath:
         )
         spec = _make_spec(name="child")
         executor = SubagentExecutor(
-            _UnusedRunner(),
             spec,
             parent_ctx,
             agent_factory=factory,
@@ -329,7 +325,6 @@ class TestSubagentExecutorFactoryPath:
     ) -> None:
         spec = _make_spec()
         executor = SubagentExecutor(
-            _UnusedRunner(),
             spec,
             tool_context,
             agent_factory=agent_factory,
@@ -340,41 +335,40 @@ class TestSubagentExecutorFactoryPath:
         assert result.status is TaskStatus.FAILED
         assert "已关闭" in result.summary
 
-    async def test_factory_path_only_factory_without_context_falls_back(
+    async def test_factory_path_without_context_raises(
         self,
         tool_context: ToolContext,
     ) -> None:
-        """仅提供 agent_factory 而无 factory_context 时走旧委托路径。"""
-
-        class _StubRunner:
-            async def run(
-                self, spec: SubagentSpec, task: str, ctx: ToolContext, **kw: object
-            ) -> SubagentResult:
-                return SubagentResult(
-                    name=spec.name,
-                    summary="legacy",
-                    status=SubagentStatus.COMPLETED,
-                )
-
+        """仅提供 agent_factory 而无 factory_context 时 raise ValueError。"""
         spec = _make_spec()
         executor = SubagentExecutor(
-            _StubRunner(),
             spec,
             tool_context,
             agent_factory=DefaultAgentFactory(),
             factory_context=None,
         )
-        result = await executor.execute(_runtime_task())
-        assert result.summary == "legacy"
+        with pytest.raises(ValueError, match="agent_factory and factory_context are required"):
+            await executor.execute(_runtime_task())
 
 
-# -- SubagentExecutor 旧委托路径向后兼容测试 --
+# -- SubagentExecutor 无 factory 时 fail-fast 测试 --
 
 
 class TestSubagentExecutorBackwardCompat:
-    """不提供 agent_factory 时走旧 SubagentRunner 委托路径。"""
+    """不提供 agent_factory 时 raise ValueError（runner fallback 已移除）。"""
 
-    async def test_legacy_path_maps_completed(self, tool_context: ToolContext) -> None:
+    async def test_no_factory_raises_value_error(self, tool_context: ToolContext) -> None:
+        spec = _make_spec()
+        executor = SubagentExecutor(spec, tool_context)
+        with pytest.raises(ValueError, match="agent_factory and factory_context are required"):
+            await executor.execute(_runtime_task())
+
+    async def test_only_runner_no_factory_raises(
+        self,
+        tool_context: ToolContext,
+    ) -> None:
+        """仅传 runner 而无 factory 时 raise ValueError，不走旧委托路径。"""
+
         class _StubRunner:
             async def run(
                 self, spec: SubagentSpec, task: str, ctx: ToolContext, **kw: object
@@ -383,62 +377,20 @@ class TestSubagentExecutorBackwardCompat:
                     name=spec.name,
                     summary="legacy done",
                     status=SubagentStatus.COMPLETED,
-                    usage=Usage(input_tokens=10, output_tokens=5),
-                    cost_usd=0.01,
                 )
 
         spec = _make_spec()
-        executor = SubagentExecutor(_StubRunner(), spec, tool_context)
-        result = await executor.execute(_runtime_task())
-        assert result.status is TaskStatus.SUCCEEDED
-        assert result.summary == "legacy done"
-        assert result.usage is not None
-        assert result.usage.input_tokens == 10
+        executor = SubagentExecutor(spec, tool_context, runner=_StubRunner())
+        with pytest.raises(ValueError, match="agent_factory and factory_context are required"):
+            await executor.execute(_runtime_task())
 
-    async def test_legacy_path_maps_timeout(self, tool_context: ToolContext) -> None:
-        class _StubRunner:
-            async def run(
-                self, spec: SubagentSpec, task: str, ctx: ToolContext, **kw: object
-            ) -> SubagentResult:
-                return SubagentResult(
-                    name=spec.name,
-                    summary="timed out",
-                    status=SubagentStatus.TIMEOUT,
-                )
-
+    async def test_closed_executor_without_factory_still_returns_error(
+        self,
+        tool_context: ToolContext,
+    ) -> None:
+        """close() 后即使无 factory 也返回 FAILED（close 优先于 factory 检查）。"""
         spec = _make_spec()
-        executor = SubagentExecutor(_StubRunner(), spec, tool_context)
-        result = await executor.execute(_runtime_task())
-        assert result.status is TaskStatus.TIMED_OUT
-
-    async def test_legacy_path_error(self, tool_context: ToolContext) -> None:
-        class _StubRunner:
-            async def run(
-                self, spec: SubagentSpec, task: str, ctx: ToolContext, **kw: object
-            ) -> SubagentResult:
-                return SubagentResult(
-                    name=spec.name,
-                    summary="boom",
-                    status=SubagentStatus.ERROR,
-                    error="something broke",
-                )
-
-        spec = _make_spec()
-        executor = SubagentExecutor(_StubRunner(), spec, tool_context)
-        result = await executor.execute(_runtime_task())
-        assert result.status is TaskStatus.FAILED
-        assert result.error is not None
-        assert "something broke" in result.error.message
-
-    async def test_legacy_path_close(self, tool_context: ToolContext) -> None:
-        from mcc_harness.subagent import SubagentRunner
-
-        spec = _make_spec()
-        executor = SubagentExecutor(
-            SubagentRunner.__new__(SubagentRunner),
-            spec,
-            tool_context,
-        )
+        executor = SubagentExecutor(spec, tool_context)
         await executor.close()
         result = await executor.execute(_runtime_task())
         assert result.status is TaskStatus.FAILED

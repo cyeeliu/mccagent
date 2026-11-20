@@ -257,14 +257,12 @@ class TestNoHasattrCapabilityProbing:
 
 
 class TestSubagentExecutorAssemblyPreference:
-    """SubagentExecutor 应优先使用 agent_factory 装配路径。"""
+    """SubagentExecutor 应仅使用 agent_factory 装配路径。"""
 
     def test_factory_check_before_runner_run(self):
-        """Factory 装配检查应在 _runner.run 回退之前。"""
+        """Factory 装配为唯一路径，无 _runner.run 回退。"""
         exec_file = PACKAGES / "mcc-harness/src/mcc_harness/execution/subagent_executor.py"
         source = exec_file.read_text(encoding="utf-8")
-        factory_check_pos = source.find("self._agent_factory is not None")
-        runner_run_pos = source.find("self._runner.run")
-        assert factory_check_pos > 0, "SubagentExecutor 应检查 _agent_factory"
-        assert runner_run_pos > 0, "SubagentExecutor 应有 _runner.run 回退"
-        assert factory_check_pos < runner_run_pos, "Factory 装配检查应在 _runner.run 回退之前"
+        factory_check = "self._agent_factory is None or self._factory_context is None"
+        assert factory_check in source, "SubagentExecutor 应检查 _agent_factory 和 _factory_context"
+        assert "self._runner.run" not in source, "SubagentExecutor 不应有 _runner.run 回退"

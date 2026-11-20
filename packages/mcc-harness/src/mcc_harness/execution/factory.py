@@ -392,6 +392,8 @@ class DefaultAgentFactory:
             raise ValueError(
                 "llm is required in context to assemble agent loop",
             )
+        from mcc_harness.subagent import token_budget_to_usd
+
         permission = self._resolve_permission(context)
         return self.build_agent_loop(
             llm=context.llm,
@@ -402,7 +404,10 @@ class DefaultAgentFactory:
             max_iterations=definition.execution_profile.max_iterations,
             temperature=definition.model_profile.temperature,
             permission=permission,
-            max_cost_usd=definition.execution_profile.budget_tokens,
+            max_cost_usd=token_budget_to_usd(
+                definition.execution_profile.budget_tokens,
+                definition.model_profile.model_id,
+            ),
             hooks=context.hooks,
         )
 

@@ -298,8 +298,9 @@ def _wire_subagent_workflow(
     coordinator=None,
 ) -> tuple[Any, Any]:
     """SubagentRunner + Workflow 运行时（可信代码编排多步调用）。"""
+    from mcc_core import ToolContext
     from mcc_harness import SpawnSubagentTool, SubagentRunner, default_presets
-    from mcc_harness.execution import DefaultAgentFactory
+    from mcc_harness.execution import DefaultAgentFactory, FactoryContext
 
     agent_factory = DefaultAgentFactory()
     runner = SubagentRunner(
@@ -309,11 +310,22 @@ def _wire_subagent_workflow(
         hooks=hooks,
         agent_factory=agent_factory,
     )
+    base_ctx = ToolContext(cwd=work_dir, session_id="subagent")
+    factory_context = FactoryContext(
+        llm=llm,
+        registry=registry,
+        tool_context=base_ctx,
+        work_dir=work_dir,
+        config=config,
+        hooks=hooks,
+    )
     registry.register(
         SpawnSubagentTool(
             runner,
             default_presets(subagent_model, summarize_model),
             coordinator=coordinator,
+            agent_factory=agent_factory,
+            factory_context=factory_context,
         )
     )
 

@@ -206,15 +206,16 @@ class TestPr10CreateDelegatesToCreateRuntime:
 
 
 class TestPr10AssembleAgentLoopUsesBudget:
-    """_assemble_agent_loop() 使用 execution_profile.budget_tokens。"""
+    """_assemble_agent_loop() 使用 token_budget_to_usd 转换 budget_tokens。"""
 
     @pytest.mark.asyncio
     async def test_budget_tokens_propagated_to_max_cost_usd(
         self,
         tmp_path,
     ) -> None:
-        """execution_profile.budget_tokens → AgentLoop.max_cost_usd。"""
+        """execution_profile.budget_tokens → token_budget_to_usd → AgentLoop.max_cost_usd。"""
         from mcc_harness.runtime.interactive import InteractiveRuntimeV2
+        from mcc_harness.subagent import token_budget_to_usd
 
         context = _make_factory_context(tmp_path)
         factory = DefaultAgentFactory()
@@ -222,7 +223,8 @@ class TestPr10AssembleAgentLoopUsesBudget:
 
         runtime = await factory.create_runtime(definition, context)
         assert isinstance(runtime, InteractiveRuntimeV2)
-        assert runtime.agent.max_cost_usd == 42_000
+        expected = token_budget_to_usd(42_000, "m1")
+        assert runtime.agent.max_cost_usd == pytest.approx(expected)
 
 
 class TestPr10DeprecationWarnings:

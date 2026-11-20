@@ -678,6 +678,9 @@ class SpawnSubagentTool:
         presets: dict[str, SubagentSpec],
         max_depth: int = 3,
         coordinator: Any | None = None,
+        *,
+        agent_factory: Any | None = None,
+        factory_context: Any | None = None,
     ) -> None:
         self.runner = runner
         self.presets = presets
@@ -687,6 +690,8 @@ class SpawnSubagentTool:
 
             coordinator = RuntimeCoordinator()
         self._coordinator = coordinator
+        self._agent_factory = agent_factory
+        self._factory_context = factory_context
 
     @property
     def name(self) -> str:
@@ -751,7 +756,12 @@ class SpawnSubagentTool:
         from .execution.subagent_executor import SubagentExecutor
         from .runtime.factory import RuntimeFactory
 
-        executor = SubagentExecutor(self.runner, spec, ctx)
+        executor = SubagentExecutor(
+            spec=spec,
+            ctx=ctx,
+            agent_factory=self._agent_factory,
+            factory_context=self._factory_context,
+        )
         factory = RuntimeFactory()
         rt = factory.create_task(executor, agent_id=spec.name)
         self._coordinator.register(rt)
@@ -763,12 +773,20 @@ class SpawnSubagentTool:
             attempt_id=attempt_id,
             agent_id=spec.name,
             objective=task,
+            timeout_seconds=spec.timeout_secs,
         )
 
         try:
             await rt.start()
             await rt.submit(runtime_task)
-            result = await self._await_task_result(rt, task_id)
+            try:
+                result = await asyncio.wait_for(
+                    self._await_task_result(rt, task_id),
+                    timeout=spec.timeout_secs,
+                )
+            except TimeoutError:
+                await rt.cancel_task(task_id, attempt_id)
+                result = None
         except Exception as e:
             return ToolOutput.err(f"subagent failed: {e}")
         finally:
@@ -778,7 +796,10 @@ class SpawnSubagentTool:
                 self._coordinator.unregister(rt.runtime_id)
 
         if result is None:
-            return ToolOutput.err(f"subagent {spec.name} produced no result")
+            return ToolOutput.err(
+                f"[subagent={spec.name} status=timed_out tokens=unknown reason=timeout]\n"
+                f"subagent {spec.name} timed out after {spec.timeout_secs}s"
+            )
 
         if result.usage is not None:
             tokens = f"{result.usage.input_tokens}in/{result.usage.output_tokens}out"

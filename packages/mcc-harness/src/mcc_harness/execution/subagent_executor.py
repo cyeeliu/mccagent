@@ -1,13 +1,11 @@
-"""SubagentExecutor：将 SubagentRunner 适配为 AgentExecutor。
+"""SubagentExecutor：将 SubagentSpec 适配为 AgentExecutor。
 
-Phase 13 迁移：TaskRuntime 依赖 AgentExecutor 协议，
-SubagentExecutor 桥接 SubagentRunner.run() 到该协议，
-使 SpawnSubagentTool 可通过 TaskRuntime 执行子代理。
+SubagentSpec 经 AgentFactory.create_executor() 装配为
+AgentLoopExecutor 并直接执行，不委托 SubagentRunner。
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -17,7 +15,7 @@ from mcc_core.runtime import RuntimeResult, TaskStatus, TokenUsage
 from mcc_core.runtime.task import RuntimeTask
 
 from mcc_harness.execution.cancellation import CancellationToken
-from mcc_harness.subagent import SubagentResult, SubagentRunner, SubagentSpec, SubagentStatus
+from mcc_harness.subagent import SubagentResult, SubagentSpec, SubagentStatus
 
 _SUBAGENT_STATUS_MAP: dict[SubagentStatus, TaskStatus] = {
     SubagentStatus.COMPLETED: TaskStatus.SUCCEEDED,
@@ -30,30 +28,27 @@ _SUBAGENT_STATUS_MAP: dict[SubagentStatus, TaskStatus] = {
 
 
 class SubagentExecutor:
-    """将 SubagentRunner 适配为 AgentExecutor 协议。
+    """将 SubagentSpec 适配为 AgentExecutor 协议。
 
-    持有 SubagentRunner + SubagentSpec + ToolContext，
-    execute() 调用 runner.run() 并将 SubagentResult 映射为 RuntimeResult。
-
-    当提供 agent_factory + factory_context 时，走装配路径：
-    spec.to_agent_definition() → agent_factory.create_executor() → 直接执行，
-    不再委托 SubagentRunner。未提供时走旧委托路径（向后兼容）。
+    持有 SubagentSpec + ToolContext + AgentFactory + FactoryContext，
+    execute() 经 agent_factory.create_executor() 装配 AgentLoopExecutor
+    并直接执行，不委托 SubagentRunner。
     """
 
     def __init__(
         self,
-        runner: SubagentRunner,
         spec: SubagentSpec,
         ctx: ToolContext,
         *,
         agent_factory: Any | None = None,
         factory_context: Any | None = None,
+        runner: Any | None = None,
     ) -> None:
-        self._runner = runner
         self._spec = spec
         self._ctx = ctx
         self._agent_factory = agent_factory
         self._factory_context = factory_context
+        self._runner = runner
         self._closed = False
 
     async def execute(
@@ -66,30 +61,17 @@ class SubagentExecutor:
         if self._closed:
             return self._error_result(task, "executor_closed", "Executor 已关闭")
 
-        if self._agent_factory is not None and self._factory_context is not None:
-            return await self._execute_via_factory(
-                task,
-                emit=emit,
-                cancellation=cancellation,
+        if self._agent_factory is None or self._factory_context is None:
+            raise ValueError(
+                "agent_factory and factory_context are required"
+                " (runner fallback has been removed)",
             )
 
-        started_at = datetime.now(UTC)
-        try:
-            result = await self._runner.run(self._spec, task.objective, self._ctx)
-        except asyncio.CancelledError:
-            return self._build_result(
-                task,
-                SubagentResult(
-                    name=self._spec.name,
-                    summary="任务被取消",
-                    status=SubagentStatus.CANCELLED,
-                ),
-                started_at,
-            )
-        except Exception as exc:
-            return self._error_result(task, "execution_error", str(exc), started_at)
-
-        return self._build_result(task, result, started_at)
+        return await self._execute_via_factory(
+            task,
+            emit=emit,
+            cancellation=cancellation,
+        )
 
     async def _execute_via_factory(
         self,

@@ -57,8 +57,26 @@ def registry():
 
 
 def _tool(llm, registry, presets=None, max_depth=3, **runner_kwargs):
-    runner = SubagentRunner(llm, registry, **runner_kwargs)
-    return SpawnSubagentTool(runner, presets or default_presets(), max_depth)
+    from mcc_harness.execution import DefaultAgentFactory, FactoryContext
+
+    agent_factory = DefaultAgentFactory()
+    runner = SubagentRunner(
+        llm, registry, agent_factory=agent_factory, **runner_kwargs
+    )
+    factory_context = FactoryContext(
+        llm=llm,
+        registry=registry,
+        tool_context=ToolContext(cwd=Path("."), session_id="subagent"),
+        work_dir=Path("."),
+        config=None,
+    )
+    return SpawnSubagentTool(
+        runner,
+        presets or default_presets(),
+        max_depth,
+        agent_factory=agent_factory,
+        factory_context=factory_context,
+    )
 
 
 class RecordingLlm:
@@ -303,7 +321,7 @@ class TestSubagentRunner:
         tool = _tool(llm, registry, {"big_spender": spec})
         out = await tool.execute({"preset": "big_spender", "task": "t"}, ctx)
         assert out.is_error
-        assert "subagent failed" in out.content
+        assert "status=failed" in out.content
 
     async def test_hooks_passed_to_child(self, registry, ctx, tmp_path):
         """子代理共享主钩子注册表：POST_TOOL 可观察到子代理内工具执行。"""
@@ -1448,14 +1466,27 @@ class TestSubagentBudgetLedger:
 def _tool_with_coordinator(llm, registry, presets=None, max_depth=3, **runner_kwargs):
     """创建带 coordinator 的 SpawnSubagentTool。"""
     from mcc_harness import RuntimeCoordinator
+    from mcc_harness.execution import DefaultAgentFactory, FactoryContext
 
-    runner = SubagentRunner(llm, registry, **runner_kwargs)
+    agent_factory = DefaultAgentFactory()
+    runner = SubagentRunner(
+        llm, registry, agent_factory=agent_factory, **runner_kwargs
+    )
     coordinator = RuntimeCoordinator()
+    factory_context = FactoryContext(
+        llm=llm,
+        registry=registry,
+        tool_context=ToolContext(cwd=Path("."), session_id="subagent"),
+        work_dir=Path("."),
+        config=None,
+    )
     return SpawnSubagentTool(
         runner,
         presets or default_presets(),
         max_depth,
         coordinator=coordinator,
+        agent_factory=agent_factory,
+        factory_context=factory_context,
     ), coordinator
 
 
@@ -1684,100 +1715,188 @@ class TestSpawnSubagentToolViaTaskRuntime:
 class TestSubagentExecutor:
     """SubagentExecutor 适配器单元测试。"""
 
-    async def test_execute_maps_completed_to_succeeded(self, tmp_path):
+    async def test_execute_via_factory_succeeded(self, tmp_path):
+        """factory 路径执行成功返回 SUCCEEDED。"""
         from mcc_core import ToolContext
-        from mcc_core.runtime import TaskStatus
+        from mcc_core.runtime import RuntimeResult, TaskStatus
         from mcc_core.runtime.task import RuntimeTask
         from mcc_harness.execution.subagent_executor import SubagentExecutor
 
-        class _StubRunner:
-            async def run(self, spec, task, ctx, *, channel=None):
-                from mcc_core import Usage
-                from mcc_harness.subagent import SubagentResult
+        class _StubExecutor:
+            async def execute(self, task, *, emit=None, cancellation=None):
+                from datetime import UTC, datetime
 
-                return SubagentResult(
-                    name=spec.name,
+                now = datetime.now(UTC)
+                return RuntimeResult(
+                    task_id=task.task_id,
+                    attempt_id=task.attempt_id,
+                    runtime_id="",
+                    agent_id=task.agent_id,
+                    status=TaskStatus.SUCCEEDED,
                     summary="done",
-                    status=SubagentStatus.COMPLETED,
-                    usage=Usage(input_tokens=10, output_tokens=5),
-                    cost_usd=0.01,
+                    started_at=now,
+                    finished_at=now,
                 )
+
+            async def close(self):
+                pass
+
+        class _StubFactory:
+            def create_executor(self, definition, context, *, runtime_id="", agent_id=""):
+                return _StubExecutor()
+
+        from mcc_harness.execution import FactoryContext
 
         spec = SubagentSpec(name="test", system="s", model="m")
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
-        executor = SubagentExecutor(_StubRunner(), spec, ctx)
+        factory_ctx = FactoryContext(
+            llm=object(),
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+        )
+        executor = SubagentExecutor(
+            spec=spec, ctx=ctx, agent_factory=_StubFactory(), factory_context=factory_ctx
+        )
         task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)
         assert result.status is TaskStatus.SUCCEEDED
         assert result.summary == "done"
-        assert result.usage is not None
-        assert result.usage.input_tokens == 10
 
-    async def test_execute_maps_timeout_to_timed_out(self, tmp_path):
+    async def test_execute_via_factory_timed_out(self, tmp_path):
+        """factory 路径超时返回 TIMED_OUT。"""
         from mcc_core import ToolContext
-        from mcc_core.runtime import TaskStatus
+        from mcc_core.runtime import RuntimeResult, TaskStatus
         from mcc_core.runtime.task import RuntimeTask
         from mcc_harness.execution.subagent_executor import SubagentExecutor
 
-        class _StubRunner:
-            async def run(self, spec, task, ctx, *, channel=None):
-                return SubagentResult(
-                    name=spec.name,
+        class _StubExecutor:
+            async def execute(self, task, *, emit=None, cancellation=None):
+                from datetime import UTC, datetime
+
+                now = datetime.now(UTC)
+                return RuntimeResult(
+                    task_id=task.task_id,
+                    attempt_id=task.attempt_id,
+                    runtime_id="",
+                    agent_id=task.agent_id,
+                    status=TaskStatus.TIMED_OUT,
                     summary="timed out",
-                    status=SubagentStatus.TIMEOUT,
+                    started_at=now,
+                    finished_at=now,
                 )
+
+            async def close(self):
+                pass
+
+        class _StubFactory:
+            def create_executor(self, definition, context, *, runtime_id="", agent_id=""):
+                return _StubExecutor()
+
+        from mcc_harness.execution import FactoryContext
 
         spec = SubagentSpec(name="test", system="s", model="m")
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
-        executor = SubagentExecutor(_StubRunner(), spec, ctx)
+        factory_ctx = FactoryContext(
+            llm=object(),
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+        )
+        executor = SubagentExecutor(
+            spec=spec, ctx=ctx, agent_factory=_StubFactory(), factory_context=factory_ctx
+        )
         task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)
         assert result.status is TaskStatus.TIMED_OUT
 
-    async def test_execute_maps_error_to_failed(self, tmp_path):
+    async def test_execute_via_factory_failed(self, tmp_path):
+        """factory 路径失败返回 FAILED。"""
+        from mcc_core import ToolContext
+        from mcc_core.runtime import RuntimeResult, TaskStatus
+        from mcc_core.runtime.task import RuntimeTask
+        from mcc_harness.execution.subagent_executor import SubagentExecutor
+
+        class _StubExecutor:
+            async def execute(self, task, *, emit=None, cancellation=None):
+                from datetime import UTC, datetime
+
+                now = datetime.now(UTC)
+                return RuntimeResult(
+                    task_id=task.task_id,
+                    attempt_id=task.attempt_id,
+                    runtime_id="",
+                    agent_id=task.agent_id,
+                    status=TaskStatus.FAILED,
+                    summary="boom",
+                    started_at=now,
+                    finished_at=now,
+                )
+
+            async def close(self):
+                pass
+
+        class _StubFactory:
+            def create_executor(self, definition, context, *, runtime_id="", agent_id=""):
+                return _StubExecutor()
+
+        from mcc_harness.execution import FactoryContext
+
+        spec = SubagentSpec(name="test", system="s", model="m")
+        ctx = ToolContext(cwd=tmp_path, session_id="s1")
+        factory_ctx = FactoryContext(
+            llm=object(),
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+        )
+        executor = SubagentExecutor(
+            spec=spec, ctx=ctx, agent_factory=_StubFactory(), factory_context=factory_ctx
+        )
+        task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
+        result = await executor.execute(task)
+        assert result.status is TaskStatus.FAILED
+
+    async def test_execute_via_factory_error_propagated(self, tmp_path):
+        """factory 路径执行异常返回 FAILED。"""
         from mcc_core import ToolContext
         from mcc_core.runtime import TaskStatus
         from mcc_core.runtime.task import RuntimeTask
         from mcc_harness.execution.subagent_executor import SubagentExecutor
 
-        class _StubRunner:
-            async def run(self, spec, task, ctx, *, channel=None):
-                return SubagentResult(
-                    name=spec.name,
-                    summary="boom",
-                    status=SubagentStatus.ERROR,
-                    error="something broke",
-                )
+        class _StubExecutor:
+            async def execute(self, task, *, emit=None, cancellation=None):
+                raise RuntimeError("something broke")
+
+            async def close(self):
+                pass
+
+        class _StubFactory:
+            def create_executor(self, definition, context, *, runtime_id="", agent_id=""):
+                return _StubExecutor()
+
+        from mcc_harness.execution import FactoryContext
 
         spec = SubagentSpec(name="test", system="s", model="m")
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
-        executor = SubagentExecutor(_StubRunner(), spec, ctx)
+        factory_ctx = FactoryContext(
+            llm=object(),
+            registry=None,
+            tool_context=ctx,
+            work_dir=tmp_path,
+            config=None,
+        )
+        executor = SubagentExecutor(
+            spec=spec, ctx=ctx, agent_factory=_StubFactory(), factory_context=factory_ctx
+        )
         task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)
         assert result.status is TaskStatus.FAILED
         assert result.error is not None
         assert "something broke" in result.error.message
-
-    async def test_execute_maps_budget_exceeded_to_failed(self, tmp_path):
-        from mcc_core import ToolContext
-        from mcc_core.runtime import TaskStatus
-        from mcc_core.runtime.task import RuntimeTask
-        from mcc_harness.execution.subagent_executor import SubagentExecutor
-
-        class _StubRunner:
-            async def run(self, spec, task, ctx, *, channel=None):
-                return SubagentResult(
-                    name=spec.name,
-                    summary="over budget",
-                    status=SubagentStatus.BUDGET_EXCEEDED,
-                )
-
-        spec = SubagentSpec(name="test", system="s", model="m")
-        ctx = ToolContext(cwd=tmp_path, session_id="s1")
-        executor = SubagentExecutor(_StubRunner(), spec, ctx)
-        task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
-        result = await executor.execute(task)
-        assert result.status is TaskStatus.FAILED
 
     async def test_close_makes_executor_return_error(self, tmp_path):
         from mcc_core import ToolContext
@@ -1787,7 +1906,7 @@ class TestSubagentExecutor:
 
         spec = SubagentSpec(name="test", system="s", model="m")
         ctx = ToolContext(cwd=tmp_path, session_id="s1")
-        executor = SubagentExecutor(SubagentRunner.__new__(SubagentRunner), spec, ctx)
+        executor = SubagentExecutor(spec=spec, ctx=ctx)
         await executor.close()
         task = RuntimeTask(task_id="t1", attempt_id="a1", agent_id="test", objective="do it")
         result = await executor.execute(task)

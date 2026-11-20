@@ -401,14 +401,12 @@ class TestP2_05ArchitectureAstGuards:
         assert not violations, f"发现 hasattr 能力探测: {violations}"
 
     def test_subagent_executor_factory_before_runner(self):
-        """SubagentExecutor 应先检查 factory 装配再回退 runner。"""
+        """SubagentExecutor 应仅走 factory 装配路径，无 runner 回退。"""
         f = PACKAGES / "mcc-harness/src/mcc_harness/execution/subagent_executor.py"
         source = f.read_text(encoding="utf-8")
-        factory_pos = source.find("self._agent_factory is not None")
-        runner_pos = source.find("self._runner.run")
-        assert factory_pos > 0, "SubagentExecutor 应检查 _agent_factory"
-        assert runner_pos > 0, "SubagentExecutor 应有 _runner.run 回退"
-        assert factory_pos < runner_pos, "Factory 装配检查应在 _runner.run 回退之前"
+        factory_check = "self._agent_factory is None or self._factory_context is None"
+        assert factory_check in source, "SubagentExecutor 应检查 _agent_factory 和 _factory_context"
+        assert "self._runner.run" not in source, "SubagentExecutor 不应有 _runner.run 回退"
 
     def test_orchestrator_no_agent_loop_constructor(self):
         """TeamOrchestrator 不得直接构造 AgentLoop。"""
