@@ -291,7 +291,7 @@ class TestDefaultAgentFactory:
             description="test agent",
             model_profile=ModelProfile(model_id="m1"),
         )
-        with pytest.raises(ValueError, match="agent_loop is required"):
+        with pytest.raises(ValueError, match="llm is required"):
             await factory.create(definition)
 
     @pytest.mark.asyncio

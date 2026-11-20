@@ -9,6 +9,7 @@ Phase 4+ 重写 Runtime 后，Factory 内部改为创建新 Protocol 实例。
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,7 @@ class FactoryContext:
     recorder: Any | None = None
     coordinator: Any | None = None
     bus: Any | None = None
+    teammate: Any | None = None
 
 
 class DefaultAgentFactory:
@@ -160,6 +162,12 @@ class DefaultAgentFactory:
         agent_id: str = "",
     ) -> Any:
         """从 AgentLoopBuilder 构建 AgentLoop 并包装为 InteractiveRuntimeV2。"""
+        warnings.warn(
+            "build_interactive_runtime_v2 is deprecated; use create_runtime()"
+            " with AgentDefinition instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         agent = builder.build()
         return self._runtime_factory.create_interactive_v2(
             agent,
@@ -176,6 +184,12 @@ class DefaultAgentFactory:
         runtime_id: str | None = None,
     ) -> Any:
         """从已构造的 AgentLoop 创建 InteractiveRuntimeV2。"""
+        warnings.warn(
+            "create_interactive_runtime is deprecated; use create_runtime()"
+            " with AgentDefinition instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self._runtime_factory.create_interactive_v2(
             agent,
             session_id=session_id,
@@ -209,28 +223,26 @@ class DefaultAgentFactory:
             from mcc_harness.runtime.interactive import InteractiveRuntimeV2
 
             agent_loop = getattr(session, "agent_loop", None)
-            if agent_loop is None:
-                raise ValueError(
-                    "agent_loop is required in session_context for INTERACTIVE runtime",
+            if agent_loop is not None:
+                return InteractiveRuntimeV2(
+                    agent_loop,
+                    agent_id=definition.agent_id,
                 )
-            return InteractiveRuntimeV2(
-                agent_loop,
-                agent_id=definition.agent_id,
-            )
+            factory_ctx = self._session_to_factory_context(session)
+            return await self.create_runtime(definition, factory_ctx)
 
         if kind is RuntimeKind.TASK:
             from mcc_harness.runtime.task_runtime import TaskRuntime
 
             agent_loop = getattr(session, "agent_loop", None)
-            if agent_loop is None:
-                raise ValueError(
-                    "agent_loop is required in session_context for TASK runtime",
+            if agent_loop is not None:
+                executor = AgentLoopExecutor(
+                    agent_loop,
+                    agent_id=definition.agent_id,
                 )
-            executor = AgentLoopExecutor(
-                agent_loop,
-                agent_id=definition.agent_id,
-            )
-            return TaskRuntime(executor, agent_id=definition.agent_id)
+                return TaskRuntime(executor, agent_id=definition.agent_id)
+            factory_ctx = self._session_to_factory_context(session)
+            return await self.create_runtime(definition, factory_ctx)
 
         if kind is RuntimeKind.PERSISTENT:
             from mcc_harness.runtime.persistent import PersistentRuntimeV2
@@ -286,7 +298,7 @@ class DefaultAgentFactory:
         AgentLoop → AgentLoopExecutor → Runtime：
         - INTERACTIVE → InteractiveRuntimeV2
         - TASK → TaskRuntime（通过 AgentLoopExecutor）
-        - PERSISTENT → 需 teammate，暂不支持从 AgentDefinition 装配
+        - PERSISTENT → PersistentRuntimeV2（需 teammate + bus）
         - REMOTE → 暂不支持
         """
         from mcc_core.runtime.enums import RuntimeKind
@@ -306,10 +318,63 @@ class DefaultAgentFactory:
             executor = AgentLoopExecutor(loop, agent_id=definition.agent_id)
             return TaskRuntime(executor, agent_id=definition.agent_id)
 
+        if kind is RuntimeKind.PERSISTENT:
+            from mcc_harness.runtime.persistent import PersistentRuntimeV2
+            from mcc_harness.teammate import (
+                TeammateDefinition,
+                TeammateExecutionService,
+                TeammateMessageAdapter,
+            )
+
+            teammate = context.teammate
+            bus = context.bus
+            if teammate is None or bus is None:
+                raise ValueError(
+                    "teammate and bus are required in context for PERSISTENT runtime",
+                )
+            inner_executor = teammate.build_agent_executor()
+            teammate_def = TeammateDefinition.from_spec(teammate.spec)
+            message_adapter = TeammateMessageAdapter(
+                bus,
+                name=teammate.spec.name,
+            )
+            service = TeammateExecutionService(
+                inner_executor,
+                definition=teammate_def,
+                message_adapter=message_adapter,
+                plan_store=teammate._plan_store,
+                task_store=teammate._task_store,
+                base_dir=teammate._base_dir,
+                worktree_enabled=teammate._worktree_enabled,
+                runtime_id=teammate.runtime_id,
+                agent_id=teammate.spec.name,
+            )
+            return PersistentRuntimeV2.from_executor(
+                service,
+                teammate=teammate,
+                bus=bus,
+                lead_name=teammate._lead_name,
+                agent_id=teammate.spec.name,
+            )
+
         raise NotImplementedError(
-            f"runtime_kind {kind} is not supported by create_runtime()"
-            " from AgentDefinition; use create() with session_context"
-            " for PERSISTENT runtime",
+            f"runtime_kind {kind} is not supported by create_runtime()",
+        )
+
+    @staticmethod
+    def _session_to_factory_context(session: Any) -> FactoryContext:
+        """将 SessionContext 转换为 FactoryContext，用于从 AgentDefinition 装配。"""
+        return FactoryContext(
+            llm=getattr(session, "llm", None),
+            registry=getattr(session, "registry", None),
+            tool_context=session.tool_context,
+            work_dir=session.work_dir,
+            config=getattr(session, "config", None),
+            hooks=getattr(session, "hooks", None),
+            recorder=getattr(session, "recorder", None),
+            coordinator=getattr(session, "coordinator", None),
+            bus=getattr(session, "bus", None),
+            teammate=getattr(session, "teammate", None),
         )
 
     def _assemble_agent_loop(
@@ -337,6 +402,7 @@ class DefaultAgentFactory:
             max_iterations=definition.execution_profile.max_iterations,
             temperature=definition.model_profile.temperature,
             permission=permission,
+            max_cost_usd=definition.execution_profile.budget_tokens,
             hooks=context.hooks,
         )
 

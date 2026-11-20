@@ -97,7 +97,6 @@ class TestFactoryContext:
     def test_has_no_prebuilt_agent_fields(self):
         fields = {f.name for f in dataclasses.fields(FactoryContext)}
         assert "agent_loop" not in fields
-        assert "teammate" not in fields
 
     def test_optional_fields_default_none(self, tool_context, work_dir):
         ctx = FactoryContext(
