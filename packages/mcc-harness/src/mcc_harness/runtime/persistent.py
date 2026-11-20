@@ -246,6 +246,8 @@ class PersistentRuntimeV2:
             "task_started": RuntimeEventType.TASK_STARTED,
             "task_completed": RuntimeEventType.TASK_COMPLETED,
             "task_failed": RuntimeEventType.TASK_FAILED,
+            "task_cancelled": RuntimeEventType.TASK_CANCELLED,
+            "task_timed_out": RuntimeEventType.TASK_TIMED_OUT,
         }
         rt_event_type = event_map.get(event_type)
         if rt_event_type is not None:
