@@ -64,8 +64,22 @@ class WorkerPool:
             task = asyncio.create_task(self._worker_loop(i), name=f"worker-{i}")
             self._workers.append(task)
 
-    async def stop(self, *, timeout: float = 5.0) -> None:
+    async def stop(
+        self,
+        *,
+        timeout: float = 5.0,
+        drain: bool = True,
+        cancel_running: bool = False,
+    ) -> None:
         """停止所有 worker，等待当前任务完成。
+
+        生命周期：ACCEPTING → DRAINING → STOPPING → STOPPED。
+
+        - drain=True：现有队列全部执行完成。
+        - drain=False：队列中未执行任务逐一标记为取消。
+        - cancel_running=True：立即取消正在运行的任务。
+        - 所有队列 Future 必须完成或带异常结束。
+        - stop 超时后对正在运行任务生成明确结果，不允许静默丢弃。
 
         若 worker 在超时内未完成，取消所有 worker 并抛出
         RuntimeStopTimeoutError，使调用方感知停止超时。
@@ -73,8 +87,28 @@ class WorkerPool:
         if not self._started:
             return
         self._stop_event.set()
-        # 为每个 worker 放入一个 sentinel，使其都能优雅退出而非依赖超时+cancel
-        await self._queue.close(num_sentinels=self._max_workers)
+
+        # -- DRAINING 阶段 --
+        if drain:
+            # 放入哨兵，worker 会处理完所有现有任务后收到哨兵退出
+            await self._queue.close(num_sentinels=self._max_workers)
+        else:
+            # 排空未执行任务，为它们的 future 生成明确取消终态
+            self._queue._closed = True
+            remaining = await self._queue.drain_pending()
+            for entry in remaining:
+                if not entry.future.done():
+                    entry.future.set_exception(asyncio.CancelledError())
+            # 放入哨兵唤醒空闲 worker
+            await self._queue.close(num_sentinels=self._max_workers)
+
+        # -- STOPPING 阶段 --
+        if cancel_running:
+            # 立即取消所有正在运行的 worker
+            for w in self._workers:
+                if not w.done():
+                    w.cancel()
+
         timed_out = False
         try:
             await asyncio.wait_for(
@@ -87,14 +121,30 @@ class WorkerPool:
                 if not w.done():
                     w.cancel()
             await asyncio.gather(*self._workers, return_exceptions=True)
+
+        # -- STOPPED 阶段：确保所有 future 有明确终态 --
+        leftover = await self._queue.drain_pending()
+        for entry in leftover:
+            if not entry.future.done():
+                if timed_out:
+                    entry.future.set_exception(
+                        RuntimeStopTimeoutError(self._runtime_id, timeout),
+                    )
+                else:
+                    entry.future.set_exception(asyncio.CancelledError())
+
         self._workers.clear()
         self._started = False
         if timed_out:
             raise RuntimeStopTimeoutError(self._runtime_id, timeout)
 
     async def _worker_loop(self, worker_id: int) -> None:
-        """单个 worker 循环：取任务 → 执行 → 设置结果。"""
-        while not self._stop_event.is_set():
+        """单个 worker 循环：取任务 → 执行 → 设置结果。
+
+        使用 while True 依赖哨兵（None）退出，确保 stop(drain=True) 时
+        worker 会处理完队列中所有任务再退出。
+        """
+        while True:
             try:
                 entry = await self._queue.get()
             except Exception:

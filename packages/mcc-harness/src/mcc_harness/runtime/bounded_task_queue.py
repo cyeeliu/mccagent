@@ -92,6 +92,19 @@ class BoundedTaskQueue:
         self._pending -= 1
         self._queue.task_done()
 
+    async def drain_pending(self) -> list[_QueueEntry]:
+        """排空所有待处理条目，返回含 future 的 entry 列表。
+
+        不关闭队列、不放入哨兵。调用方负责对返回的 entry.future 做明确终态处理。
+        """
+        entries: list[_QueueEntry] = []
+        while not self._queue.empty():
+            entry = await self._queue.get()
+            if entry is not None:
+                entries.append(entry)
+                self._pending -= 1
+        return entries
+
     async def close(
         self,
         *,

@@ -294,7 +294,10 @@ class PersistentRuntimeV2:
         timed_out = False
 
         try:
-            await self._worker_pool.stop(timeout=stop_timeout)
+            await self._worker_pool.stop(
+                timeout=stop_timeout,
+                cancel_running=cancel_running,
+            )
         except RuntimeStopTimeoutError:
             timed_out = True
 
