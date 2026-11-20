@@ -442,6 +442,22 @@ class TaskStoreAdapter:
     async def get_attempt(self, attempt_id: str) -> TaskAttempt | None:
         return self._attempts.get(attempt_id)
 
+    async def start_attempt(self, attempt_id: str) -> TaskAttempt:
+        """将 PENDING attempt 转为 RUNNING 并持久化。"""
+        async with self._lock:
+            attempt = self._attempts.get(attempt_id)
+            if attempt is None:
+                raise KeyError(attempt_id)
+            if attempt.status is not AttemptStatus.PENDING:
+                raise InvalidTransitionError(
+                    attempt.status.value,
+                    AttemptStatus.RUNNING.value,
+                )
+            attempt.status = AttemptStatus.RUNNING
+            attempt.touch()
+            self._save_attempts()
+            return attempt
+
     async def list_attempts(self, task_id: str) -> list[TaskAttempt]:
         ids = self._task_attempts.get(task_id, [])
         return [self._attempts[i] for i in ids if i in self._attempts]

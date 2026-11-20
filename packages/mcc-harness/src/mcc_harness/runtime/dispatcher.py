@@ -117,7 +117,7 @@ class TaskDispatcher:
                 return TaskHandle(
                     task_id=task_id,
                     attempt_id=existing.attempt_id,
-                    runtime_id=runtime_id,
+                    runtime_id=existing.runtime_id or runtime_id,
                 )
 
         attempt = await self._store.create_attempt(
@@ -137,7 +137,7 @@ class TaskDispatcher:
             return TaskHandle(
                 task_id=task_id,
                 attempt_id=attempt.attempt_id,
-                runtime_id=runtime_id,
+                runtime_id=attempt.runtime_id or runtime_id,
             )
 
         runtime = self._coordinator.get(runtime_id)
@@ -170,6 +170,8 @@ class TaskDispatcher:
                     TaskStatus.DISPATCHED,
                     agent_id=agent_id,
                 )
+            # PENDING → RUNNING：记录 attempt 已进入执行阶段
+            await self._store.start_attempt(attempt.attempt_id)
             handle = await runtime.submit(rt_task)
             await self._store.transition_task(
                 task_id,
@@ -178,6 +180,13 @@ class TaskDispatcher:
                 agent_id=agent_id,
             )
             return handle
+        except asyncio.CancelledError:
+            await self._store.fail_attempt(
+                attempt.attempt_id,
+                error="cancelled",
+                status=AttemptStatus.CANCELLED,
+            )
+            raise
         except Exception as exc:
             await self._store.fail_attempt(
                 attempt.attempt_id,

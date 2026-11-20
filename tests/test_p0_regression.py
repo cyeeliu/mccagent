@@ -334,4 +334,4 @@ class TestP0_04:
             await dispatcher.wait_for_result(handle, timeout=0.05)
 
         attempt = await store.get_attempt(handle.attempt_id)
-        assert attempt.status is AttemptStatus.PENDING
+        assert attempt.status is AttemptStatus.RUNNING

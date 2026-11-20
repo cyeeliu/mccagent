@@ -118,6 +118,8 @@ class TaskStoreProtocol(Protocol):
 
     async def get_attempt(self, attempt_id: str) -> TaskAttempt | None: ...
 
+    async def start_attempt(self, attempt_id: str) -> TaskAttempt: ...
+
     async def list_attempts(self, task_id: TaskId) -> list[TaskAttempt]: ...
 
     async def complete_attempt(
@@ -342,6 +344,26 @@ class InMemoryTaskStore:
 
     async def get_attempt(self, attempt_id: str) -> TaskAttempt | None:
         return self._attempts.get(attempt_id)
+
+    async def start_attempt(self, attempt_id: str) -> TaskAttempt:
+        """将 PENDING attempt 转为 RUNNING（PENDING → RUNNING 状态转换）。
+
+        只有 PENDING attempt 可转换；非 PENDING 抛 InvalidTransitionError。
+        """
+        async with self._lock:
+            attempt = self._attempts.get(attempt_id)
+            if attempt is None:
+                from mcc_core.runtime.errors import AttemptNotFoundError
+
+                raise AttemptNotFoundError(attempt_id)
+            if attempt.status is not AttemptStatus.PENDING:
+                raise InvalidTransitionError(
+                    attempt.status.value,
+                    AttemptStatus.RUNNING.value,
+                )
+            attempt.status = AttemptStatus.RUNNING
+            attempt.touch()
+            return attempt
 
     async def list_attempts(self, task_id: TaskId) -> list[TaskAttempt]:
         return [a for a in self._attempts.values() if a.task_id == task_id]
