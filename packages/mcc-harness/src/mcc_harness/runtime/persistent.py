@@ -160,6 +160,7 @@ class PersistentRuntimeV2:
         - teammate/bus/lead_name：传入后设置内部状态，使
           inject_instruction/pause/resume/cancel/notify/info 等方法可用，
           teammate 的 _run_loop 负责消息处理（不执行任务）。
+          调用方须在 pr.start() 之前自行启动 teammate。
         """
         instance = cls(
             executor,
@@ -197,17 +198,12 @@ class PersistentRuntimeV2:
 
     @property
     def alive(self) -> bool:
-        if self._teammate is not None:
-            return self._teammate.alive
         return self._worker_pool.is_started
 
     async def start(self) -> None:
         self._started_at = time.monotonic()
         self._status = CoreRuntimeStatus.STARTING
         await self._emit(RuntimeEventType.RUNTIME_STARTED)
-
-        if self._teammate is not None and not self._teammate.alive:
-            await self._teammate.start()
 
         self._worker_pool.start()
 

@@ -249,6 +249,7 @@ class TestPersistentRuntimeV2:
             await original(timeout=timeout)
 
         rt.teammate.shutdown = capture
+        await rt.teammate.start()
         await rt.start()
         await asyncio.sleep(0.2)
         await rt.stop(timeout=3.0)
@@ -264,6 +265,7 @@ class TestPersistentRuntimeV2:
             await original(timeout=timeout)
 
         rt.teammate.shutdown = capture
+        await rt.teammate.start()
         await rt.start()
         await asyncio.sleep(0.2)
         await rt.stop()
@@ -354,7 +356,7 @@ class TestOldApiCompatibility:
         assert rt.alive
         await asyncio.sleep(0.3)
         msgs = await bus.consume(LEAD_NAME)
-        assert any(m.kind == "work_done" for m in msgs)
+        assert not any(m.kind == "work_done" for m in msgs)
         await rt.shutdown()
         assert not rt.alive
 
@@ -378,6 +380,7 @@ class TestOldApiCompatibility:
         )
         rt = _build_persistent_from_teammate(teammate, bus)
 
+        await teammate.start()
         await rt.start()
         await asyncio.sleep(0.3)
         assert teammate.alive

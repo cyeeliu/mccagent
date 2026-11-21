@@ -280,11 +280,9 @@ class TeammateRuntime:
         self._status = TeammateStatus.CREATED
         self._last_transition: TransitionRecord | None = None
         self._force_stop = False
-        self._assignment_queue: list[dict[str, Any]] = []
         self._instruction_queue: asyncio.Queue[str] = asyncio.Queue()
         self._pause_event: asyncio.Event = asyncio.Event()
         self._pause_event.set()
-        self._task_futures: dict[str, asyncio.Future[tuple[TeammateStatus, str]]] = {}
 
     @property
     def name(self) -> str:
@@ -310,19 +308,6 @@ class TeammateRuntime:
     def task(self) -> asyncio.Task[None] | None:
         return self._task
 
-    def get_task_future(
-        self,
-        task_id: str,
-    ) -> asyncio.Future[tuple[TeammateStatus, str]] | None:
-        return self._task_futures.get(task_id)
-
-    def set_task_future(
-        self,
-        task_id: str,
-        future: asyncio.Future[tuple[TeammateStatus, str]],
-    ) -> None:
-        self._task_futures[task_id] = future
-
     def _transition(self, target: TeammateStatus, reason: str = "") -> None:
         current = self._status
         allowed = _teammate_transitions(current)
@@ -346,22 +331,11 @@ class TeammateRuntime:
                 TeammateStatus.SHUTTING_DOWN,
                 reason=reason or ("force stop" if self._force_stop else "graceful"),
             )
+        self._current.clear()
         self._transition(
             TeammateStatus.SHUTDOWN,
             reason="force terminated" if self._force_stop else "graceful exit",
         )
-
-    def _set_task_future(
-        self,
-        outcome: TeammateStatus,
-        summary: str,
-    ) -> None:
-        """设置当前任务的 future 结果，供 PersistentRuntimeV2.wait_task 等待。"""
-        task_id = self._current.task_id
-        if task_id and task_id in self._task_futures:
-            future = self._task_futures.pop(task_id)
-            if not future.done():
-                future.set_result((outcome, summary))
 
     async def start(self, task: str = "", *, task_id: str | None = None) -> None:
         """启动 teammate 后台任务。"""
@@ -378,10 +352,7 @@ class TeammateRuntime:
 
     async def _run_loop(self) -> None:
         try:
-            if self._current.assignment:
-                self._transition(TeammateStatus.ASSIGNED, reason="initial assignment")
-            else:
-                self._transition(TeammateStatus.IDLE, reason="no initial work")
+            self._transition(TeammateStatus.IDLE, reason="no initial work")
 
             while not self._shutdown_evt.is_set():
                 self._wake.clear()
@@ -392,20 +363,6 @@ class TeammateRuntime:
 
                 if self._shutdown_evt.is_set():
                     break
-
-                if self._current.assignment:
-                    if self._status == TeammateStatus.IDLE:
-                        self._transition(TeammateStatus.ASSIGNED, reason="assignment ready")
-                    await self._do_work()
-                    self._current.clear()
-                    if self._dequeue_assignment():
-                        continue
-                    if self._status != TeammateStatus.IDLE:
-                        self._transition(TeammateStatus.IDLE, reason="work done")
-                    continue
-
-                if self._try_claim_task():
-                    continue
 
                 if self._status != TeammateStatus.IDLE:
                     self._transition(TeammateStatus.IDLE, reason="idle")
@@ -418,37 +375,13 @@ class TeammateRuntime:
                 kind="error",
             )
         finally:
-            for future in self._task_futures.values():
-                if not future.done():
-                    future.set_exception(RuntimeError("teammate shutdown"))
-            self._task_futures.clear()
             self._safe_shutdown(reason="loop exit")
-
-    def _dequeue_assignment(self) -> bool:
-        """从任务队列取出下一个 assignment 到 _current。"""
-        if not self._assignment_queue:
-            return False
-        item = self._assignment_queue.pop(0)
-        self._current.assignment = item["content"]
-        self._current.task_id = item.get("task_id")
-        self._current.work_version += 1
-        self._current.started_at = time.monotonic()
-        return True
 
     def _handle_messages(self, inbox: list) -> None:
         for msg in inbox:
             if msg.kind == "shutdown":
                 self._shutdown_evt.set()
-            elif msg.kind in ("task_submitted", "message"):
-                self._assignment_queue.append(
-                    {
-                        "content": msg.content,
-                        "task_id": msg.task_id,
-                    }
-                )
-                if not self._current.assignment:
-                    self._dequeue_assignment()
-            elif msg.kind == "instruction":
+            elif msg.kind in ("task_submitted", "message", "instruction"):
                 self._instruction_queue.put_nowait(msg.content)
             elif msg.kind == "cancel":
                 if self._current.cancel_token is not None:
@@ -462,173 +395,6 @@ class TeammateRuntime:
                 pass
             else:
                 self._instruction_queue.put_nowait(msg.content)
-
-    async def _do_work(self) -> None:
-        if self._executor is not None:
-            await self._executor.execute(self)
-            return
-        if self.spec.require_plan:
-            self._transition(TeammateStatus.PLANNING, reason="require_plan")
-            approved = await self._submit_and_wait_plan()
-            if not approved:
-                self._transition(TeammateStatus.IDLE, reason="plan rejected")
-                self._current.clear()
-                return
-            self._transition(TeammateStatus.RUNNING, reason="plan approved")
-        else:
-            self._transition(TeammateStatus.RUNNING, reason="start work")
-
-        from .worktree import WorktreeError as _WtErr
-
-        try:
-            cwd = await self._prepare_worktree()
-        except _WtErr as e:
-            summary = f"worktree creation failed: {e}"
-            self._transition(TeammateStatus.FAILED, reason="worktree creation failed")
-            await self._bus.send(
-                self.name,
-                self._lead_name,
-                summary,
-                kind="work_failed",
-                meta={"task_id": self._current.task_id} if self._current.task_id else {},
-            )
-            if self._current.task_id and self._task_store:
-                with contextlib.suppress(Exception):
-                    self._task_store.fail(
-                        self._current.task_id,
-                        error=summary,
-                        owner=self.name,
-                    )
-            self._set_task_future(TeammateStatus.FAILED, summary)
-            self._transition(TeammateStatus.IDLE, reason="recover from failed")
-            self._current.clear()
-            return
-
-        agent = self._build_agent(cwd)
-        self._current.cancel_token = asyncio.Event()
-        outcome: TeammateStatus
-        try:
-            from .agent import AgentEvent as _Ev
-
-            queue: asyncio.Queue[_Ev] = asyncio.Queue()
-            run = await asyncio.wait_for(
-                agent.run_streaming(
-                    self._current.assignment,
-                    queue,
-                    instruction_queue=self._instruction_queue,
-                    cancel_event=self._current.cancel_token,
-                    pause_event=self._pause_event,
-                ),
-                timeout=self.spec.timeout_secs,
-            )
-            if self._current.cancel_token is not None and self._current.cancel_token.is_set():
-                summary = run.final_text or "(cancelled)"
-                outcome = TeammateStatus.CANCELLED
-            else:
-                summary = run.final_text or "(no output)"
-                outcome = TeammateStatus.REPORTING
-        except TimeoutError:
-            summary = f"teammate timed out after {self.spec.timeout_secs:.0f}s"
-            outcome = TeammateStatus.TIMEOUT
-        except Exception as e:
-            summary = f"teammate error: {type(e).__name__}: {e}"
-            outcome = TeammateStatus.FAILED
-
-        self._transition(outcome, reason=f"agent {outcome.value}")
-
-        kind = {
-            TeammateStatus.REPORTING: "work_done",
-            TeammateStatus.TIMEOUT: "work_timeout",
-            TeammateStatus.FAILED: "work_failed",
-            TeammateStatus.CANCELLED: "work_cancelled",
-        }[outcome]
-
-        await self._bus.send(
-            self.name,
-            self._lead_name,
-            summary,
-            kind=kind,
-            meta={"task_id": self._current.task_id} if self._current.task_id else {},
-        )
-
-        if self._current.task_id and self._task_store:
-            with contextlib.suppress(Exception):
-                if outcome == TeammateStatus.REPORTING:
-                    self._task_store.complete(
-                        self._current.task_id,
-                        owner=self.name,
-                    )
-                elif outcome == TeammateStatus.TIMEOUT:
-                    self._task_store.timeout(
-                        self._current.task_id,
-                        owner=self.name,
-                    )
-                elif outcome == TeammateStatus.CANCELLED:
-                    self._task_store.cancel(
-                        self._current.task_id,
-                        owner=self.name,
-                        reason=summary,
-                    )
-                else:
-                    self._task_store.fail(
-                        self._current.task_id,
-                        owner=self.name,
-                        error=summary,
-                    )
-
-        await self._cleanup_worktree()
-
-        self._set_task_future(outcome, summary)
-        self._transition(TeammateStatus.IDLE, reason=f"recover from {outcome.value}")
-        self._current.clear()
-
-    async def _submit_and_wait_plan(self) -> bool:
-        plan_req = await self._plan_store.create(
-            sender=self.name,
-            plan=self._current.assignment or "",
-            task_id=self._current.task_id,
-            work_version=self._current.work_version,
-        )
-        await self._bus.send(
-            self.name,
-            self._lead_name,
-            f"Plan submitted for review:\n{self._current.assignment}",
-            kind="plan_submitted",
-            meta={"request_id": plan_req.request_id},
-        )
-        self._transition(TeammateStatus.WAITING_APPROVAL, reason="plan submitted")
-        reviewed = await self._plan_store.wait_for_review(plan_req.request_id)
-        if reviewed.status == "rejected":
-            await self._bus.send(
-                self.name,
-                self._lead_name,
-                f"Plan rejected: {reviewed.feedback}",
-                kind="plan_rejected",
-            )
-            return False
-        return True
-
-    async def _prepare_worktree(self) -> Path | None:
-        if not self._worktree_enabled or not self._base_dir or not self._current.task_id:
-            return None
-        from .worktree import create_worktree
-
-        wt_name = f"{self.name}_{self._current.work_version}"
-        wt = await asyncio.to_thread(
-            create_worktree, wt_name, self._current.task_id, self._base_dir
-        )
-        self._worktree = wt
-        return wt
-
-    async def _cleanup_worktree(self) -> None:
-        if not self._worktree or not self._base_dir:
-            return
-        from .worktree import CleanupPolicy, WorktreeError, remove_worktree
-
-        wt_name = f"{self.name}_{self._current.work_version}"
-        with contextlib.suppress(WorktreeError):
-            await asyncio.to_thread(remove_worktree, wt_name, self._base_dir, CleanupPolicy.SAFE)
-        self._worktree = None
 
     def _build_agent(self, cwd: Path | None = None) -> AgentLoop:
         teammate_registry = self._registry.subset(self.spec.tools)
@@ -700,21 +466,6 @@ class TeammateRuntime:
             agent_loop,
             agent_id=self.spec.name,
         )
-
-    def _try_claim_task(self) -> bool:
-        if not self._task_store:
-            return False
-        for t in self._task_store.list():
-            if t.status != "pending" or not self._task_store.can_start(t.id):
-                continue
-            with contextlib.suppress(Exception):
-                self._task_store.claim(t.id, owner=self.name)
-                self._current.assignment = t.description or t.subject
-                self._current.task_id = t.id
-                self._current.work_version += 1
-                self._current.started_at = time.monotonic()
-                return True
-        return False
 
     async def shutdown(self, *, timeout: float = 5.0) -> None:
         """请求 teammate 关闭并等待退出。"""
@@ -1014,8 +765,21 @@ class TeammateExecutionService:
             await self._cleanup_worktree()
             return self._failed_result(task, summary)
 
+        timeout = task.timeout_seconds or self._definition.policy.timeout_secs
         try:
-            result = await self._executor.execute(task)
+            if timeout is not None and 0 < timeout < float("inf"):
+                exec_task = asyncio.create_task(self._executor.execute(task))
+                done, _pending = await asyncio.wait({exec_task}, timeout=timeout)
+                if exec_task in done:
+                    result = exec_task.result()
+                else:
+                    exec_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await exec_task
+                    summary = f"teammate timed out after {timeout:.0f}s"
+                    result = self._timed_out_result(task, summary)
+            else:
+                result = await self._executor.execute(task)
         except asyncio.CancelledError:
             await self._cleanup_worktree()
             raise
@@ -1134,6 +898,22 @@ class TeammateExecutionService:
             status=TaskStatus.FAILED,
             summary=summary,
             error=RuntimeErrorInfo(code="execution_error", message=summary),
+            started_at=now,
+            finished_at=now,
+        )
+
+    def _timed_out_result(self, task: RuntimeTask, summary: str) -> CoreRuntimeResult:
+        from mcc_core.runtime import RuntimeErrorInfo
+
+        now = datetime.now(UTC)
+        return CoreRuntimeResult(
+            task_id=task.task_id,
+            attempt_id=task.attempt_id,
+            runtime_id=self._runtime_id,
+            agent_id=task.agent_id,
+            status=TaskStatus.TIMED_OUT,
+            summary=summary,
+            error=RuntimeErrorInfo(code="execution_timeout", message=summary),
             started_at=now,
             finished_at=now,
         )
