@@ -260,6 +260,15 @@ class TaskDispatcher:
         except TimeoutError:
             from mcc_core.runtime.errors import TaskWaitTimeoutError
 
+            # 超时后取消真实执行，确保旧 attempt 终止后才允许 retry
+            with contextlib.suppress(Exception):
+                cancel = getattr(runtime, "cancel_task", None)
+                if cancel is not None:
+                    await cancel(
+                        handle.task_id,
+                        handle.attempt_id,
+                        reason="wait timeout",
+                    )
             raise TaskWaitTimeoutError(handle.task_id, timeout or 0.0) from None
         finally:
             if priming is not None and not priming.done():
