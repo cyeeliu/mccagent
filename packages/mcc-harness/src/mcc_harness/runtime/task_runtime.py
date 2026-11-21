@@ -145,11 +145,21 @@ class TaskRuntime:
         )
 
         try:
-            result = await self._executor.execute(
-                task,
-                emit=None,
-                cancellation=cancel_token,
-            )
+            if task.timeout_seconds is not None:
+                result = await asyncio.wait_for(
+                    self._executor.execute(
+                        task,
+                        emit=None,
+                        cancellation=cancel_token,
+                    ),
+                    timeout=task.timeout_seconds,
+                )
+            else:
+                result = await self._executor.execute(
+                    task,
+                    emit=None,
+                    cancellation=cancel_token,
+                )
             self._results[task.task_id] = result
             if self._task_store is not None:
                 await self._write_result_to_store(task, result)
@@ -165,6 +175,23 @@ class TaskRuntime:
                 task_id=task.task_id,
                 attempt_id=task.attempt_id,
                 payload=payload,
+            )
+        except TimeoutError:
+            cancel_token.cancel("execution timeout")
+            if self._task_store is not None:
+                with contextlib.suppress(Exception):
+                    from mcc_core.runtime.task_record import AttemptStatus
+
+                    await self._task_store.fail_attempt(
+                        task.attempt_id,
+                        error=f"execution timeout after {task.timeout_seconds}s",
+                        status=AttemptStatus.TIMED_OUT,
+                    )
+            await self._emit(
+                RuntimeEventType.TASK_TIMED_OUT,
+                task_id=task.task_id,
+                attempt_id=task.attempt_id,
+                payload={"timeout_seconds": task.timeout_seconds},
             )
         except asyncio.CancelledError:
             if self._task_store is not None:

@@ -166,11 +166,22 @@ class WorkerPool:
                         task_id=getattr(task, "task_id", None),
                         attempt_id=attempt_id,
                     )
-                result = await self._executor.execute(
-                    task,
-                    emit=None,
-                    cancellation=cancellation,
-                )
+                timeout = getattr(task, "timeout_seconds", None)
+                if timeout is not None:
+                    result = await asyncio.wait_for(
+                        self._executor.execute(
+                            task,
+                            emit=None,
+                            cancellation=cancellation,
+                        ),
+                        timeout=timeout,
+                    )
+                else:
+                    result = await self._executor.execute(
+                        task,
+                        emit=None,
+                        cancellation=cancellation,
+                    )
                 if not future.done():
                     future.set_result(result)
                 if self._on_event is not None:
@@ -192,6 +203,24 @@ class WorkerPool:
                         task_id=task_id,
                         attempt_id=attempt_id,
                         payload=payload,
+                    )
+            except TimeoutError:
+                from mcc_core.runtime.errors import TaskExecutionTimeoutError
+
+                exc = TaskExecutionTimeoutError(
+                    attempt_id or "",
+                    timeout or 0.0,
+                )
+                if not future.done():
+                    future.set_exception(exc)
+                if cancellation is not None:
+                    cancellation.cancel("execution timeout")
+                if self._on_event is not None:
+                    await self._on_event(
+                        "task_timed_out",
+                        task_id=getattr(task, "task_id", None),
+                        attempt_id=attempt_id,
+                        payload={"timeout_seconds": timeout},
                     )
             except asyncio.CancelledError:
                 if not future.done():
