@@ -959,12 +959,13 @@ class TeamOrchestrator:
                         await dep_event.wait()
 
             if (
-                dep_task_ids
+                assignment.task_spec.blocked_by
                 and task_outcomes is not None
                 and not self._dependencies_satisfied(
                     self._collect_dep_outcomes(
                         dep_task_ids,
                         task_outcomes,
+                        assignment.task_spec.blocked_by,
                     ),
                     dependency_policy,
                 )
@@ -1071,14 +1072,21 @@ class TeamOrchestrator:
         self,
         dep_task_ids: frozenset[str],
         task_outcomes: dict[str, str],
+        blocked_by: tuple[str, ...] = (),
     ) -> list[str]:
         """收集依赖 task_id 的 outcome 列表。
 
         P1-10 修复后直接接收预解析的 dep_task_ids，
         不再通过 (blocked_by, subject_to_task_ids) 中转。
         对于不存在于 task_outcomes 的 task_id（未调度或不存在），
-        记为 "unassigned" 以保持与旧实现一致的跳过语义。
+        计为 "unassigned" 以保持与旧实现一致的跳过语义。
+
+        当 blocked_by 非空但 dep_task_ids 为空时，说明所有依赖
+        subject 被 Scheduler 过滤掉（无 Agent 匹配），此时每个
+        被过滤的 subject 计为 "unassigned"，确保 dependent 被跳过。
         """
+        if not dep_task_ids and blocked_by:
+            return ["unassigned"] * len(blocked_by)
         return [task_outcomes.get(tid, "unassigned") for tid in dep_task_ids]
 
     def _dependencies_satisfied(
