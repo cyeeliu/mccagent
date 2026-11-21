@@ -895,11 +895,18 @@ class TeamOrchestrator:
         max_attempts = run.team.policy.max_attempts
         dependency_policy = run.team.policy.dependency_policy
 
-        # DAG 依赖字典以 task_id 为键，避免 duplicate subject 碰撞。
-        # subject_to_task_ids 将 blocked_by 中的 subject 展开为全部依赖 task_id。
+        # P1-10: DAG 依赖预解析为 task_id，消除 subject 中转。
+        # subject_to_task_ids 仅在此处一次性构建，后续以 dep_task_ids 传递。
         subject_to_task_ids: dict[str, list[str]] = {}
         for a in run.assignments:
             subject_to_task_ids.setdefault(a.task_spec.subject, []).append(a.task_id)
+        # 为每个 assignment 预解析 blocked_by 中的 subject 为 dep_task_ids
+        assignment_dep_task_ids: dict[str, frozenset[str]] = {}
+        for a in run.assignments:
+            dep_ids: set[str] = set()
+            for dep_subject in a.task_spec.blocked_by:
+                dep_ids.update(subject_to_task_ids.get(dep_subject, []))
+            assignment_dep_task_ids[a.task_id] = frozenset(dep_ids)
         completion_events: dict[str, asyncio.Event] = {
             a.task_id: asyncio.Event() for a in run.assignments
         }
@@ -912,7 +919,7 @@ class TeamOrchestrator:
                 semaphore,
                 max_attempts,
                 completion_events=completion_events,
-                subject_to_task_ids=subject_to_task_ids,
+                dep_task_ids=assignment_dep_task_ids.get(assignment.task_id, frozenset()),
                 task_outcomes=task_outcomes,
                 dependency_policy=dependency_policy,
             )
@@ -929,7 +936,7 @@ class TeamOrchestrator:
         max_attempts: int = 1,
         *,
         completion_events: dict[str, asyncio.Event] | None = None,
-        subject_to_task_ids: dict[str, list[str]] | None = None,
+        dep_task_ids: frozenset[str] = frozenset(),
         task_outcomes: dict[str, str] | None = None,
         dependency_policy: DependencyPolicy = DependencyPolicy.ALL_SUCCESS,
     ) -> None:
@@ -937,29 +944,26 @@ class TeamOrchestrator:
 
         支持失败重试：当 Runtime 执行失败且 attempt < max_attempts 时，
         通过 TaskStore.retry 重置任务状态后重试。
-        支持 DAG：等待 blocked_by 依赖的任务完成后再执行。
+        支持 DAG：等待 dep_task_ids 依赖的任务完成后再执行。
         依赖策略：按 dependency_policy 检查依赖终态，不满足时跳过本任务。
+
+        P1-10 修复后 dep_task_ids 为预解析的依赖 task_id 集合，
+        不再通过 subject_to_task_ids 中转。
         """
         outcome = "failed"
         try:
-            if completion_events and assignment.task_spec.blocked_by:
-                for dep_subject in assignment.task_spec.blocked_by:
-                    for dep_tid in (
-                        subject_to_task_ids.get(dep_subject, [])
-                        if subject_to_task_ids
-                        else []
-                    ):
-                        dep_event = completion_events.get(dep_tid)
-                        if dep_event is not None:
-                            await dep_event.wait()
+            if completion_events and dep_task_ids:
+                for dep_tid in dep_task_ids:
+                    dep_event = completion_events.get(dep_tid)
+                    if dep_event is not None:
+                        await dep_event.wait()
 
             if (
-                assignment.task_spec.blocked_by
+                dep_task_ids
                 and task_outcomes is not None
                 and not self._dependencies_satisfied(
                     self._collect_dep_outcomes(
-                        assignment.task_spec.blocked_by,
-                        subject_to_task_ids or {},
+                        dep_task_ids,
                         task_outcomes,
                     ),
                     dependency_policy,
@@ -1065,24 +1069,17 @@ class TeamOrchestrator:
 
     def _collect_dep_outcomes(
         self,
-        blocked_by: tuple[str, ...],
-        subject_to_task_ids: dict[str, list[str]],
+        dep_task_ids: frozenset[str],
         task_outcomes: dict[str, str],
     ) -> list[str]:
-        """将 blocked_by 中的 subject 展开为依赖 task_id 的 outcome 列表。
+        """收集依赖 task_id 的 outcome 列表。
 
-        对于没有对应 task_id 的 subject（未调度或不存在），
+        P1-10 修复后直接接收预解析的 dep_task_ids，
+        不再通过 (blocked_by, subject_to_task_ids) 中转。
+        对于不存在于 task_outcomes 的 task_id（未调度或不存在），
         记为 "unassigned" 以保持与旧实现一致的跳过语义。
         """
-        dep_outcomes: list[str] = []
-        for dep_subject in blocked_by:
-            dep_tids = subject_to_task_ids.get(dep_subject)
-            if not dep_tids:
-                dep_outcomes.append("unassigned")
-            else:
-                for dep_tid in dep_tids:
-                    dep_outcomes.append(task_outcomes.get(dep_tid, "unassigned"))
-        return dep_outcomes
+        return [task_outcomes.get(tid, "unassigned") for tid in dep_task_ids]
 
     def _dependencies_satisfied(
         self,
