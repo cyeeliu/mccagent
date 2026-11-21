@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -225,6 +226,14 @@ class WorkerPool:
             except asyncio.CancelledError:
                 if not future.done():
                     future.set_exception(asyncio.CancelledError())
+                if self._on_event is not None:
+                    with contextlib.suppress(Exception):
+                        await self._on_event(
+                            "task_cancelled",
+                            task_id=getattr(task, "task_id", None),
+                            attempt_id=attempt_id,
+                            payload={"reason": "worker cancelled"},
+                        )
                 raise
             except Exception as exc:
                 if not future.done():
