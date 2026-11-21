@@ -398,6 +398,7 @@ def _wire_team(
         bus=bus,
         plan_store=plan_store,
         task_store=task_store,
+        async_task_store=async_task_store,
         coordinator=coordinator,
         dispatcher=dispatcher,
     )
