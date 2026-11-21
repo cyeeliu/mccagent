@@ -55,14 +55,21 @@ class ShutdownReport:
     stopped: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
     timed_out: list[str] = field(default_factory=list)
+    still_running: list[str] = field(default_factory=list)
+    cleanup_pending: list[str] = field(default_factory=list)
 
     @property
     def has_errors(self) -> bool:
-        return bool(self.failed) or bool(self.timed_out)
+        return bool(self.failed) or bool(self.timed_out) or bool(self.still_running)
 
     @property
     def total(self) -> int:
-        return len(self.stopped) + len(self.failed) + len(self.timed_out)
+        return (
+            len(self.stopped)
+            + len(self.failed)
+            + len(self.timed_out)
+            + len(self.still_running)
+        )
 
 
 @dataclass
@@ -124,8 +131,10 @@ class RuntimeCoordinator:
         """注册 Runtime，重复 ID 抛 RuntimeError，已关闭抛 CoordinatorClosedError。
 
         priority 控制关闭顺序：数值越小越先停止（依赖方优先）。
-        同步方法仅做状态检查与字典写入，真正的并发事务安全由
-        register_and_start 的 async 版本通过锁保证。
+
+        并发契约：同步方法仅限在事件循环线程中调用，不可从其他线程调用，
+        也不可与 register_and_start / shutdown_all 等异步方法跨 await 并发。
+        需要跨协程并发安全时使用 register_async。
         """
         if self._state != CoordinatorState.OPEN:
             raise CoordinatorClosedError(
@@ -136,6 +145,28 @@ class RuntimeCoordinator:
             raise RuntimeError(f"duplicate runtime id: {rid}")
         self._runtimes[rid] = runtime
         self._priorities[rid] = priority
+
+    async def register_async(
+        self,
+        runtime: Any,
+        *,
+        priority: int = 0,
+    ) -> None:
+        """异步注册 Runtime，使用锁保证并发安全。
+
+        与 register 的区别：通过 self._lock 保证与 register_and_start /
+        shutdown_all 等异步方法的互斥。适用于需要跨协程并发注册的场景。
+        """
+        async with self._lock:
+            if self._state != CoordinatorState.OPEN:
+                raise CoordinatorClosedError(
+                    "coordinator is closed; create a new one to register runtimes"
+                )
+            rid = runtime.runtime_id
+            if rid in self._runtimes:
+                raise RuntimeError(f"duplicate runtime id: {rid}")
+            self._runtimes[rid] = runtime
+            self._priorities[rid] = priority
 
     async def register_and_start(
         self,
@@ -196,11 +227,23 @@ class RuntimeCoordinator:
             self._monitor_states.pop(runtime_id, None)
 
     def unregister(self, runtime_id: str) -> Any | None:
-        """注销 Runtime，返回被移除的实例（不存在则返回 None，幂等）。"""
+        """注销 Runtime，返回被移除的实例（不存在则返回 None，幂等）。
+
+        并发契约：同步方法仅限在事件循环线程中调用，需要跨协程并发安全时
+        使用 unregister_async。
+        """
         self._priorities.pop(runtime_id, None)
         self._exit_monitor_runtimes.discard(runtime_id)
         self._monitor_states.pop(runtime_id, None)
         return self._runtimes.pop(runtime_id, None)
+
+    async def unregister_async(self, runtime_id: str) -> Any | None:
+        """异步注销 Runtime，使用锁保证并发安全。"""
+        async with self._lock:
+            self._priorities.pop(runtime_id, None)
+            self._exit_monitor_runtimes.discard(runtime_id)
+            self._monitor_states.pop(runtime_id, None)
+            return self._runtimes.pop(runtime_id, None)
 
     def get(self, runtime_id: str) -> Any | None:
         """按 ID 查询 Runtime（不存在返回 None）。"""
@@ -382,14 +425,18 @@ class RuntimeCoordinator:
         *,
         timeout: float = 10.0,
         per_runtime_timeout: float | None = None,
+        cleanup_grace: float = 3.0,
     ) -> ShutdownReport:
         """停止所有 Runtime，幂等，聚合异常，支持总超时和优先级排序。
 
         - timeout: 总超时（所有 Runtime 停止的整体时限）。
         - per_runtime_timeout: 单个 Runtime 超时；None 时使用 timeout。
+        - cleanup_grace: 总超时后等待残留 Runtime 停止的宽限期。
         - 按 priority 升序停止（数值越小越先停止）。
         - 已调用过 shutdown_all 后再次调用为空操作。
         - 单个 Runtime 停止失败不阻止其他 Runtime 的停止。
+        - 总超时后向存活 Runtime 发 cancel，在 cleanup_grace 内等待；
+          仍未退出的记入 still_running 并取消其 stop Task。
 
         状态转换：OPEN/CLOSING → CLOSING（锁内）→ 停止 Runtime（锁外）→ CLOSED（锁内）。
         不在持有锁时 await Runtime.stop，避免死锁。
@@ -417,35 +464,80 @@ class RuntimeCoordinator:
             key=lambda rt: priorities.get(rt.runtime_id, 0),
         )
 
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(
-                    *(self._safe_stop(rt, prt) for rt in sorted_runtimes),
-                    return_exceptions=False,
-                ),
-                timeout=timeout,
+        stop_tasks: dict[str, asyncio.Task[tuple[str, str | None]]] = {}
+        for rt in sorted_runtimes:
+            task = asyncio.create_task(
+                self._safe_stop(rt, prt),
+                name=f"stop:{rt.runtime_id}",
             )
-        except TimeoutError:
-            results = [await self._safe_stop_no_wait(rt, prt) for rt in sorted_runtimes]
+            stop_tasks[rt.runtime_id] = task
+
+        done, pending = await asyncio.wait(
+            stop_tasks.values(),
+            timeout=timeout,
+        )
+
+        results: dict[str, tuple[str, str | None]] = {}
+        for rid, task in stop_tasks.items():
+            if task in done:
+                results[rid] = task.result()
+
+        if pending:
+            for rid, task in stop_tasks.items():
+                if task in pending:
+                    rt = self._runtimes.get(rid)
+                    if rt is not None and rt.alive and rt.capabilities.supports_cancel:
+                        with contextlib.suppress(Exception):
+                            cancel_result = rt.cancel()
+                            if asyncio.iscoroutine(cancel_result):
+                                asyncio.create_task(
+                                    cancel_result,
+                                    name=f"cancel:{rid}",
+                                )
+
+            done2, pending2 = await asyncio.wait(
+                pending,
+                timeout=cleanup_grace,
+            )
+            for rid, task in stop_tasks.items():
+                if task in done2 and rid not in results:
+                    results[rid] = task.result()
+
+            for _rid, task in stop_tasks.items():
+                if task in pending2:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
 
         report = ShutdownReport()
-        for rt, (status, err) in zip(sorted_runtimes, results, strict=True):
-            if status == "ok":
-                report.stopped.append(rt.runtime_id)
-            elif status == "timeout":
-                report.timed_out.append(rt.runtime_id)
+        for rt in sorted_runtimes:
+            rid = rt.runtime_id
+            if rid in results:
+                status, err = results[rid]
+                if status == "ok":
+                    report.stopped.append(rid)
+                elif status == "timeout":
+                    report.timed_out.append(rid)
+                else:
+                    report.failed[rid] = err or "unknown error"
             else:
-                report.failed[rt.runtime_id] = err or "unknown error"
+                report.still_running.append(rid)
 
         async with self._lock:
             self._state = CoordinatorState.CLOSED
 
         if report.has_errors:
             logger.warning(
-                "shutdown_all completed with %d failures, %d timeouts: %s",
+                "shutdown_all completed with %d failures, %d timeouts, "
+                "%d still_running: %s",
                 len(report.failed),
                 len(report.timed_out),
-                {"failed": report.failed, "timed_out": report.timed_out},
+                len(report.still_running),
+                {
+                    "failed": report.failed,
+                    "timed_out": report.timed_out,
+                    "still_running": report.still_running,
+                },
             )
         return report
 
@@ -461,24 +553,14 @@ class RuntimeCoordinator:
         """安全停止单个 Runtime，返回 (状态, 错误信息)。
 
         状态: "ok" | "failed" | "timeout"。
+        不用外层 wait_for 包裹，让 Runtime 自身的 stop(timeout=) 控制单 Runtime
+        时限，总超时由 shutdown_all 的 asyncio.wait 控制。这样总超时后 Task
+        仍在运行，可在 cleanup grace 内继续等待。
         """
         try:
-            await asyncio.wait_for(rt.stop(timeout=timeout), timeout=timeout)
+            await rt.stop(timeout=timeout)
             return "ok", None
         except TimeoutError:
-            return "timeout", None
-        except Exception as exc:
-            return "failed", str(exc)
-
-    async def _safe_stop_no_wait(
-        self,
-        rt: Any,
-        timeout: float,
-    ) -> tuple[str, str | None]:
-        """尝试停止但不等待（用于总超时后的尽力清理）。"""
-        try:
-            if rt.alive and rt.capabilities.supports_cancel:
-                rt.cancel()
             return "timeout", None
         except Exception as exc:
             return "failed", str(exc)

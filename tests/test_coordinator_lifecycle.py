@@ -292,8 +292,12 @@ class TestShutdownAllTimeout:
         coord = RuntimeCoordinator()
         rt = SlowStopRuntime("to-1")
         coord.register(rt)
-        report = await coord.shutdown_all(timeout=0.1)
-        assert "to-1" in report.timed_out or "to-1" in report.failed
+        report = await coord.shutdown_all(timeout=0.1, cleanup_grace=0.1)
+        assert (
+            "to-1" in report.timed_out
+            or "to-1" in report.failed
+            or "to-1" in report.still_running
+        )
         assert report.has_errors
 
     async def test_shutdown_all_alias_stop_all(self):
