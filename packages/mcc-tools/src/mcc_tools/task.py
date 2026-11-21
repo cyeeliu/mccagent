@@ -31,25 +31,52 @@ def _atomic_write_text(path: Path, data: str) -> None:
 
 class TaskStatus(StrEnum):
     PENDING = "pending"
+    QUEUED = "queued"
     READY = "ready"
+    DISPATCHED = "dispatched"
     CLAIMED = "claimed"
+    ACCEPTED = "accepted"
     IN_PROGRESS = "in_progress"
+    RUNNING = "running"
     BLOCKED = "blocked"
     COMPLETED = "completed"
+    SUCCEEDED = "succeeded"
     FAILED = "failed"
     TIMEOUT = "timeout"
+    TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
     RETRYING = "retrying"
 
 
 _TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PENDING: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
+    TaskStatus.QUEUED: frozenset(
+        {TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}
+    ),
     TaskStatus.READY: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
+    TaskStatus.DISPATCHED: frozenset(
+        {TaskStatus.ACCEPTED, TaskStatus.RUNNING, TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}
+    ),
     TaskStatus.CLAIMED: frozenset({TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}),
+    TaskStatus.ACCEPTED: frozenset(
+        {TaskStatus.RUNNING, TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED}
+    ),
     TaskStatus.IN_PROGRESS: frozenset(
         {
             TaskStatus.COMPLETED,
+            TaskStatus.SUCCEEDED,
             TaskStatus.FAILED,
+            TaskStatus.TIMEOUT,
+            TaskStatus.TIMED_OUT,
+            TaskStatus.CANCELLED,
+        }
+    ),
+    TaskStatus.RUNNING: frozenset(
+        {
+            TaskStatus.SUCCEEDED,
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.TIMED_OUT,
             TaskStatus.TIMEOUT,
             TaskStatus.CANCELLED,
         }
@@ -57,8 +84,10 @@ _TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.BLOCKED: frozenset({TaskStatus.PENDING, TaskStatus.CANCELLED}),
     TaskStatus.FAILED: frozenset({TaskStatus.RETRYING}),
     TaskStatus.TIMEOUT: frozenset({TaskStatus.RETRYING}),
+    TaskStatus.TIMED_OUT: frozenset({TaskStatus.RETRYING}),
     TaskStatus.RETRYING: frozenset({TaskStatus.PENDING}),
     TaskStatus.COMPLETED: frozenset(),
+    TaskStatus.SUCCEEDED: frozenset(),
     TaskStatus.CANCELLED: frozenset(),
 }
 
@@ -67,8 +96,10 @@ _VALID_STATUSES = frozenset(s.value for s in TaskStatus)
 _TERMINAL_STATUSES = frozenset(
     {
         TaskStatus.COMPLETED.value,
+        TaskStatus.SUCCEEDED.value,
         TaskStatus.FAILED.value,
         TaskStatus.TIMEOUT.value,
+        TaskStatus.TIMED_OUT.value,
         TaskStatus.CANCELLED.value,
     }
 )

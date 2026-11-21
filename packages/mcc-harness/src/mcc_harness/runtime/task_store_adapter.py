@@ -29,6 +29,8 @@ from mcc_core.runtime.task_record import (
 
 _STATUS_TO_ENUM: dict[str, TaskStatus] = {
     "pending": TaskStatus.PENDING,
+    "queued": TaskStatus.QUEUED,
+    "ready": TaskStatus.PENDING,
     "claimed": TaskStatus.DISPATCHED,
     "dispatched": TaskStatus.DISPATCHED,
     "accepted": TaskStatus.ACCEPTED,
@@ -44,14 +46,14 @@ _STATUS_TO_ENUM: dict[str, TaskStatus] = {
 
 _ENUM_TO_STATUS: dict[TaskStatus, str] = {
     TaskStatus.PENDING: "pending",
-    TaskStatus.QUEUED: "pending",
-    TaskStatus.DISPATCHED: "claimed",
-    TaskStatus.ACCEPTED: "claimed",
-    TaskStatus.RUNNING: "in_progress",
-    TaskStatus.SUCCEEDED: "completed",
+    TaskStatus.QUEUED: "queued",
+    TaskStatus.DISPATCHED: "dispatched",
+    TaskStatus.ACCEPTED: "accepted",
+    TaskStatus.RUNNING: "running",
+    TaskStatus.SUCCEEDED: "succeeded",
     TaskStatus.FAILED: "failed",
     TaskStatus.CANCELLED: "cancelled",
-    TaskStatus.TIMED_OUT: "timeout",
+    TaskStatus.TIMED_OUT: "timed_out",
 }
 
 
