@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -265,7 +266,11 @@ class PersistentRuntimeV2:
             cancel_token.cancel(reason)
         future = self._task_futures.get(task_id)
         if future is not None and not future.done():
-            future.cancel()
+            # 等待真实执行终止（协作取消），超时后强制取消 future
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(future), timeout=2.0)
+            if not future.done():
+                future.cancel()
 
         if self._teammate is not None:
             self._send("cancel", reason or "cancel")
