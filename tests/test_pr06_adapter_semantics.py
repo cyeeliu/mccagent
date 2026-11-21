@@ -51,15 +51,20 @@ async def _create_running_attempt(adapter: TaskStoreAdapter) -> tuple[str, str]:
 class TestPR06AdapterStatusMapping:
     """状态映射不折叠：RUNNING 不映射为 "claimed"。"""
 
-    async def test_running_maps_to_in_progress(
+    async def test_running_maps_to_running(
         self,
         adapter: TaskStoreAdapter,
     ):
-        """RUNNING 状态映射到 "in_progress"，不折叠为 "claimed"。"""
+        """RUNNING 状态映射到 "running"，不折叠为 "claimed" 或 "in_progress"。
+
+        P1-01 修复后状态映射不折叠：每个 enum 值映射为唯一字符串，
+        DISPATCHED → "dispatched"，ACCEPTED → "accepted"，RUNNING → "running"。
+        """
         from mcc_harness.runtime.task_store_adapter import _ENUM_TO_STATUS
 
-        assert _ENUM_TO_STATUS[TaskStatus.RUNNING] == "in_progress"
-        assert _ENUM_TO_STATUS[TaskStatus.DISPATCHED] == "claimed"
+        assert _ENUM_TO_STATUS[TaskStatus.RUNNING] == "running"
+        assert _ENUM_TO_STATUS[TaskStatus.DISPATCHED] == "dispatched"
+        assert _ENUM_TO_STATUS[TaskStatus.ACCEPTED] == "accepted"
 
     async def test_transition_to_running_preserves_status(
         self,
