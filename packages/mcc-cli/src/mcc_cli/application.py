@@ -251,7 +251,7 @@ class AgentApplication:
                 report.timed_out_steps.append("step4_runtimes")
             except Exception as exc:
                 report.failed_steps["step4_runtimes"] = str(exc)
-                logger.warning("shutdown step 4: stop_all failed", exc_info=True)
+                logger.warning("shutdown step 4: shutdown_all failed", exc_info=True)
 
         # Step 5: 关闭 MCP 子进程
         if self._mcp_manager is not None:

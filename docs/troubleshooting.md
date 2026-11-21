@@ -213,3 +213,32 @@ content="[interrupted by user]")`，使消息序列合法可延续；
 UTF-8 多字节首字节（>= 0x80）根据前导 1 数量确定总长度（0xC0→2、0xE0→3、
 0xF0→4），循环读满剩余字节后用 `utf-8` 解码为完整 Unicode 字符。escape
 sequence 均为 ASCII 不受影响。
+
+## DAG 依赖失败测试超时
+
+**现象**：`test_dependent_not_executed_on_failure` 测试挂起至超时，
+base task 状态停留在 claimed，dependent task 从未执行。
+
+**根因**（多层叠加）：
+
+1. **agent 不足**：测试只注册 1 个 agent 却有 2 个 task（base + dependent）。
+   `CapabilityScheduler` 用 `used` 集合跟踪已分配 agent，每个 agent 只分配
+   一个 task——dependent task 无 agent 可分配，变为 unassigned。
+2. **unassigned 处理状态不匹配**：`execute_run` 对 unassigned task 调用
+   `complete_task`，内部尝试 `task_store.fail`，但 dependent task 状态是
+   pending（未被 claim），而 `fail` 要求 in_progress，抛 `TaskError` 被
+   warning 吞掉，task 永远卡在 pending。
+3. **事件流竞态**：`PersistentRuntimeV2.submit` 发射 `TASK_ACCEPTED` 时
+   listener 列表可能为空；worker 随即执行并发射 `TASK_STARTED` /
+   `TASK_FAILED`，但 `wait_for_result` 的 listener 尚未注册到
+   `_event_listeners`，事件丢失。`wait_for_result` 有 TaskStore 终态
+   fallback，但 `_record_result` 只在收到事件后才写 TaskStore——事件
+   丢失则 TaskStore 永不标记终态，`wait_for_result` 永久等待。
+
+**修复**：测试改为 2 agent + 2 runtime 模式（参考
+`test_team_e2e_dag_dependency_order`），每个 task 分配给不同 agent，
+base executor 返回 FAILED，验证 dependent 不执行。
+
+**教训**：`CapabilityScheduler` 的"每 agent 单 task"约束意味着 DAG 测试
+的 task 数不能超过注册 agent 数；事件流订阅必须在 submit 之前完成，
+否则首事件丢失导致永久挂起。

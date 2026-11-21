@@ -64,7 +64,7 @@
 | `mcc-skills` | Skill 与 Slash Command 加载（懒加载 catalog） |
 | `mcc-mcp` | MCP client（stdio JSON-RPC 2.0，工具适配注册） |
 | `mcc-session` | 会话持久化 + 长期记忆（JSONL / Markdown） |
-| `mcc-harness` | Agent 主循环、权限、hooks、子代理 |
+| `mcc-harness` | Agent 主循环、权限、hooks、子代理、Runtime/Team 编排 |
 | `mcc-tui` | Rich/Textual 终端 UI |
 | `mcc-cli` | 最终入口 `mcc` |
 
