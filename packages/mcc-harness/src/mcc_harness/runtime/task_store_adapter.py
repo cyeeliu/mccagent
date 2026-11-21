@@ -201,7 +201,10 @@ class TaskStoreAdapter:
         )
 
     def _load_attempts(self) -> None:
-        """从 persist_dir 加载 attempts，并派生 task_attempts 与 idempotency 索引。"""
+        """从 persist_dir 加载 attempts，并派生 task_attempts 与 idempotency 索引。
+
+        P1-03/P1-11: JSON 损坏时 fail closed，抛异常阻止启动。
+        """
         if self._persist_dir is None:
             return
         path = self._persist_dir / "attempts.json"
@@ -209,8 +212,10 @@ class TaskStoreAdapter:
             return
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ValueError(
+                f"corrupt attempts.json at {path}: {exc}",
+            ) from exc
         for item in data:
             attempt = self._attempt_from_dict(item)
             self._attempts[attempt.attempt_id] = attempt
@@ -234,8 +239,10 @@ class TaskStoreAdapter:
             return
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ValueError(
+                f"corrupt assignments.json at {path}: {exc}",
+            ) from exc
         for item in data:
             asgn = self._assignment_from_dict(item)
             self._assignments[asgn.assignment_id] = asgn
@@ -255,8 +262,10 @@ class TaskStoreAdapter:
             return
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ValueError(
+                f"corrupt run_ids.json at {path}: {exc}",
+            ) from exc
         self._task_run_ids.update(data)
 
     def _save_run_ids(self) -> None:
@@ -286,7 +295,7 @@ class TaskStoreAdapter:
         record = await asyncio.to_thread(_sync)
         if run_id is not None:
             self._task_run_ids[record.task_id] = run_id
-            self._save_run_ids()
+            await asyncio.to_thread(self._save_run_ids)
             record.run_id = run_id
         return record
 
@@ -447,7 +456,7 @@ class TaskStoreAdapter:
                     self._store.save(task)
             except Exception:
                 pass
-            self._save_attempts()
+            await asyncio.to_thread(self._save_attempts)
             return attempt
 
     async def get_attempt(self, attempt_id: str) -> TaskAttempt | None:
@@ -466,7 +475,7 @@ class TaskStoreAdapter:
                 )
             attempt.status = AttemptStatus.RUNNING
             attempt.touch()
-            self._save_attempts()
+            await asyncio.to_thread(self._save_attempts)
             return attempt
 
     async def list_attempts(self, task_id: str) -> list[TaskAttempt]:
@@ -542,7 +551,7 @@ class TaskStoreAdapter:
             attempt.artifacts = artifacts
             attempt.finished_at = _now()
             attempt.touch()
-            self._save_attempts()
+            await asyncio.to_thread(self._save_attempts)
             # 同步更新底层 TaskRecord
             self._update_task_record_on_attempt_terminal(attempt)
             return attempt
@@ -575,7 +584,7 @@ class TaskStoreAdapter:
             attempt.error = error
             attempt.finished_at = _now()
             attempt.touch()
-            self._save_attempts()
+            await asyncio.to_thread(self._save_attempts)
             # 同步更新底层 TaskRecord
             self._update_task_record_on_attempt_terminal(attempt)
             return attempt
@@ -610,7 +619,7 @@ class TaskStoreAdapter:
             lease_expires_at=now + timedelta(seconds=lease_seconds),
         )
         self._assignments[assignment_id] = assignment
-        self._save_assignments()
+        await asyncio.to_thread(self._save_assignments)
         return assignment
 
     async def get_assignment(self, assignment_id: str) -> TaskAssignment | None:
@@ -637,7 +646,7 @@ class TaskStoreAdapter:
         if assignment is None:
             raise KeyError(assignment_id)
         assignment.status = AssignmentStatus.COMPLETED
-        self._save_assignments()
+        await asyncio.to_thread(self._save_assignments)
         return assignment
 
 
