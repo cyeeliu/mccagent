@@ -756,16 +756,12 @@ def build_source(
 
     obs_sink = _wire_observability(config, work_dir, sid, builder)
 
-    from mcc_harness.execution import DefaultAgentFactory
+    from mcc_harness.runtime.interactive import InteractiveRuntimeV2
 
     from mcc_cli.slash import build_default_registry
 
-    agent_factory = DefaultAgentFactory()
-    runtime = agent_factory.build_interactive_runtime_v2(
-        builder,
-        session_id=sid,
-        agent_id="main",
-    )
+    agent = builder.build()
+    runtime = InteractiveRuntimeV2(agent, session_id=sid, agent_id="main")
     agent = runtime.agent
     coordinator.register(runtime)
 

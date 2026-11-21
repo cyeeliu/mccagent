@@ -156,10 +156,9 @@ class AgentEventSource(EventSource):
         self.selection_responses = selection_responses
         self._mcp_manager = mcp_manager
         if runtime is None:
-            from mcc_harness.execution import DefaultAgentFactory
+            from mcc_harness.runtime.interactive import InteractiveRuntimeV2
 
-            agent_factory = DefaultAgentFactory()
-            runtime = agent_factory.create_interactive_runtime(agent)
+            runtime = InteractiveRuntimeV2(agent)
         self._runtime = runtime
         if coordinator is None:
             from mcc_harness import RuntimeCoordinator
